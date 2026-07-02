@@ -182,6 +182,63 @@ assert(
   'runStartCommand must persist invocation metadata instead of discarding it.',
 );
 
+const phaseParitySmokeCases = [
+  {
+    command: 'ralph-start',
+    args: 'phase-default Start with research',
+    skipResearch: false,
+    expectedPhase: 'research',
+  },
+  {
+    command: 'ralph-new',
+    args: 'phase-default-new Start with research',
+    skipResearch: false,
+    expectedPhase: 'research',
+  },
+  {
+    command: 'ralph-start',
+    args: 'phase-skip --skip-research Start with requirements',
+    skipResearch: true,
+    expectedPhase: 'requirements',
+  },
+  {
+    command: 'ralph-new',
+    args: 'phase-skip-new --skip-research Start with requirements',
+    skipResearch: true,
+    expectedPhase: 'requirements',
+  },
+];
+
+for (const commandName of ['ralph-start', 'ralph-new']) {
+  for (const skipResearch of [false, true]) {
+    const expectedPhase = skipResearch ? 'requirements' : 'research';
+    assert(
+      phaseParitySmokeCases.some(
+        (smokeCase) =>
+          smokeCase.command === commandName &&
+          smokeCase.skipResearch === skipResearch &&
+          smokeCase.expectedPhase === expectedPhase,
+      ),
+      `${commandName} phase parity smoke must cover skipResearch=${skipResearch} producing phase ${expectedPhase}.`,
+    );
+  }
+}
+
+assert(
+  /function\s+determineStartPhase\([\s\S]*?if\s*\(isNew\)\s*return\s+parsed\.skipResearch\s*\?\s*["']requirements["']\s*:\s*["']research["']/.test(source),
+  'New specs must resolve phase from --skip-research: requirements when set, research by default.',
+);
+
+assert(
+  /const\s+phase\s*=\s*determineStartPhase\(\s*spec\s*,\s*stateRead\.state\s*,\s*parsed\s*,\s*resolved\.target\.isNew\s*\)[\s\S]*?startStatePatch\(\s*spec\s*,\s*parsed\s*,\s*phase\s*,\s*stateRead\.state\s*\)/.test(source),
+  'runStartCommand must feed the resolved skip-research phase into the shared start/new state patch.',
+);
+
+assert(
+  /startCompatibility\s*:\s*\{[\s\S]*?command:\s*invocation\.command[\s\S]*?aliasOf:\s*invocation\.aliasOf[\s\S]*?statePatch:\s*\{[\s\S]*?phase\s*,/.test(source),
+  'Start/new phase parity must be observable in startCompatibility.statePatch.phase for both invocation names.',
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);

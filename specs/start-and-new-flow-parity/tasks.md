@@ -90,7 +90,7 @@
   - _Requirements: FR-2, FR-11, AC-1.2, AC-5.1_
   - _Design: Smoke verification script; Test Strategy_
 
-- [ ] Q2 [VERIFY] Quality check: option parity package verification
+- [x] Q2 [VERIFY] Quality check: option parity package verification
   - **Do**:
     1. Run package verification after parser/option parity changes.
   - **Files**: None
@@ -100,7 +100,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 1.7 [RED] Failing smoke: `--skip-research` controls start phase for both commands
+- [x] 1.7 [RED] Failing smoke: `--skip-research` controls start phase for both commands
   - **Do**:
     1. Add smoke fixtures asserting new specs without `--skip-research` produce `phase: "research"`.
     2. Add smoke fixtures asserting new specs with `--skip-research` produce `phase: "requirements"`.
