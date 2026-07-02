@@ -397,7 +397,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-10, AC-3.3, AC-3.4, NFR-3, NFR-5_
   - _Design: Dry-run pack verifier, Data Flow_
 
-- [ ] 4.6 [YELLOW] Refactor dry-run verifier failure reporting
+- [x] 4.6 [YELLOW] Refactor dry-run verifier failure reporting
   - **Do**:
     1. Aggregate dry-run verifier failures with clear included/excluded path labels.
     2. Print npm stdout/stderr context only when JSON parsing or npm execution fails.

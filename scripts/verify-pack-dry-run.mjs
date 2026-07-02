@@ -14,10 +14,10 @@ const REQUIRED_RESOURCE_ROOTS = [
 ];
 
 const EXCLUDED_PATH_CHECKS = [
-  { label: 'specs/', matches: (path) => path === 'specs' || path.startsWith('specs/') },
-  { label: '.ralph-state.json', matches: (path) => path === '.ralph-state.json' || path.endsWith('/.ralph-state.json') },
-  { label: '.progress.md', matches: (path) => path === '.progress.md' || path.endsWith('/.progress.md') },
-  { label: 'generated runtime state', matches: (path) => path === '.pi' || path.startsWith('.pi/') },
+  { label: 'spec state directory', pathLabel: 'specs/', matches: (path) => path === 'specs' || path.startsWith('specs/') },
+  { label: 'Smart Ralph state file', pathLabel: '.ralph-state.json', matches: (path) => path === '.ralph-state.json' || path.endsWith('/.ralph-state.json') },
+  { label: 'Smart Ralph progress file', pathLabel: '.progress.md', matches: (path) => path === '.progress.md' || path.endsWith('/.progress.md') },
+  { label: 'generated runtime state', pathLabel: '.pi/', matches: (path) => path === '.pi' || path.startsWith('.pi/') },
 ];
 
 function normalizePackPath(path) {
@@ -77,35 +77,74 @@ if (result.error || result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 
+function addIncludedFileFailure(failures, pathLabel) {
+  failures.push({
+    boundary: 'included',
+    label: 'required package file',
+    path: pathLabel,
+    message: 'not present in npm pack dry-run file list',
+  });
+}
+
+function addIncludedRootFailure(failures, pathLabel) {
+  failures.push({
+    boundary: 'included',
+    label: 'required package resource root',
+    path: pathLabel,
+    message: 'contains no non-.gitkeep files in npm pack dry-run file list',
+  });
+}
+
+function addExcludedPathFailure(failures, excludedCheck, packedPath) {
+  failures.push({
+    boundary: 'excluded',
+    label: excludedCheck.label,
+    path: packedPath,
+    expectedPath: excludedCheck.pathLabel,
+    message: 'was present in npm pack dry-run file list',
+  });
+}
+
+function formatFailure(failure) {
+  const expectedPath = failure.expectedPath ? ` (blocked pattern: ${failure.expectedPath})` : '';
+  return `[${failure.boundary}] ${failure.label}: ${failure.path}${expectedPath} — ${failure.message}`;
+}
+
+function reportFailures(failures) {
+  if (failures.length === 0) {
+    return;
+  }
+
+  console.error('Smart Ralph pack dry-run verification failed:');
+  for (const failure of failures) {
+    console.error(`- ${formatFailure(failure)}`);
+  }
+  process.exit(1);
+}
+
 const packJson = parsePackJson(result.stdout, result.stderr ?? '');
 const packFiles = collectPackFiles(packJson);
 const failures = [];
 
 for (const requiredFile of REQUIRED_FILES) {
   if (!packFiles.has(requiredFile)) {
-    failures.push(`Missing required package file: ${requiredFile}`);
+    addIncludedFileFailure(failures, requiredFile);
   }
 }
 
 for (const requiredRoot of REQUIRED_RESOURCE_ROOTS) {
   const includedFiles = [...packFiles].filter((path) => path.startsWith(requiredRoot) && !path.endsWith('/.gitkeep'));
   if (includedFiles.length === 0) {
-    failures.push(`Missing required package resource file under: ${requiredRoot}`);
+    addIncludedRootFailure(failures, requiredRoot);
   }
 }
 
 for (const packedPath of packFiles) {
   for (const excludedCheck of EXCLUDED_PATH_CHECKS) {
     if (excludedCheck.matches(packedPath)) {
-      failures.push(`Excluded path was included (${excludedCheck.label}): ${packedPath}`);
+      addExcludedPathFailure(failures, excludedCheck, packedPath);
     }
   }
 }
 
-if (failures.length > 0) {
-  console.error('Smart Ralph pack dry-run verification failed:');
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
-  }
-  process.exit(1);
-}
+reportFailures(failures);
