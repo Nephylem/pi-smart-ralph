@@ -164,7 +164,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-13, AC-2.1, AC-4.2_
   - _Design: Original commands, Packaged resource tree_
 
-- [ ] 2.6 [GREEN] Populate workflow references and original command archives
+- [x] 2.6 [GREEN] Populate workflow references and original command archives
   - **Do**:
     1. Copy original `references/*.md` files into `references/`.
     2. Copy original `commands/*.md` files into `references/original-commands/`.
