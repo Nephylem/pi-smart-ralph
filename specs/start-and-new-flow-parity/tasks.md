@@ -449,7 +449,7 @@
   - _Requirements: FR-9, FR-12, AC-3.4_
   - _Design: Start contract builder; Data Flow_
 
-- [ ] 3.9 [YELLOW] Refactor start summary metadata without changing orchestration
+- [x] 3.9 [YELLOW] Refactor start summary metadata without changing orchestration
   - **Do**:
     1. Include branch decision and discovery counts in start summary/warnings where existing output patterns allow.
     2. Avoid changing quick flow handoff or epic-next selection semantics.

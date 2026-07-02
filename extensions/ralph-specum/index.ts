@@ -1379,6 +1379,19 @@ type StartCompatibilityContractV1 = {
 	statePatch: Record<string, unknown>;
 };
 
+type StartSummaryMetadata = {
+	branchDecision: {
+		mode: BranchDecision["mode"];
+		targetBranch?: string;
+		applied: boolean;
+		reason: string;
+	};
+	discoveryCounts: {
+		relatedSpecs: number;
+		discoveredSkills: number;
+	};
+};
+
 type StartTarget = {
 	spec: SpecEntry;
 	isNew: boolean;
@@ -2915,6 +2928,34 @@ function maybeWriteInitialProgress(spec: SpecEntry, goal: string, phase: StartPh
 	return getProgressPath(spec, options);
 }
 
+function countStateArray(value: unknown): number {
+	return Array.isArray(value) ? value.length : 0;
+}
+
+function buildStartSummaryMetadata(
+	branchDecision: BranchDecision,
+	statePatch: Record<string, unknown>,
+): StartSummaryMetadata {
+	return {
+		branchDecision: {
+			mode: branchDecision.mode,
+			targetBranch: branchDecision.targetBranch,
+			applied: branchDecision.applied,
+			reason: branchDecision.reason,
+		},
+		discoveryCounts: {
+			relatedSpecs: countStateArray(statePatch.relatedSpecs),
+			discoveredSkills: countStateArray(statePatch.discoveredSkills),
+		},
+	};
+}
+
+function formatBranchSummary(metadata: StartSummaryMetadata): string {
+	const target = metadata.branchDecision.targetBranch ? ` -> ${metadata.branchDecision.targetBranch}` : "";
+	const outcome = metadata.branchDecision.applied ? "applied" : "recorded";
+	return `${metadata.branchDecision.mode}${target} (${outcome}: ${metadata.branchDecision.reason})`;
+}
+
 function formatStartSummary(
 	spec: SpecEntry,
 	isNew: boolean,
@@ -2922,6 +2963,7 @@ function formatStartSummary(
 	state: RalphState,
 	pointerValue: string,
 	progressPath: string,
+	summaryMetadata: StartSummaryMetadata,
 	warnings: string[],
 ): string {
 	const quickMode = booleanField(state, "quickMode") === true;
@@ -2935,6 +2977,8 @@ function formatStartSummary(
 		`State: ${getRalphStatePath(spec)}`,
 		`Progress: ${progressPath}`,
 		`Mode: ${mode}`,
+		`Branch decision: ${formatBranchSummary(summaryMetadata)}`,
+		`Discovery: ${summaryMetadata.discoveryCounts.relatedSpecs} related spec(s), ${summaryMetadata.discoveryCounts.discoveredSkills} skill(s)`,
 		`Next phase: ${phase}`,
 		`Next command: ${startPhaseCommand(phase)}${quickMode ? " --quick" : ""}`,
 		`Files: ${formatArtifactIndicators(spec)}`,
@@ -3359,6 +3403,7 @@ async function runStartCommand(
 		};
 	}
 
+	const startSummaryMetadata = buildStartSummaryMetadata(branchDecision, statePatch);
 	const rootForSpec = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })
 		.find((root) => root.absolutePath === spec.rootAbsolutePath) ?? getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
 	const specRoot = {
@@ -3416,7 +3461,7 @@ async function runStartCommand(
 	}
 
 	const pointer = writeCurrentSpec(spec, options);
-	await notify(ctx, formatStartSummary(pointer.spec, resolved.target.isNew, phase, state, pointer.value, progressPath, parsed.warnings));
+	await notify(ctx, formatStartSummary(pointer.spec, resolved.target.isNew, phase, state, pointer.value, progressPath, startSummaryMetadata, parsed.warnings));
 	if (quickOrAutonomous) {
 		await runQuickFlow(pi, ctx, pointer.spec, parsed, options);
 	}

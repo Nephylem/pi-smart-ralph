@@ -1120,6 +1120,37 @@ assert(
   'Start compatibility statePatch must preserve commitSpec, relatedSpecs, and discoveredSkills behavior for downstream consumers.',
 );
 
+assert(
+  /type\s+StartSummaryMetadata\s*=\s*\{[\s\S]*?branchDecision:[\s\S]*?discoveryCounts:[\s\S]*?relatedSpecs:\s*number[\s\S]*?discoveredSkills:\s*number[\s\S]*?\}/.test(source),
+  'Start summary metadata must have a display-only shape for branch decision and discovery counts.',
+);
+
+assert(
+  /function\s+buildStartSummaryMetadata\s*\(\s*branchDecision:\s*BranchDecision\s*,\s*statePatch:\s*Record<\s*string\s*,\s*unknown\s*>\s*,?\s*\)\s*:\s*StartSummaryMetadata/.test(source),
+  'Start summary metadata must be built separately from StartCompatibilityContractV1 construction.',
+);
+
+assert(
+  /const\s+startSummaryMetadata\s*=\s*buildStartSummaryMetadata\(\s*branchDecision\s*,\s*statePatch\s*\)[\s\S]*?startCompatibility:\s*\{/.test(source),
+  'runStartCommand must derive summary metadata before contract construction without using startCompatibility as display input.',
+);
+
+assert(
+  /formatStartSummary\([\s\S]*?summaryMetadata:\s*StartSummaryMetadata[\s\S]*?`Branch decision:\s*\$\{formatBranchSummary\(summaryMetadata\)\}`[\s\S]*?`Discovery:\s*\$\{summaryMetadata\.discoveryCounts\.relatedSpecs\}\s*related spec\(s\),\s*\$\{summaryMetadata\.discoveryCounts\.discoveredSkills\}\s*skill\(s\)`/.test(source),
+  'Start summary must include branch decision and discovery counts through display metadata.',
+);
+
+const formatStartSummaryBody = source.slice(source.indexOf('function formatStartSummary'), source.indexOf('function readActiveEpicForStart'));
+assert(
+  !/startCompatibility/.test(formatStartSummaryBody),
+  'formatStartSummary must not read StartCompatibilityContractV1 state metadata for display formatting.',
+);
+
+assert(
+  /formatStartSummary\(pointer\.spec,\s*resolved\.target\.isNew,\s*phase,\s*state,\s*pointer\.value,\s*progressPath,\s*startSummaryMetadata,\s*parsed\.warnings\)/.test(source),
+  'runStartCommand must pass separate summary metadata to existing summary output without changing quick flow handoff.',
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);
