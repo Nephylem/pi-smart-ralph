@@ -9,6 +9,7 @@ const failures = [];
 
 const RESOURCE_MANIFEST_PATH = 'references/ralph-resource-manifest.v1.json';
 const RESOURCE_MANIFEST_FULL_PATH = join(root, RESOURCE_MANIFEST_PATH);
+const SCHEMA_RESOURCE_PATH = 'schemas/spec.schema.json';
 const RESOURCE_MANIFEST_KINDS = new Set(['command', 'template', 'prompt', 'reference', 'skill', 'schema']);
 const RESOURCE_MANIFEST_STATUSES = new Set(['copied', 'adapted', 'renamed', 'pi-native', 'excluded', 'deferred']);
 
@@ -58,6 +59,12 @@ function validateDirectoryExists(relativePath) {
   }
 
   if (!existsAsDirectory) failures.push(`${relativePath}/ directory must exist`);
+}
+
+function validatePackageFilesIncludes(relativePath) {
+  if (!Array.isArray(pkg.files) || !pkg.files.includes(relativePath)) {
+    failures.push(`package.json files must include ${relativePath}`);
+  }
 }
 
 function validateResourceManifest() {
@@ -132,6 +139,7 @@ const requiredFiles = [
   'agents/ralph-task-planner.md',
   'agents/ralph-triage-analyst.md',
   RESOURCE_MANIFEST_PATH,
+  SCHEMA_RESOURCE_PATH,
 ];
 
 for (const file of requiredFiles) {
@@ -146,6 +154,7 @@ validatePackageResourceRoot('references', {
 });
 validateDirectoryExists('references/original-commands');
 validatePackageResourceRoot('skills');
+validatePackageFilesIncludes('schemas');
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {

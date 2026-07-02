@@ -199,7 +199,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-13, AC-2.1, AC-4.2_
   - _Design: Packaged resource tree, Security Considerations_
 
-- [ ] C3 [VERIFY] Quality check: prepack after references and skills
+- [x] C3 [VERIFY] Quality check: prepack after references and skills
   - **Do**:
     1. Run the discovered package verification command from `research.md` Quality Commands.
   - **Files**: None
@@ -209,7 +209,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-4_
   - _Design: Prepack verifier_
 
-- [ ] 2.9 [RED] Failing verifier: schema resource and package allowlist are required
+- [x] 2.9 [RED] Failing verifier: schema resource and package allowlist are required
   - **Do**:
     1. Add a prepack check requiring `schemas/spec.schema.json`.
     2. Add a prepack check requiring `schemas` in `package.json.files`.
