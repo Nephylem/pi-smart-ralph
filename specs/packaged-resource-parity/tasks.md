@@ -373,7 +373,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-4, NFR-5_
   - _Design: Prepack verifier_
 
-- [ ] 4.4 [RED] Failing dry-run verifier entrypoint
+- [x] 4.4 [RED] Failing dry-run verifier entrypoint
   - **Do**:
     1. Add a `verify:pack` package script that calls `scripts/verify-pack-dry-run.mjs`.
     2. Do not create the script yet, so the command proves the missing verifier fails.
