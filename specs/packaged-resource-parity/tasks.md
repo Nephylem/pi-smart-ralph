@@ -84,7 +84,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, FR-3, AC-1.1, AC-1.3_
   - _Design: Interfaces, Technical Decisions_
 
-- [ ] 1.6 [YELLOW] Improve manifest validation diagnostics
+- [x] 1.6 [YELLOW] Improve manifest validation diagnostics
   - **Do**:
     1. Include entry indexes and `originalPath` values in manifest validation failures.
     2. Keep all failures aggregated under one package verification report.

@@ -21,6 +21,13 @@ function parseJsonFile(filePath, label) {
   }
 }
 
+function formatManifestEntryLabel(index, entry) {
+  const originalPath = entry && typeof entry === 'object' && !Array.isArray(entry)
+    ? JSON.stringify(entry.originalPath)
+    : 'unavailable';
+  return `${RESOURCE_MANIFEST_PATH}[${index}] originalPath=${originalPath}`;
+}
+
 function validateResourceManifest() {
   if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return;
 
@@ -33,14 +40,14 @@ function validateResourceManifest() {
   }
 
   for (const [index, entry] of resourceManifest.entries()) {
-    const label = `${RESOURCE_MANIFEST_PATH}[${index}]`;
+    const label = formatManifestEntryLabel(index, entry);
     if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
       failures.push(`${label} must be an object`);
       continue;
     }
 
     for (const field of ['originalPath', 'piPath']) {
-      if (typeof entry[field] !== 'string' || entry[field].length === 0 && field === 'originalPath') {
+      if (typeof entry[field] !== 'string' || (entry[field].length === 0 && field === 'originalPath')) {
         failures.push(`${label}.${field} must be a ${field === 'originalPath' ? 'non-empty ' : ''}string`);
       }
     }
