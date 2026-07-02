@@ -205,7 +205,7 @@
   - _Requirements: FR-5, AC-2.2, AC-2.3_
   - _Design: Start branch/worktree helper; Error Handling_
 
-- [ ] 2.5 [GREEN] Pass smoke: implement interactive branch/worktree choices
+- [x] 2.5 [GREEN] Pass smoke: implement interactive branch/worktree choices
   - **Do**:
     1. Implement default-branch choice planning for current-directory branch creation or worktree creation.
     2. Implement non-default-branch choice planning for stay-current or worktree creation.

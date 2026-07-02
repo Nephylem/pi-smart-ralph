@@ -3165,13 +3165,26 @@ async function runStartCommand(
 		parsed.goal = goal?.trim() ?? "";
 	}
 
-	const branchDecision: BranchDecision = decideStartBranchBeforeWrites({
+	const branchDecision: BranchDecision = await decideStartBranchBeforeWrites({
 		cwd: options.cwd,
 		specName: resolved.target.spec.name,
 		isNew: resolved.target.isNew,
 		quickMode: parsed.quickMode,
 		autonomousMode: parsed.autonomousMode,
+		dependencies: {
+			ui: ctx.hasUI
+				? async (title, choices) => {
+					const labels = choices.map((choice) => choice.label);
+					const selected = await ctx.ui.select(title, labels);
+					return choices.find((choice) => choice.label === selected) ?? null;
+				}
+				: undefined,
+		},
 	});
+	if (branchDecision.aborted) {
+		await notify(ctx, branchDecision.reason, "warning");
+		return;
+	}
 
 	try {
 		mkdirSync(resolved.target.spec.absolutePath, { recursive: true });
