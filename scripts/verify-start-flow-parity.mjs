@@ -370,6 +370,83 @@ for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGi
   );
 }
 
+const interactiveBranchChoiceSmokeFixtures = [
+  {
+    label: 'default-branch interactive mode',
+    input: {
+      isNew: true,
+      specName: 'interactive-default',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      quickMode: false,
+      autonomousMode: false,
+    },
+    expectedModes: ['create-current-branch', 'create-worktree'],
+    expectedLabelTokens: ['current-directory', 'worktree'],
+  },
+  {
+    label: 'non-default-branch interactive mode',
+    input: {
+      isNew: true,
+      specName: 'interactive-feature',
+      currentBranch: 'feature/existing-work',
+      defaultBranch: 'main',
+      quickMode: false,
+      autonomousMode: false,
+    },
+    expectedModes: ['stay-current', 'create-worktree'],
+    expectedLabelTokens: ['stay-current', 'worktree'],
+  },
+];
+
+function formatInteractiveChoiceDiagnostic(smokeCase, reason) {
+  return `Interactive branch choice smoke failed for ${smokeCase.label}: ${reason}`;
+}
+
+assert(
+  /export\s+type\s+StartBranchUiChoice\s*=\s*\{[\s\S]*?mode:\s*StartBranchMode;[\s\S]*?label:\s*string;[\s\S]*?decision:\s*BranchDecision;[\s\S]*?\}/.test(startBranchSource),
+  'Interactive branch fixtures require serializable StartBranchUiChoice objects with mode, label, and decision.',
+);
+
+assert(
+  /export\s+function\s+planStartBranchInteractiveChoices\s*\(\s*input:\s*StartBranchPlanInput\s*\)\s*:\s*StartBranchUiChoice\[\]/.test(startBranchSource),
+  'Branch helper must expose planStartBranchInteractiveChoices(input) for injected Pi UI fixtures.',
+);
+
+const interactiveChoicePlannerBody =
+  startBranchSource.match(/export\s+function\s+planStartBranchInteractiveChoices[\s\S]*?\n\}/)?.[0] ?? '';
+
+for (const smokeCase of interactiveBranchChoiceSmokeFixtures) {
+  for (const expectedMode of smokeCase.expectedModes) {
+    assert(
+      new RegExp(`mode:\\s*["']${expectedMode}["']`).test(interactiveChoicePlannerBody),
+      formatInteractiveChoiceDiagnostic(smokeCase, `missing offered mode ${expectedMode}`),
+    );
+  }
+  for (const labelToken of smokeCase.expectedLabelTokens) {
+    assert(
+      new RegExp(labelToken.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i').test(interactiveChoicePlannerBody),
+      formatInteractiveChoiceDiagnostic(smokeCase, `missing Pi UI label token ${labelToken}`),
+    );
+  }
+}
+
+assert(
+  /currentBranch\s*===\s*defaultBranch[\s\S]*?create-current-branch[\s\S]*?create-worktree/.test(interactiveChoicePlannerBody),
+  formatInteractiveChoiceDiagnostic(
+    interactiveBranchChoiceSmokeFixtures[0],
+    'default branch must offer current-directory branch creation and worktree choices before writes',
+  ),
+);
+
+assert(
+  /currentBranch\s*!==\s*defaultBranch[\s\S]*?stay-current[\s\S]*?create-worktree/.test(interactiveChoicePlannerBody),
+  formatInteractiveChoiceDiagnostic(
+    interactiveBranchChoiceSmokeFixtures[1],
+    'non-default branch must offer stay-current and worktree choices before writes',
+  ),
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);

@@ -135,7 +135,7 @@
   - _Requirements: FR-11, AC-5.1_
   - _Design: Smoke verification script_
 
-- [ ] Q2a [VERIFY] Quality check: phase parity package verification
+- [x] Q2a [VERIFY] Quality check: phase parity package verification
   - **Do**:
     1. Run package verification after skip-research phase parity changes, satisfying the 2-3 task checkpoint cadence from the tasks review.
   - **Files**: None
@@ -183,7 +183,7 @@
   - _Requirements: FR-4, FR-11, NFR-1, AC-2.1, AC-5.2_
   - _Design: Start branch/worktree helper; Security Considerations_
 
-- [ ] Q3 [VERIFY] Quality check: branch ordering package verification
+- [x] Q3 [VERIFY] Quality check: branch ordering package verification
   - **Do**:
     1. Run package verification after branch ordering changes.
   - **Files**: None
@@ -193,7 +193,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 2.4 [RED] Failing smoke: interactive branch choices are offered through Pi UI
+- [x] 2.4 [RED] Failing smoke: interactive branch choices are offered through Pi UI
   - **Do**:
     1. Add injected UI fixtures for default-branch interactive mode.
     2. Add injected UI fixtures for non-default-branch interactive mode.
