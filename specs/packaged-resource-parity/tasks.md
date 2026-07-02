@@ -187,7 +187,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-9, AC-2.1, AC-3.1_
   - _Design: Packaged resource tree, Prepack verifier_
 
-- [ ] 2.8 [GREEN] Populate Pi-safe skill resources
+- [x] 2.8 [GREEN] Populate Pi-safe skill resources
   - **Do**:
     1. Copy original skill directories into `skills/`.
     2. Adapt text only where needed to avoid legacy Claude/Codex hook execution instructions.
