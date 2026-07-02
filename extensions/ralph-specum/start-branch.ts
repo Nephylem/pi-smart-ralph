@@ -238,6 +238,17 @@ export function planStartBranchDecision(input: StartBranchPlanInput): BranchDeci
 		});
 	}
 
+	if (defaultBranch && currentBranch !== defaultBranch && (input.quickMode || input.autonomousMode)) {
+		return serializeBranchDecision({
+			mode: "stay-current",
+			currentBranch,
+			defaultBranch,
+			dirty: input.dirty,
+			applied: false,
+			reason: "Quick/autonomous new spec on a non-default branch stays on the current branch before writes.",
+		});
+	}
+
 	return serializeBranchDecision({
 		mode: "stay-current",
 		currentBranch,

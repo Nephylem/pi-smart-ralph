@@ -251,7 +251,7 @@
   - _Requirements: FR-6, NFR-1, NFR-2, AC-2.4, AC-2.5_
   - _Design: Start branch/worktree helper; Technical Decisions_
 
-- [ ] 2.8 [GREEN] Pass smoke: implement quick/autonomous branch decisions
+- [x] 2.8 [GREEN] Pass smoke: implement quick/autonomous branch decisions
   - **Do**:
     1. In quick/autonomous/headless default-branch cases, select a safe `ralph/<spec-name>` current-directory branch decision without prompt calls.
     2. In quick/autonomous/headless non-default cases, select `stay-current` without prompt calls.
