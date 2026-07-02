@@ -147,7 +147,7 @@
 
 ## Phase 2: Red-Green-Yellow Cycles - Branch Safety and Gitignore Maintenance
 
-- [ ] 2.1 [RED] Failing smoke: branch/worktree decision runs before new-spec writes
+- [x] 2.1 [RED] Failing smoke: branch/worktree decision runs before new-spec writes
   - **Do**:
     1. Add smoke fixture instrumentation that records attempted writes to spec directory, `.current-spec`, `.progress.md`, and `.ralph-state.json`.
     2. Add a branch decision marker that must occur before any recorded write for new specs.

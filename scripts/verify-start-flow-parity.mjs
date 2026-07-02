@@ -263,6 +263,47 @@ assert(
   `Phase parity diagnostics require startCompatibility.statePatch.phase for smoke cases (${phaseSmokeSummary}).`,
 );
 
+const branchOrderingSmokeFixture = {
+  label: 'new-spec branch decision before writes',
+  branchDecisionMarkerPatterns: [
+    /decideStartBranchBeforeWrites\s*\(/,
+    /decideStartBranchDecision\s*\(/,
+    /planStartBranchDecision\s*\(/,
+  ],
+  recordedWritePatterns: [
+    { label: 'spec directory', pattern: /mkdirSync\(resolved\.target\.spec\.absolutePath,\s*\{\s*recursive:\s*true\s*\}\)/ },
+    { label: '.ralph-state.json', pattern: /mergeRalphState\(\s*spec\s*,\s*statePatch\s*,\s*options\s*\)/ },
+    { label: '.progress.md', pattern: /maybeWriteInitialProgress\s*\(/ },
+    { label: '.current-spec', pattern: /writeCurrentSpec\(\s*spec\s*,\s*options\s*\)/ },
+  ],
+};
+
+function firstSourceIndex(patterns) {
+  return patterns.reduce((earliest, pattern) => {
+    const match = source.match(pattern);
+    if (!match || match.index === undefined) return earliest;
+    return earliest === -1 ? match.index : Math.min(earliest, match.index);
+  }, -1);
+}
+
+const branchDecisionIndex = firstSourceIndex(branchOrderingSmokeFixture.branchDecisionMarkerPatterns);
+assert(
+  branchDecisionIndex >= 0,
+  'Branch ordering smoke fixture must observe a pre-write branch decision marker for new specs.',
+);
+
+for (const recordedWrite of branchOrderingSmokeFixture.recordedWritePatterns) {
+  const writeIndex = firstSourceIndex([recordedWrite.pattern]);
+  assert(
+    writeIndex >= 0,
+    `Branch ordering smoke fixture must record attempted write to ${recordedWrite.label}.`,
+  );
+  assert(
+    branchDecisionIndex >= 0 && writeIndex >= 0 && branchDecisionIndex < writeIndex,
+    `Branch ordering smoke failed: branch decision marker must occur before ${recordedWrite.label} write for new specs.`,
+  );
+}
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);
