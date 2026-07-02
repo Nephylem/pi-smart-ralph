@@ -220,7 +220,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-6, FR-7, FR-9, AC-2.2, AC-2.3, AC-3.1_
   - _Design: Schemas exposure, Package boundary_
 
-- [ ] 2.10 [GREEN] Package Smart Ralph schema and include schemas root
+- [x] 2.10 [GREEN] Package Smart Ralph schema and include schemas root
   - **Do**:
     1. Copy the original `schemas/spec.schema.json` into `schemas/spec.schema.json`.
     2. Add `schemas` to `package.json.files`.
