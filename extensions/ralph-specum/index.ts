@@ -1263,6 +1263,18 @@ type StartArguments = {
 	error?: string;
 };
 
+type StartOptionsSnapshot = {
+	reference: string | null;
+	goalProvided: boolean;
+	skipResearch: boolean;
+	specsDir?: string;
+	tasksSize?: "fine" | "coarse";
+	commitSpec?: boolean;
+	quickMode: boolean;
+	autonomousMode: boolean;
+	nextEpicSpec: boolean;
+};
+
 type StartTarget = {
 	spec: SpecEntry;
 	isNew: boolean;
@@ -2523,6 +2535,20 @@ function parseStartArgs(args: string): StartArguments {
 	};
 }
 
+function buildStartOptionsSnapshot(parsed: StartArguments): StartOptionsSnapshot {
+	return {
+		reference: parsed.reference,
+		goalProvided: parsed.goal.trim().length > 0,
+		skipResearch: parsed.skipResearch,
+		specsDir: parsed.specsDir,
+		tasksSize: parsed.tasksSize,
+		commitSpec: parsed.commitSpec,
+		quickMode: parsed.quickMode,
+		autonomousMode: parsed.autonomousMode,
+		nextEpicSpec: parsed.nextEpicSpec,
+	};
+}
+
 function emptyStartArguments(error: string): StartArguments {
 	return {
 		reference: null,
@@ -3081,7 +3107,6 @@ async function runStartCommand(
 	ctx: ExtensionCommandContext,
 	invocation: StartInvocation = RALPH_START_INVOCATION,
 ): Promise<void> {
-	void invocation;
 	await ctx.waitForIdle();
 	const options = pathOptions(ctx);
 	const parsed = parseStartArgs(args);
@@ -3197,6 +3222,15 @@ async function runStartCommand(
 			awaitingApproval: statePatch.awaitingApproval,
 		};
 	}
+
+	statePatch = {
+		...statePatch,
+		startCompatibility: {
+			command: invocation.command,
+			aliasOf: invocation.aliasOf,
+			options: buildStartOptionsSnapshot(parsed),
+		},
+	};
 
 	let state: RalphState;
 	try {

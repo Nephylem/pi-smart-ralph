@@ -66,7 +66,7 @@
   - _Requirements: FR-2, FR-3, AC-1.2, AC-1.4_
   - _Design: Shared start coordinator; Start contract builder_
 
-- [ ] 1.5 [GREEN] Pass smoke: build a shared start option snapshot
+- [x] 1.5 [GREEN] Pass smoke: build a shared start option snapshot
   - **Do**:
     1. Add a single option snapshot helper from parsed start args.
     2. Include `reference`, `goalProvided`, `skipResearch`, `specsDir`, `tasksSize`, `commitSpec`, `quickMode`, `autonomousMode`, and `nextEpicSpec`.
