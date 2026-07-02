@@ -26,7 +26,7 @@
   - _Requirements: FR-2, AC-1.3_
   - _Design: Index option parser_
 
-- [ ] 1.3 [YELLOW] Refactor: stabilize parser result shape
+- [x] 1.3 [YELLOW] Refactor: stabilize parser result shape
   - **Do**:
     1. Add explicit parser result types and defaults.
     2. Keep parser behavior dependency-free.

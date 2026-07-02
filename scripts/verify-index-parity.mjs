@@ -45,6 +45,9 @@ async function verifyParserUnknown() {
     expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
   }
 
+  const defaultsResult = parseIndexArgs([]);
+  assertStableDefaultShape(defaultsResult, 'default parse result');
+
   const unsupportedOption = '--definitely-unsupported-index-option';
   const result = parseIndexArgs([unsupportedOption]);
   const ok = result?.ok === true;
@@ -54,6 +57,31 @@ async function verifyParserUnknown() {
     expectedFail(
       `unsupported option ${unsupportedOption} must return an error naming the option; got ${JSON.stringify(result)}`,
     );
+  }
+
+  assertStableDefaultShape(result, 'unknown option parse result');
+}
+
+function assertStableDefaultShape(result, label) {
+  const options = result?.options;
+  const externalInputs = options?.externalInputs;
+  const stable =
+    options &&
+    typeof options.scanPath === 'string' &&
+    typeof options.specRoot === 'string' &&
+    Array.isArray(options.categories) &&
+    Array.isArray(options.excludes) &&
+    typeof options.dryRun === 'boolean' &&
+    typeof options.force === 'boolean' &&
+    typeof options.changed === 'boolean' &&
+    typeof options.quick === 'boolean' &&
+    externalInputs &&
+    Array.isArray(externalInputs.urls) &&
+    Array.isArray(externalInputs.mcpResources) &&
+    typeof externalInputs.includePackageResources === 'boolean';
+
+  if (!stable) {
+    expectedFail(`${label} must include stable parser option defaults; got ${JSON.stringify(result)}`);
   }
 }
 
