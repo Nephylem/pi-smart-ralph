@@ -363,7 +363,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-7, FR-11, NFR-5_
   - _Design: Package boundary_
 
-- [ ] C5 [VERIFY] Quality check: prepack after package allowlist changes
+- [x] C5 [VERIFY] Quality check: prepack after package allowlist changes
   - **Do**:
     1. Run the discovered package verification command from `research.md` Quality Commands.
   - **Files**: None
@@ -408,7 +408,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-10, NFR-3, NFR-5_
   - _Design: Error Handling, Edge Cases_
 
-- [ ] C6 [VERIFY] Quality check: package dry-run after verifier implementation
+- [x] C6 [VERIFY] Quality check: package dry-run after verifier implementation
   - **Do**:
     1. Run package verification and the dry-run verifier.
     2. Confirm both discovered publish-boundary checks remain green.
@@ -421,7 +421,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
 
 ## Phase 5: Documentation
 
-- [ ] 5.1 [RED] Failing verifier: README must document packaged resources
+- [x] 5.1 [RED] Failing verifier: README must document packaged resources
   - **Do**:
     1. Add a lightweight README content check to `scripts/verify-publish-bundle.mjs` for resource roots, manifest path, status names, Pi-native command boundary, and verification commands.
     2. Reuse the aggregate failure format.

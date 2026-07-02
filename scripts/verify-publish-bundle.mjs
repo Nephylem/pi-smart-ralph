@@ -11,8 +11,10 @@ const failures = [];
 const RESOURCE_MANIFEST_PATH = 'references/ralph-resource-manifest.v1.json';
 const RESOURCE_MANIFEST_FULL_PATH = join(root, RESOURCE_MANIFEST_PATH);
 const SCHEMA_RESOURCE_PATH = 'schemas/spec.schema.json';
+const README_PATH = 'README.md';
 const RESOURCE_MANIFEST_KINDS = new Set(['command', 'template', 'prompt', 'reference', 'skill', 'schema']);
 const RESOURCE_MANIFEST_STATUSES = new Set(['copied', 'adapted', 'renamed', 'pi-native', 'excluded', 'deferred']);
+const PACKAGED_RESOURCE_ROOTS = ['agents', 'prompts', 'references', 'skills', 'templates', 'schemas'];
 const DEFAULT_ORIGINAL_RESOURCE_ROOT = '/home/nephy/pi-custom-workflow/smart-ralph/plugins/ralph-specum';
 const ORIGINAL_RESOURCE_ROOT = process.env.RALPH_ORIGINAL_RESOURCE_ROOT ?? DEFAULT_ORIGINAL_RESOURCE_ROOT;
 const ORIGINAL_RESOURCE_DIRECTORIES = ['commands', 'templates', 'references', 'skills', 'schemas'];
@@ -177,6 +179,36 @@ function validatePackageResourceRootsIncluded(relativePaths) {
   for (const relativePath of relativePaths) validatePackageFilesIncludes(relativePath);
 }
 
+function validateReadmeIncludes(readmeContent, label, requiredText) {
+  if (!readmeContent.includes(requiredText)) {
+    failures.push(`${README_PATH} must document ${label}: ${requiredText}`);
+  }
+}
+
+function validateReadmePackagedResourceDocs() {
+  if (!existsSync(join(root, README_PATH))) {
+    failures.push(`missing package resource: ${README_PATH}`);
+    return;
+  }
+
+  const readmeContent = readFileSync(join(root, README_PATH), 'utf8');
+
+  for (const resourceRoot of PACKAGED_RESOURCE_ROOTS) {
+    validateReadmeIncludes(readmeContent, `packaged resource root ${resourceRoot}/`, `${resourceRoot}/`);
+  }
+
+  validateReadmeIncludes(readmeContent, 'resource manifest path', RESOURCE_MANIFEST_PATH);
+
+  for (const status of RESOURCE_MANIFEST_STATUSES) {
+    validateReadmeIncludes(readmeContent, `manifest status ${status}`, status);
+  }
+
+  validateReadmeIncludes(readmeContent, 'Pi-native command implementation boundary', 'extensions/ralph-specum/index.ts');
+  validateReadmeIncludes(readmeContent, 'non-executable original command/hook boundary', 'not installed as executable Claude/Codex hooks');
+  validateReadmeIncludes(readmeContent, 'prepack verification command', 'npm run prepack');
+  validateReadmeIncludes(readmeContent, 'pack dry-run verification command', 'npm pack --dry-run --json');
+}
+
 function validateManifestOriginalCoverage(resourceManifest) {
   if (!Array.isArray(resourceManifest)) return;
 
@@ -305,6 +337,7 @@ validatePackageResourceRoot('references', {
 validateDirectoryExists('references/original-commands');
 validatePackageResourceRoot('skills');
 validatePackageResourceRootsIncluded(['agents', 'extensions', 'prompts', 'references', 'skills', 'templates', 'schemas']);
+validateReadmePackagedResourceDocs();
 validatePackageFilesEntryExistsOrAbsent('LICENSE');
 validatePackageFilesEntryExistsOrAbsent('smart-ralph.png');
 
