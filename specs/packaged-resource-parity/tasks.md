@@ -316,7 +316,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-3, FR-4, AC-1.3, AC-1.4_
   - _Design: Checksums, Technical Decisions_
 
-- [ ] 3.6 [YELLOW] Refactor checksum and path normalization helpers
+- [x] 3.6 [YELLOW] Refactor checksum and path normalization helpers
   - **Do**:
     1. Normalize all manifest and filesystem paths to POSIX-style `/` separators.
     2. Extract checksum helpers in `scripts/verify-publish-bundle.mjs`.

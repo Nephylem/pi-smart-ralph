@@ -26,15 +26,31 @@ function parseJsonFile(filePath, label) {
   }
 }
 
-function formatManifestEntryLabel(index, entry) {
-  const originalPath = entry && typeof entry === 'object' && !Array.isArray(entry)
-    ? JSON.stringify(entry.originalPath)
-    : 'unavailable';
-  return `${RESOURCE_MANIFEST_PATH}[${index}] originalPath=${originalPath}`;
+function normalizePosixPath(filePath) {
+  return filePath.replace(/\\/g, '/');
 }
 
-function toPosixPath(filePath) {
-  return filePath.replace(/\\/g, '/');
+function normalizeManifestPath(filePath) {
+  return normalizePosixPath(filePath).replace(/^\.\//, '');
+}
+
+function relativePosixPath(from, to) {
+  return normalizePosixPath(relative(from, to));
+}
+
+function resolvePackagePath(manifestPath) {
+  return join(root, ...normalizeManifestPath(manifestPath).split('/'));
+}
+
+function resolveOriginalResourcePath(manifestPath) {
+  return join(ORIGINAL_RESOURCE_ROOT, ...normalizeManifestPath(manifestPath).split('/'));
+}
+
+function formatManifestEntryLabel(index, entry) {
+  const originalPath = entry && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.originalPath === 'string'
+    ? JSON.stringify(normalizeManifestPath(entry.originalPath))
+    : JSON.stringify(entry?.originalPath ?? 'unavailable');
+  return `${RESOURCE_MANIFEST_PATH}[${index}] originalPath=${originalPath}`;
 }
 
 function sha256File(filePath) {
@@ -45,12 +61,39 @@ function isSha256(value) {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
+function validateSha256(label, expectedHash, filePath, manifestPath) {
+  if (!isSha256(expectedHash)) {
+    failures.push(`${label}.sha256 must be a lowercase SHA-256 hex digest for packaged file ${manifestPath}`);
+    return undefined;
+  }
+
+  const actualHash = sha256File(filePath);
+  if (expectedHash !== actualHash) {
+    failures.push(`${label}.sha256 must match packaged file ${manifestPath}; expected ${actualHash}`);
+  }
+
+  return actualHash;
+}
+
+function validateExactChecksumMatch(label, status, originalPath, piPath, piHash) {
+  const originalFullPath = resolveOriginalResourcePath(originalPath);
+  if (!existsSync(originalFullPath)) {
+    failures.push(`${label}.originalPath must point to an existing original file for ${status} comparison: ${originalPath}`);
+    return;
+  }
+
+  const originalHash = sha256File(originalFullPath);
+  if (piHash !== originalHash) {
+    failures.push(`${label} status ${status} requires exact source match between ${originalPath} and ${piPath}`);
+  }
+}
+
 function collectFilesRecursive(directoryPath) {
   let entries;
   try {
     entries = readdirSync(directoryPath, { withFileTypes: true });
   } catch (error) {
-    failures.push(`${toPosixPath(relative(root, directoryPath)) || directoryPath} must be readable: ${error.message}`);
+    failures.push(`${relativePosixPath(root, directoryPath) || normalizePosixPath(directoryPath)} must be readable: ${error.message}`);
     return [];
   }
 
@@ -72,12 +115,12 @@ function listOriginalResourcePaths() {
   for (const directory of ORIGINAL_RESOURCE_DIRECTORIES) {
     const directoryPath = join(ORIGINAL_RESOURCE_ROOT, directory);
     if (!existsSync(directoryPath)) {
-      failures.push(`original resource directory must exist: ${toPosixPath(join(ORIGINAL_RESOURCE_ROOT, directory))}`);
+      failures.push(`original resource directory must exist: ${normalizePosixPath(join(ORIGINAL_RESOURCE_ROOT, directory))}`);
       continue;
     }
 
     for (const filePath of collectFilesRecursive(directoryPath)) {
-      originalPaths.push(toPosixPath(relative(ORIGINAL_RESOURCE_ROOT, filePath)));
+      originalPaths.push(relativePosixPath(ORIGINAL_RESOURCE_ROOT, filePath));
     }
   }
 
@@ -128,7 +171,7 @@ function validateManifestOriginalCoverage(resourceManifest) {
   const manifestOriginalPaths = new Set(
     resourceManifest
       .filter((entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.originalPath === 'string')
-      .map((entry) => entry.originalPath),
+      .map((entry) => normalizeManifestPath(entry.originalPath)),
   );
   const missingOriginalPaths = listOriginalResourcePaths().filter((originalPath) => !manifestOriginalPaths.has(originalPath));
 
@@ -140,35 +183,20 @@ function validateManifestOriginalCoverage(resourceManifest) {
 function validateManifestEntryIntegrity(label, entry) {
   if (typeof entry.piPath !== 'string' || entry.piPath.length === 0) return;
 
-  const piFullPath = join(root, entry.piPath);
+  const piPath = normalizeManifestPath(entry.piPath);
+  const piFullPath = resolvePackagePath(piPath);
   if (!existsSync(piFullPath)) {
-    failures.push(`${label}.piPath must point to an existing repository file: ${entry.piPath}`);
+    failures.push(`${label}.piPath must point to an existing repository file: ${piPath}`);
     return;
   }
 
-  if (!isSha256(entry.sha256)) {
-    failures.push(`${label}.sha256 must be a lowercase SHA-256 hex digest for packaged file ${entry.piPath}`);
-    return;
-  }
-
-  const piHash = sha256File(piFullPath);
-  if (entry.sha256 !== piHash) {
-    failures.push(`${label}.sha256 must match packaged file ${entry.piPath}; expected ${piHash}`);
-  }
+  const piHash = validateSha256(label, entry.sha256, piFullPath, piPath);
+  if (piHash === undefined) return;
 
   if (entry.status === 'copied' || entry.status === 'renamed') {
     if (typeof entry.originalPath !== 'string' || entry.originalPath.length === 0) return;
 
-    const originalFullPath = join(ORIGINAL_RESOURCE_ROOT, entry.originalPath);
-    if (!existsSync(originalFullPath)) {
-      failures.push(`${label}.originalPath must point to an existing original file for ${entry.status} comparison: ${entry.originalPath}`);
-      return;
-    }
-
-    const originalHash = sha256File(originalFullPath);
-    if (piHash !== originalHash) {
-      failures.push(`${label} status ${entry.status} requires exact source match between ${entry.originalPath} and ${entry.piPath}`);
-    }
+    validateExactChecksumMatch(label, entry.status, normalizeManifestPath(entry.originalPath), piPath, piHash);
   }
 }
 
