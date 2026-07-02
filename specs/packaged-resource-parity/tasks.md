@@ -108,7 +108,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-9, AC-2.1, AC-3.1_
   - _Design: Packaged resource tree, Prepack verifier_
 
-- [ ] 2.2 [GREEN] Populate packaged templates from original resources
+- [x] 2.2 [GREEN] Populate packaged templates from original resources
   - **Do**:
     1. Copy original non-prompt template markdown files into `templates/`.
     2. Preserve source names where Pi-safe.
