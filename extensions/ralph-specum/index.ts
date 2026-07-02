@@ -3229,6 +3229,9 @@ async function runStartCommand(
 			command: invocation.command,
 			aliasOf: invocation.aliasOf,
 			options: buildStartOptionsSnapshot(parsed),
+			statePatch: {
+				phase,
+			},
 		},
 	};
 

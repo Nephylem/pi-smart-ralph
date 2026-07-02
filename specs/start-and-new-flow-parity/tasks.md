@@ -112,7 +112,7 @@
   - _Requirements: FR-2, AC-1.3_
   - _Design: Shared start coordinator; Data Flow_
 
-- [ ] 1.8 [GREEN] Pass smoke: preserve phase selection in shared state patch
+- [x] 1.8 [GREEN] Pass smoke: preserve phase selection in shared state patch
   - **Do**:
     1. Ensure the shared runner applies existing `determineStartPhase` behavior for both command names.
     2. Include the resolved phase in the state patch used by start/new.
