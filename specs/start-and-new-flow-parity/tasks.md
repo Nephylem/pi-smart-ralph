@@ -171,7 +171,7 @@
   - _Requirements: FR-4, AC-2.1_
   - _Design: Start branch/worktree helper; Data Flow_
 
-- [ ] 2.3 [YELLOW] Refactor branch helper boundaries
+- [x] 2.3 [YELLOW] Refactor branch helper boundaries
   - **Do**:
     1. Separate pure branch planning from git command application.
     2. Keep injected runner/UI interfaces small and serializable for smoke fixtures.

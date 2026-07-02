@@ -29,7 +29,25 @@ export type StartBranchPlanInput = {
 	autonomousMode?: boolean;
 };
 
-export type StartBranchGitRunner = (args: string[], options: { cwd: string }) => { ok: boolean; stdout: string; stderr?: string };
+export type StartBranchGitResult = {
+	ok: boolean;
+	stdout: string;
+	stderr?: string;
+};
+
+export type StartBranchGitRunner = (args: string[], options: { cwd: string }) => StartBranchGitResult;
+
+export type StartBranchGitState = {
+	insideWorkTree: boolean;
+	currentBranch?: string;
+	defaultBranch?: string;
+	dirty?: boolean;
+};
+
+export type StartBranchGitCommand = {
+	args: string[];
+	description: string;
+};
 
 export type StartBranchDependencies = {
 	cwd: string;
@@ -45,7 +63,7 @@ export type DecideStartBranchInput = {
 	dependencies?: Partial<StartBranchDependencies>;
 };
 
-function defaultGitRunner(args: string[], options: { cwd: string }): { ok: boolean; stdout: string; stderr?: string } {
+function defaultGitRunner(args: string[], options: { cwd: string }): StartBranchGitResult {
 	const result = spawnSync("git", args, { cwd: options.cwd, encoding: "utf8" });
 	return {
 		ok: result.status === 0,
@@ -109,11 +127,68 @@ export function planStartBranchDecision(input: StartBranchPlanInput): BranchDeci
 	};
 }
 
+export function planStartBranchApplication(decision: BranchDecision): StartBranchGitCommand[] {
+	if (decision.mode === "create-current-branch" && decision.targetBranch) {
+		return [{ args: ["switch", "-c", decision.targetBranch], description: "Create and switch to the planned Ralph branch." }];
+	}
+
+	if (decision.mode === "use-existing-branch" && decision.targetBranch) {
+		return [{ args: ["switch", decision.targetBranch], description: "Switch to the selected existing branch." }];
+	}
+
+	if (decision.mode === "create-worktree" && decision.worktreePath && decision.targetBranch) {
+		return [
+			{
+				args: ["worktree", "add", "-b", decision.targetBranch, decision.worktreePath],
+				description: "Create the selected Ralph worktree.",
+			},
+		];
+	}
+
+	return [];
+}
+
+export function collectStartBranchGitState(git: StartBranchGitRunner, cwd: string): StartBranchGitState {
+	const insideWorkTree = git(["rev-parse", "--is-inside-work-tree"], { cwd });
+	if (!insideWorkTree.ok || insideWorkTree.stdout !== "true") {
+		return { insideWorkTree: false };
+	}
+
+	const current = git(["branch", "--show-current"], { cwd });
+	const defaultRef = git(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], { cwd });
+	const status = git(["status", "--porcelain=v1"], { cwd });
+	const defaultBranch = defaultRef.ok ? defaultRef.stdout.replace(/^origin\//, "") : undefined;
+
+	return {
+		insideWorkTree: true,
+		currentBranch: current.ok ? current.stdout : undefined,
+		defaultBranch,
+		dirty: status.ok ? status.stdout.length > 0 : undefined,
+	};
+}
+
+export function applyStartBranchApplication(decision: BranchDecision, input: DecideStartBranchInput): BranchDecision {
+	const git = input.dependencies?.git ?? defaultGitRunner;
+	const cwd = input.dependencies?.cwd ?? input.cwd;
+	for (const command of planStartBranchApplication(decision)) {
+		const result = git(command.args, { cwd });
+		if (!result.ok) {
+			return {
+				...decision,
+				applied: false,
+				reason: `${decision.reason} Git application failed: ${result.stderr || result.stdout || command.description}`,
+			};
+		}
+	}
+
+	return { ...decision, applied: planStartBranchApplication(decision).length > 0 };
+}
+
 export function decideStartBranchDecision(input: DecideStartBranchInput): BranchDecision {
 	const git = input.dependencies?.git ?? defaultGitRunner;
 	const cwd = input.dependencies?.cwd ?? input.cwd;
-	const insideWorkTree = git(["rev-parse", "--is-inside-work-tree"], { cwd });
-	if (!insideWorkTree.ok || insideWorkTree.stdout !== "true") {
+	const gitState = collectStartBranchGitState(git, cwd);
+	if (!gitState.insideWorkTree) {
 		return planStartBranchDecision({
 			isNew: input.isNew,
 			specName: input.specName,
@@ -122,17 +197,12 @@ export function decideStartBranchDecision(input: DecideStartBranchInput): Branch
 		});
 	}
 
-	const current = git(["branch", "--show-current"], { cwd });
-	const defaultRef = git(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], { cwd });
-	const status = git(["status", "--porcelain=v1"], { cwd });
-	const defaultBranch = defaultRef.ok ? defaultRef.stdout.replace(/^origin\//, "") : undefined;
-
 	return planStartBranchDecision({
 		isNew: input.isNew,
 		specName: input.specName,
-		currentBranch: current.ok ? current.stdout : undefined,
-		defaultBranch,
-		dirty: status.ok ? status.stdout.length > 0 : undefined,
+		currentBranch: gitState.currentBranch,
+		defaultBranch: gitState.defaultBranch,
+		dirty: gitState.dirty,
 		quickMode: input.quickMode,
 		autonomousMode: input.autonomousMode,
 	});

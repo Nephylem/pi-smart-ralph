@@ -4,7 +4,9 @@ import { join } from 'node:path';
 
 const root = process.cwd();
 const extensionPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+const startBranchPath = join(root, 'extensions', 'ralph-specum', 'start-branch.ts');
 const source = readFileSync(extensionPath, 'utf8');
+const startBranchSource = readFileSync(startBranchPath, 'utf8');
 const quietForPackJson = process.env.npm_command === 'pack';
 
 const failures = [];
@@ -301,6 +303,70 @@ for (const recordedWrite of branchOrderingSmokeFixture.recordedWritePatterns) {
   assert(
     branchDecisionIndex >= 0 && writeIndex >= 0 && branchDecisionIndex < writeIndex,
     `Branch ordering smoke failed: branch decision marker must occur before ${recordedWrite.label} write for new specs.`,
+  );
+}
+
+const branchPlannerBoundarySmokeFixture = {
+  requiredExports: [
+    'planStartBranchDecision',
+    'collectStartBranchGitState',
+    'planStartBranchApplication',
+    'applyStartBranchApplication',
+    'decideStartBranchDecision',
+  ],
+  decisionFields: ['mode', 'currentBranch', 'defaultBranch', 'targetBranch', 'worktreePath', 'dirty', 'applied', 'reason'],
+  destructiveGitPatterns: [/--force/, /--discard-changes/, /\breset\b/, /\bbranch\s+-D\b/, /\bworktree\s+remove\b/],
+};
+
+for (const exportName of branchPlannerBoundarySmokeFixture.requiredExports) {
+  assert(
+    new RegExp(`export\\s+function\\s+${exportName}\\s*\\(`).test(startBranchSource),
+    `Branch helper must expose ${exportName} so planning and git application stay separately fixture-testable.`,
+  );
+}
+
+assert(
+  /export\s+type\s+BranchDecision\s*=\s*\{[\s\S]*?mode:\s*StartBranchMode;[\s\S]*?applied:\s*boolean;[\s\S]*?reason:\s*string;[\s\S]*?\}/.test(startBranchSource),
+  'Branch helper must return the design BranchDecision object shape.',
+);
+
+for (const field of branchPlannerBoundarySmokeFixture.decisionFields) {
+  assert(
+    new RegExp(`export\\s+type\\s+BranchDecision\\s*=\\s*\\{[\\s\\S]*?${field}\\??:`).test(startBranchSource),
+    `BranchDecision must serialize ${field} for smoke fixtures and downstream state.`,
+  );
+}
+
+assert(
+  /export\s+type\s+StartBranchGitRunner\s*=\s*\(args:\s*string\[\],\s*options:\s*\{\s*cwd:\s*string\s*\}\)\s*=>\s*StartBranchGitResult/.test(startBranchSource),
+  'Injected git runner interface must remain small and serializable for smoke fixtures.',
+);
+
+assert(
+  /export\s+type\s+StartBranchGitCommand\s*=\s*\{[\s\S]*?args:\s*string\[\];[\s\S]*?description:\s*string;[\s\S]*?\}/.test(startBranchSource),
+  'Git command application must be represented as serializable command plans.',
+);
+
+const purePlannerBody = startBranchSource.match(/export\s+function\s+planStartBranchDecision[\s\S]*?\n\}/)?.[0] ?? '';
+assert(
+  !/spawnSync\(|defaultGitRunner|git\(/.test(purePlannerBody),
+  'planStartBranchDecision must be pure and must not invoke real git operations.',
+);
+
+assert(
+  /const\s+gitState\s*=\s*collectStartBranchGitState\(git,\s*cwd\)[\s\S]*?return\s+planStartBranchDecision\(/.test(startBranchSource),
+  'decideStartBranchDecision must collect git state, then delegate pure planning to planStartBranchDecision.',
+);
+
+assert(
+  /export\s+function\s+applyStartBranchApplication[\s\S]*?for\s*\(const\s+command\s+of\s+planStartBranchApplication\(decision\)\)[\s\S]*?git\(command\.args,\s*\{\s*cwd\s*\}\)/.test(startBranchSource),
+  'Git command application must be isolated behind applyStartBranchApplication.',
+);
+
+for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGitPatterns) {
+  assert(
+    !destructivePattern.test(startBranchSource),
+    `Branch helper must not plan destructive git operation matching ${destructivePattern}.`,
   );
 }
 
