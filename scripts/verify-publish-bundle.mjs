@@ -165,6 +165,18 @@ function validatePackageFilesIncludes(relativePath) {
   }
 }
 
+function validatePackageFilesEntryExistsOrAbsent(relativePath) {
+  if (!Array.isArray(pkg.files) || !pkg.files.includes(relativePath)) return;
+
+  if (!existsSync(join(root, relativePath))) {
+    failures.push(`package.json files entry ${relativePath} must exist or be removed from the publish allowlist`);
+  }
+}
+
+function validatePackageResourceRootsIncluded(relativePaths) {
+  for (const relativePath of relativePaths) validatePackageFilesIncludes(relativePath);
+}
+
 function validateManifestOriginalCoverage(resourceManifest) {
   if (!Array.isArray(resourceManifest)) return;
 
@@ -292,7 +304,9 @@ validatePackageResourceRoot('references', {
 });
 validateDirectoryExists('references/original-commands');
 validatePackageResourceRoot('skills');
-validatePackageFilesIncludes('schemas');
+validatePackageResourceRootsIncluded(['agents', 'extensions', 'prompts', 'references', 'skills', 'templates', 'schemas']);
+validatePackageFilesEntryExistsOrAbsent('LICENSE');
+validatePackageFilesEntryExistsOrAbsent('smart-ralph.png');
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {

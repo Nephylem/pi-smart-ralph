@@ -330,7 +330,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
 
 ## Phase 4: Package Boundary and Dry-Run Verification
 
-- [ ] 4.1 [RED] Failing verifier: package files list must be asset-consistent
+- [x] 4.1 [RED] Failing verifier: package files list must be asset-consistent
   - **Do**:
     1. Add validation that every `package.json.files` entry for `LICENSE` and `smart-ralph.png` either exists or is absent from the allowlist.
     2. Add validation that declared resource roots are present in `package.json.files`.
