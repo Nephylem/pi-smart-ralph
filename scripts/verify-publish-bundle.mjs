@@ -145,6 +145,7 @@ validatePackageResourceRoot('references', {
   ignoredFileNames: new Set(['.gitkeep', 'ralph-resource-manifest.v1.json']),
 });
 validateDirectoryExists('references/original-commands');
+validatePackageResourceRoot('skills');
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {

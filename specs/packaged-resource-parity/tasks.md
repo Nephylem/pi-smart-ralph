@@ -176,7 +176,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-13, AC-2.1, AC-4.2_
   - _Design: Original commands, File Structure, Security Considerations_
 
-- [ ] 2.7 [RED] Failing verifier: skills root must contain package files
+- [x] 2.7 [RED] Failing verifier: skills root must contain package files
   - **Do**:
     1. Add a prepack check that `skills/` contains at least one non-`.gitkeep` file.
     2. Make the failure mention `skills/` explicitly.
