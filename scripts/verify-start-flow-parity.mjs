@@ -459,6 +459,93 @@ assert(
   ),
 );
 
+const headlessBranchSafetySmokeFixtures = [
+  {
+    label: 'quick/default branch',
+    input: {
+      isNew: true,
+      specName: 'quick-default',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      quickMode: true,
+      autonomousMode: false,
+    },
+    expectedMode: 'create-current-branch',
+    expectedTargetBranch: 'ralph/quick-default',
+    expectedPromptCalls: 0,
+  },
+  {
+    label: 'autonomous/default branch',
+    input: {
+      isNew: true,
+      specName: 'autonomous-default',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      quickMode: false,
+      autonomousMode: true,
+    },
+    expectedMode: 'create-current-branch',
+    expectedTargetBranch: 'ralph/autonomous-default',
+    expectedPromptCalls: 0,
+  },
+  {
+    label: 'quick/non-default branch',
+    input: {
+      isNew: true,
+      specName: 'quick-feature',
+      currentBranch: 'feature/existing-work',
+      defaultBranch: 'main',
+      quickMode: true,
+      autonomousMode: false,
+    },
+    expectedMode: 'stay-current',
+    expectedPromptCalls: 0,
+  },
+];
+
+function formatHeadlessBranchDiagnostic(smokeCase, reason) {
+  return `Headless branch safety smoke failed for ${smokeCase.label}: ${reason}`;
+}
+
+for (const smokeCase of headlessBranchSafetySmokeFixtures) {
+  assert(
+    smokeCase.expectedPromptCalls === 0,
+    formatHeadlessBranchDiagnostic(smokeCase, 'headless quick/autonomous fixtures must expect zero prompt calls'),
+  );
+  assert(
+    smokeCase.input.quickMode || smokeCase.input.autonomousMode,
+    formatHeadlessBranchDiagnostic(smokeCase, 'fixture must exercise quick or autonomous headless mode'),
+  );
+}
+
+assert(
+  /export\s+function\s+planStartBranchInteractiveChoices[\s\S]*?if\s*\(\s*!input\.isNew\s*\|\|\s*input\.quickMode\s*\|\|\s*input\.autonomousMode\s*\)\s*return\s*\[\]/.test(startBranchSource),
+  'Headless branch safety fixtures must make zero prompt calls by bypassing interactive choice planning.',
+);
+
+assert(
+  /input\.quickMode[\s\S]*?mode:\s*["']create-current-branch["'][\s\S]*?targetBranch:\s*safeTargetBranch\(input\.specName\)/.test(purePlannerBody),
+  formatHeadlessBranchDiagnostic(headlessBranchSafetySmokeFixtures[0], 'quick/default branch must deterministically plan safe current-directory branch creation'),
+);
+
+assert(
+  /input\.autonomousMode[\s\S]*?mode:\s*["']create-current-branch["'][\s\S]*?targetBranch:\s*safeTargetBranch\(input\.specName\)/.test(purePlannerBody),
+  formatHeadlessBranchDiagnostic(headlessBranchSafetySmokeFixtures[1], 'autonomous/default branch must deterministically plan safe current-directory branch creation'),
+);
+
+assert(
+  /currentBranch\s*!==\s*defaultBranch[\s\S]*?input\.quickMode[\s\S]*?mode:\s*["']stay-current["']/.test(purePlannerBody),
+  formatHeadlessBranchDiagnostic(headlessBranchSafetySmokeFixtures[2], 'quick/non-default branch must deterministically stay on the current branch'),
+);
+
+const headlessGitCommandSource = startBranchSource.match(/export\s+function\s+planStartBranchApplication[\s\S]*?\n\}/)?.[0] ?? '';
+for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGitPatterns) {
+  assert(
+    !destructivePattern.test(headlessGitCommandSource),
+    `Headless branch safety generated git commands must not include destructive operation matching ${destructivePattern}.`,
+  );
+}
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);

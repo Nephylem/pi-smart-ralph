@@ -229,7 +229,7 @@
   - _Requirements: FR-5, FR-9, AC-2.2, AC-2.3, AC-3.4_
   - _Design: Interfaces; Start contract builder_
 
-- [ ] Q4 [VERIFY] Quality check: interactive branch package verification
+- [x] Q4 [VERIFY] Quality check: interactive branch package verification
   - **Do**:
     1. Run package verification after interactive branch behavior changes.
   - **Files**: None
@@ -239,7 +239,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 2.7 [RED] Failing smoke: quick/autonomous branch decisions are deterministic and non-destructive
+- [x] 2.7 [RED] Failing smoke: quick/autonomous branch decisions are deterministic and non-destructive
   - **Do**:
     1. Add smoke fixtures for quick/default branch, autonomous/default branch, and quick/non-default branch.
     2. Assert headless fixtures make zero prompt calls.
