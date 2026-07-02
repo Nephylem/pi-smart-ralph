@@ -341,7 +341,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-7, FR-11, AC-2.3, AC-3.5_
   - _Design: Asset consistency, Package boundary_
 
-- [ ] 4.2 [GREEN] Resolve asset consistency by removing absent file entries
+- [x] 4.2 [GREEN] Resolve asset consistency by removing absent file entries
   - **Do**:
     1. Remove absent `LICENSE` and `smart-ralph.png` entries from `package.json.files`.
     2. Keep all required package resource roots listed, including `schemas`.

@@ -31,9 +31,7 @@
     "skills",
     "templates",
     "schemas",
-    "README.md",
-    "LICENSE",
-    "smart-ralph.png"
+    "README.md"
   ],
   "publishConfig": {
     "tag": "beta",
