@@ -444,7 +444,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-12, AC-4.1, AC-4.3, AC-4.4_
   - _Design: Documentation_
 
-- [ ] 5.3 [YELLOW] Clarify Pi-native command boundary in docs
+- [x] 5.3 [YELLOW] Clarify Pi-native command boundary in docs
   - **Do**:
     1. State that Pi commands remain implemented in `extensions/ralph-specum/index.ts`.
     2. State that original command and hook files are packaged only as non-executable references.

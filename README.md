@@ -565,7 +565,7 @@ Packaged resources are tracked by `references/ralph-resource-manifest.v1.json`. 
 - `excluded`: intentionally not packaged.
 - `deferred`: intentionally left for a later parity spec.
 
-Pi commands remain implemented in `extensions/ralph-specum/index.ts`; original command and hook files are reference material and are not installed as executable Claude/Codex hooks.
+Pi commands remain implemented in `extensions/ralph-specum/index.ts`; original command and hook files are packaged only as non-executable reference material and are not installed as executable Claude/Codex hooks. They also are not registered as Pi command handlers. Archived original command markdown lives under `references/original-commands/`, and `references/ralph-resource-manifest.v1.json` records whether each original command, hook-adjacent resource, template, reference, skill, or schema was copied, adapted, renamed, replaced with Pi-native behavior, excluded, or deferred.
 
 Before publishing or changing packaged resources, run:
 
