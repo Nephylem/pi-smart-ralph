@@ -120,7 +120,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, AC-2.1_
   - _Design: Packaged resource tree, File Structure_
 
-- [ ] 2.3 [RED] Failing verifier: prompts root must contain package files
+- [x] 2.3 [RED] Failing verifier: prompts root must contain package files
   - **Do**:
     1. Add a prepack check that `prompts/` contains at least one non-`.gitkeep` file.
     2. Make the failure mention `prompts/` explicitly.

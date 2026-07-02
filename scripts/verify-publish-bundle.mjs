@@ -126,6 +126,7 @@ for (const file of requiredFiles) {
 
 validateResourceManifest();
 validatePackageResourceRoot('templates');
+validatePackageResourceRoot('prompts');
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {
