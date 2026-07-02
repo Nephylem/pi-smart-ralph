@@ -5,6 +5,7 @@ import { join } from 'node:path';
 const root = process.cwd();
 const extensionPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
 const source = readFileSync(extensionPath, 'utf8');
+const quietForPackJson = process.env.npm_command === 'pack';
 
 const failures = [];
 
@@ -17,6 +18,26 @@ function countMatches(pattern) {
 }
 
 assert(
+  /type\s+StartCommandName\s*=\s*["']ralph-start["']\s*\|\s*["']ralph-new["']/.test(source),
+  'StartCommandName must normalize supported start/new command names.',
+);
+
+assert(
+  /type\s+StartInvocation\s*=\s*\{[\s\S]*?command:\s*StartCommandName;[\s\S]*?aliasOf\?:\s*["']ralph-start["'];[\s\S]*?\}/.test(source),
+  'StartInvocation must provide focused shared invocation metadata.',
+);
+
+assert(
+  /const\s+RALPH_START_INVOCATION:\s*StartInvocation\s*=\s*\{\s*command:\s*["']ralph-start["']\s*\}/.test(source),
+  'ralph-start invocation metadata must be defined once.',
+);
+
+assert(
+  /const\s+RALPH_NEW_INVOCATION:\s*StartInvocation\s*=\s*\{\s*command:\s*["']ralph-new["']\s*,\s*aliasOf:\s*["']ralph-start["']\s*\}/.test(source),
+  'ralph-new alias invocation metadata must be defined once.',
+);
+
+assert(
   /pi\.registerCommand\(\s*["']ralph-start["']/.test(source),
   'ralph-start must be registered as a Pi command.',
 );
@@ -27,13 +48,18 @@ assert(
 );
 
 assert(
-  /ralph-start[\s\S]*?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*\{\s*command:\s*["']ralph-start["']\s*\}/.test(source),
-  'ralph-start must call the shared start runner with invocation metadata.',
+  /ralph-start[\s\S]*?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*RALPH_START_INVOCATION\s*\)/.test(source),
+  'ralph-start must call the shared start runner with normalized invocation metadata.',
 );
 
 assert(
-  /ralph-new[\s\S]*?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*\{\s*command:\s*["']ralph-new["']\s*,\s*aliasOf:\s*["']ralph-start["']\s*\}/.test(source),
+  /ralph-new[\s\S]*?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*RALPH_NEW_INVOCATION\s*\)/.test(source),
   'ralph-new must call the same shared start runner with alias invocation metadata.',
+);
+
+assert(
+  /runStartCommand\(\s*pi\s*,\s*["']--next-epic-spec["']\s*,\s*ctx\s*\)/.test(source),
+  '--next-epic-spec call sites must remain on the shared start runner.',
 );
 
 assert(
@@ -52,4 +78,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log('START_FLOW_PARITY_OK');
+if (!quietForPackJson) console.log('START_FLOW_PARITY_OK');

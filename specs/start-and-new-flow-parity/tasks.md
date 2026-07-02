@@ -32,7 +32,7 @@
   - _Requirements: FR-1, AC-1.1_
   - _Design: Pi command registration; Shared start coordinator_
 
-- [ ] 1.3 [YELLOW] Refactor shared invocation metadata types
+- [x] 1.3 [YELLOW] Refactor shared invocation metadata types
   - **Do**:
     1. Add focused `StartInvocation` and `StartCommandName` types near existing start command types.
     2. Normalize shared runner parameter names so command registrations are thin.

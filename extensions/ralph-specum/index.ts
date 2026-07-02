@@ -1238,6 +1238,16 @@ type EpicRepairResult = {
 
 type StartPhase = "research" | "requirements" | "design" | "tasks" | "execution";
 
+type StartCommandName = "ralph-start" | "ralph-new";
+
+type StartInvocation = {
+	command: StartCommandName;
+	aliasOf?: "ralph-start";
+};
+
+const RALPH_START_INVOCATION: StartInvocation = { command: "ralph-start" };
+const RALPH_NEW_INVOCATION: StartInvocation = { command: "ralph-new", aliasOf: "ralph-start" };
+
 type StartArguments = {
 	reference: string | null;
 	goal: string;
@@ -3069,8 +3079,9 @@ async function runStartCommand(
 	pi: ExtensionAPI,
 	args: string,
 	ctx: ExtensionCommandContext,
-	_invocation: { command: "ralph-start" | "ralph-new"; aliasOf?: "ralph-start" } = { command: "ralph-start" },
+	invocation: StartInvocation = RALPH_START_INVOCATION,
 ): Promise<void> {
+	void invocation;
 	await ctx.waitForIdle();
 	const options = pathOptions(ctx);
 	const parsed = parseStartArgs(args);
@@ -7911,13 +7922,13 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	pi.registerCommand("ralph-start", {
 		description: "Create/resume a Ralph spec; --quick reviews artifacts and implements",
 		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => runStartCommand(pi, args, ctx, { command: "ralph-start" }),
+		handler: async (args, ctx) => runStartCommand(pi, args, ctx, RALPH_START_INVOCATION),
 	});
 
 	pi.registerCommand("ralph-new", {
 		description: "Compatibility alias for /ralph-start",
 		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => runStartCommand(pi, args, ctx, { command: "ralph-new", aliasOf: "ralph-start" }),
+		handler: async (args, ctx) => runStartCommand(pi, args, ctx, RALPH_NEW_INVOCATION),
 	});
 
 	pi.registerCommand("ralph-research", {
