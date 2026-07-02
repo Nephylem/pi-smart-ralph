@@ -333,7 +333,7 @@
 
 ## Phase 3: Red-Green-Yellow Cycles - Discovery and StartCompatibilityContractV1
 
-- [ ] 3.1 [RED] Failing smoke: related specs are discovered and merged by name
+- [x] 3.1 [RED] Failing smoke: related specs are discovered and merged by name
   - **Do**:
     1. Add smoke fixtures with existing spec artifacts and keyword/metadata matches.
     2. Assert discovered entries include `name`, relevance or relationship, `mayNeedUpdate`, and evidence text.

@@ -6,9 +6,11 @@ const root = process.cwd();
 const extensionPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
 const startBranchPath = join(root, 'extensions', 'ralph-specum', 'start-branch.ts');
 const gitignorePath = join(root, 'extensions', 'ralph-specum', 'gitignore.ts');
+const startDiscoveryPath = join(root, 'extensions', 'ralph-specum', 'start-discovery.ts');
 const source = readFileSync(extensionPath, 'utf8');
 const startBranchSource = readFileSync(startBranchPath, 'utf8');
 const gitignoreSource = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
+const startDiscoverySource = existsSync(startDiscoveryPath) ? readFileSync(startDiscoveryPath, 'utf8') : '';
 const quietForPackJson = process.env.npm_command === 'pack';
 
 const failures = [];
@@ -735,6 +737,144 @@ assert(
 assert(
   /missingPatterns\.length\s*>\s*0[\s\S]*?appendMissingGitignoreEntries\(existing,\s*missingPatterns\)[\s\S]*?hasFinalNewline\(existing\)[\s\S]*?`\$\{existing\}\\n`/.test(gitignoreSource),
   'Ralph gitignore updater must normalize the final newline even when no Ralph patterns are missing.',
+);
+
+const relatedSpecDiscoverySmokeFixtures = [
+  {
+    label: 'metadata relationship match from existing spec artifact',
+    currentSpecName: 'start-and-new-flow-parity',
+    currentGoal: 'match original start and new kickoff flow parity',
+    existingState: { relatedSpecs: [] },
+    candidates: [
+      {
+        name: 'implementation-recovery-loop-parity',
+        artifact: 'requirements.md',
+        frontmatter: { epic: 'smart-ralph-parity-audit', contracts: ['StartCompatibilityContractV1'] },
+        text: 'Consumes StartCompatibilityContractV1 and resumes implementation from normalized start state fields.',
+      },
+    ],
+    expectedNames: ['implementation-recovery-loop-parity'],
+    expectedEvidenceIncludes: ['StartCompatibilityContractV1', 'requirements.md'],
+  },
+  {
+    label: 'keyword match from existing spec artifacts',
+    currentSpecName: 'start-and-new-flow-parity',
+    currentGoal: 'branch safety and related spec discovery for start command',
+    existingState: { relatedSpecs: [] },
+    candidates: [
+      {
+        name: 'triage-github-sync-parity',
+        artifact: 'plan.md',
+        frontmatter: { epic: 'smart-ralph-parity-audit' },
+        text: 'Shares branch/worktree safety behavior and active epic start command context.',
+      },
+    ],
+    expectedNames: ['triage-github-sync-parity'],
+    expectedEvidenceIncludes: ['branch', 'plan.md'],
+  },
+  {
+    label: 'resume merge preserves existing relatedSpecs by name',
+    currentSpecName: 'start-and-new-flow-parity',
+    currentGoal: 'preserve manually curated related specs while merging scanner updates',
+    existingState: {
+      relatedSpecs: [
+        {
+          name: 'implementation-recovery-loop-parity',
+          relevance: 'High',
+          mayNeedUpdate: false,
+          evidence: 'Manual downstream consumer note must be preserved on resume.',
+        },
+        {
+          name: 'packaged-resource-parity',
+          relationship: 'producer',
+          mayNeedUpdate: false,
+          evidence: 'Existing producer dependency remains relevant.',
+        },
+      ],
+    },
+    candidates: [
+      {
+        name: 'implementation-recovery-loop-parity',
+        artifact: 'design.md',
+        frontmatter: { contracts: ['StartCompatibilityContractV1'] },
+        text: 'New scan evidence should merge into the existing entry instead of duplicating the spec name.',
+      },
+      {
+        name: 'indexing-command-parity',
+        artifact: 'research.md',
+        frontmatter: { contracts: ['IndexArtifactContractV1'] },
+        text: 'Index artifacts can provide related spec discovery hints for start.',
+      },
+    ],
+    expectedNames: ['implementation-recovery-loop-parity', 'packaged-resource-parity', 'indexing-command-parity'],
+    expectedEvidenceIncludes: ['Manual downstream consumer note', 'design.md'],
+  },
+];
+
+function formatRelatedSpecDiscoveryDiagnostic(smokeCase, reason) {
+  return `Related spec discovery smoke failed for ${smokeCase.label}: ${reason}`;
+}
+
+function assertRelatedSpecEntryShape(smokeCase, entry) {
+  assert(typeof entry.name === 'string' && entry.name.length > 0, formatRelatedSpecDiscoveryDiagnostic(smokeCase, 'entry must include name'));
+  assert(
+    typeof entry.relevance === 'string' || typeof entry.relationship === 'string',
+    formatRelatedSpecDiscoveryDiagnostic(smokeCase, `entry ${entry.name ?? '<unknown>'} must include relevance or relationship`),
+  );
+  assert(
+    typeof entry.mayNeedUpdate === 'boolean',
+    formatRelatedSpecDiscoveryDiagnostic(smokeCase, `entry ${entry.name ?? '<unknown>'} must include mayNeedUpdate boolean`),
+  );
+  assert(
+    typeof entry.evidence === 'string' && entry.evidence.length > 0,
+    formatRelatedSpecDiscoveryDiagnostic(smokeCase, `entry ${entry.name ?? '<unknown>'} must include evidence text`),
+  );
+}
+
+for (const smokeCase of relatedSpecDiscoverySmokeFixtures) {
+  assert(smokeCase.candidates.length > 0, formatRelatedSpecDiscoveryDiagnostic(smokeCase, 'fixture must include existing spec artifacts to scan'));
+  assert(smokeCase.expectedNames.length > 0, formatRelatedSpecDiscoveryDiagnostic(smokeCase, 'fixture must expect at least one discovered or preserved related spec'));
+  for (const existingEntry of smokeCase.existingState.relatedSpecs) assertRelatedSpecEntryShape(smokeCase, existingEntry);
+}
+
+assert(
+  startDiscoverySource.length > 0,
+  'Start discovery helper must exist at extensions/ralph-specum/start-discovery.ts for related spec scanning.',
+);
+
+assert(
+  /export\s+type\s+RelatedSpecDiscovery\s*=\s*\{[\s\S]*?name:\s*string[\s\S]*?(?:relevance|relationship)[\s\S]*?mayNeedUpdate:\s*boolean[\s\S]*?evidence:\s*string/.test(startDiscoverySource),
+  'RelatedSpecDiscovery must include name, relevance or relationship, mayNeedUpdate, and evidence text.',
+);
+
+assert(
+  /export\s+function\s+discoverRelatedSpecs\s*\(/.test(startDiscoverySource),
+  'Start discovery helper must expose discoverRelatedSpecs for keyword and metadata scanning of existing spec artifacts.',
+);
+
+assert(
+  /export\s+function\s+mergeRelatedSpecsByName\s*\(/.test(startDiscoverySource),
+  'Start discovery helper must expose mergeRelatedSpecsByName to preserve and merge resume state by spec name.',
+);
+
+assert(
+  /frontmatter|metadata|contracts|epic/.test(startDiscoverySource),
+  'Related spec discovery must inspect metadata/frontmatter relationships from existing spec artifacts.',
+);
+
+assert(
+  /keyword|token|score|goal/i.test(startDiscoverySource),
+  'Related spec discovery must inspect keyword matches from current goal and existing spec artifacts.',
+);
+
+assert(
+  /new\s+Map<\s*string[\s\S]*?\.name[\s\S]*?set\(/.test(startDiscoverySource),
+  'Related spec merge behavior must de-duplicate and merge entries by name on resume.',
+);
+
+assert(
+  /discoverRelatedSpecs\([\s\S]*?relatedSpecs[\s\S]*?mergeRelatedSpecsByName/.test(source),
+  'runStartCommand must merge discovered related specs with existing relatedSpecs before writing start state.',
 );
 
 if (failures.length > 0) {
