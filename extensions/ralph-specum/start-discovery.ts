@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getSpecRoots, listSpecs, type RalphPathOptions, type SpecEntry } from "./paths.ts";
 
 export type RelatedSpecDiscovery = {
@@ -13,6 +14,13 @@ export type RelatedSpecDiscovery = {
 
 export type RelatedSpecDiscoveryWarning = {
 	candidatePath: string;
+	reason: string;
+};
+
+export type DiscoveredSkill = {
+	name: string;
+	path: string;
+	relevance: "High" | "Medium" | "Low";
 	reason: string;
 };
 
@@ -35,7 +43,28 @@ type DiscoveryOptions = RalphPathOptions & {
 	warnings?: RelatedSpecDiscoveryWarning[];
 };
 
+type SkillDiscoveryOptions = RalphPathOptions & {
+	limit?: number;
+	warnings?: RelatedSpecDiscoveryWarning[];
+	skillRoots?: string[];
+};
+
+type SkillMetadata = {
+	name: string;
+	path: string;
+	frontmatter: string;
+	description: string;
+	text: string;
+};
+
+type ScoredDiscoveredSkill = {
+	discovery: DiscoveredSkill;
+	score: number;
+	candidateOrder: number;
+};
+
 const DEFAULT_RELATED_SPEC_LIMIT = 5;
+const DEFAULT_SKILL_LIMIT = 5;
 const SPEC_ARTIFACTS = ["requirements.md", "design.md", "plan.md", "research.md", "tasks.md", ".ralph-state.json"] as const;
 const CONTRACT_RE = /[A-Z][A-Za-z0-9]+ContractV\d+/g;
 const TOKEN_STOP_WORDS = new Set([
@@ -307,4 +336,156 @@ export function mergeRelatedSpecsByName(existing: unknown, discovered: RelatedSp
 	}
 
 	return limitRelatedSpecs([...byName.values()], limit);
+}
+
+const START_DISCOVERY_DIR = dirname(fileURLToPath(import.meta.url));
+const START_DISCOVERY_PACKAGE_ROOT = resolve(START_DISCOVERY_DIR, "../..");
+const SKILL_METADATA_FILE = "SKILL.md";
+
+function configuredSkillRoots(options: SkillDiscoveryOptions): string[] {
+	const cwd = resolve(options.cwd ?? process.cwd());
+	const roots = options.skillRoots ?? [
+		join(START_DISCOVERY_PACKAGE_ROOT, "skills"),
+		join(cwd, "skills"),
+		join(cwd, ".ralph", "skills"),
+		join(cwd, ".agents", "skills"),
+		join(cwd, ".pi", "agent", "skills"),
+	];
+	return [...new Set(roots.map((root) => resolve(root)))];
+}
+
+function skillMetadataPaths(root: string, warnings?: RelatedSpecDiscoveryWarning[]): string[] {
+	if (!existsSync(root)) return [];
+	const paths: string[] = [];
+	const visit = (dir: string, depth: number) => {
+		if (depth > 4) return;
+		let entries: ReturnType<typeof readdirSync>;
+		try {
+			entries = readdirSync(dir, { withFileTypes: true });
+		} catch (error) {
+			recordDiscoveryWarning(warnings, dir, `Skipped unreadable skill metadata directory: ${error instanceof Error ? error.message : String(error)}`);
+			return;
+		}
+		for (const entry of entries) {
+			const path = join(dir, entry.name);
+			if (entry.isFile() && entry.name === SKILL_METADATA_FILE) {
+				paths.push(path);
+				continue;
+			}
+			if (entry.isDirectory() && !entry.name.startsWith(".")) visit(path, depth + 1);
+		}
+	};
+	visit(root, 0);
+	return paths;
+}
+
+function frontmatterValue(frontmatter: string, key: string): string | undefined {
+	const match = new RegExp(`^${key}:\\s*(.+)$`, "im").exec(frontmatter);
+	return match?.[1]?.trim().replace(/^['\"]|['\"]$/g, "");
+}
+
+function firstParagraphAfterFrontmatter(text: string): string {
+	const body = text.replace(/^---\s*\n[\s\S]*?\n---\s*/, "");
+	const paragraph = body.split(/\n\s*\n/).find((part) => part.trim() && !part.trim().startsWith("#"));
+	return paragraph?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function readSkillMetadata(path: string, warnings?: RelatedSpecDiscoveryWarning[]): SkillMetadata | null {
+	const text = readCandidateText(path, warnings);
+	if (!text) return null;
+	const frontmatter = extractFrontmatter(text);
+	const name = frontmatterValue(frontmatter, "name") ?? path.split(/[\\/]/).at(-2) ?? path;
+	const description = frontmatterValue(frontmatter, "description") ?? firstParagraphAfterFrontmatter(text);
+	if (!name || !description) return null;
+	return { name, path, frontmatter, description, text };
+}
+
+function scoreSkillMetadata(skill: SkillMetadata, goalTokens: Set<string>): { score: number; reason: string } {
+	const metadata = `${skill.name} ${skill.frontmatter} ${skill.description}`;
+	const skillTokens = tokensFrom(metadata);
+	let keywordMatches = 0;
+	for (const token of goalTokens) {
+		if (skillTokens.has(token)) keywordMatches += 1;
+	}
+	let score = Math.min(keywordMatches, 8);
+	if (skill.name.split(/[-_]/).some((part) => goalTokens.has(part.toLowerCase()))) score += 2;
+	if (/use when|expert|patterns|architecture|design|api|async|workflow|ralph/i.test(skill.description)) score += 1;
+	return {
+		score,
+		reason: keywordMatches > 0
+			? `${keywordMatches} metadata keyword match${keywordMatches === 1 ? "" : "es"} in SKILL.md for ${skill.name}`
+			: `Low-confidence SKILL.md metadata match for ${skill.name}`,
+	};
+}
+
+function relevanceForSkillScore(score: number): DiscoveredSkill["relevance"] {
+	if (score >= 5) return "High";
+	if (score >= 2) return "Medium";
+	return "Low";
+}
+
+function compareScoredSkills(a: ScoredDiscoveredSkill, b: ScoredDiscoveredSkill): number {
+	return b.score - a.score || relevanceRank(b.discovery.relevance) - relevanceRank(a.discovery.relevance) || a.discovery.name.localeCompare(b.discovery.name) || a.candidateOrder - b.candidateOrder;
+}
+
+export function discoverSkills(currentSpec: SpecEntry, currentGoal: string, options: SkillDiscoveryOptions = {}): DiscoveredSkill[] {
+	// SKILL.md files are read via readFileSync in readSkillMetadata; never execute metadata bodies.
+	const goalTokens = tokensFrom(`${currentSpec.name} ${currentGoal}`);
+	const discoveredSkills: ScoredDiscoveredSkill[] = [];
+	let candidateOrder = 0;
+	for (const root of configuredSkillRoots(options)) {
+		for (const path of skillMetadataPaths(root, options.warnings)) {
+			const skill = readSkillMetadata(path, options.warnings);
+			if (!skill) continue;
+			const scored = scoreSkillMetadata(skill, goalTokens);
+			if (scored.score <= 0) continue;
+			discoveredSkills.push({
+				discovery: {
+					name: skill.name,
+					path: skill.path,
+					relevance: relevanceForSkillScore(scored.score),
+					reason: scored.reason,
+				},
+				score: scored.score,
+				candidateOrder,
+			});
+			candidateOrder += 1;
+		}
+	}
+	const byName = new Map<string, ScoredDiscoveredSkill>();
+	for (const entry of discoveredSkills.sort(compareScoredSkills)) {
+		if (!byName.has(entry.discovery.name)) byName.set(entry.discovery.name, entry);
+	}
+	return [...byName.values()].sort(compareScoredSkills).slice(0, Math.max(0, options.limit ?? DEFAULT_SKILL_LIMIT)).map((entry) => entry.discovery);
+}
+
+export function mergeDiscoveredSkillsByName(existing: unknown, discoveredSkills: DiscoveredSkill[], limit = DEFAULT_SKILL_LIMIT): DiscoveredSkill[] {
+	const byName = new Map<string, DiscoveredSkill>();
+	for (const entry of Array.isArray(existing) ? existing : []) {
+		if (!entry || typeof entry !== "object") continue;
+		const candidate = entry as Partial<DiscoveredSkill>;
+		if (typeof candidate.name !== "string" || !candidate.name) continue;
+		byName.set(candidate.name, {
+			name: candidate.name,
+			path: typeof candidate.path === "string" && candidate.path ? candidate.path : "",
+			relevance: candidate.relevance === "High" || candidate.relevance === "Medium" || candidate.relevance === "Low" ? candidate.relevance : "Low",
+			reason: typeof candidate.reason === "string" && candidate.reason ? candidate.reason : "Existing discovered skill preserved from state.",
+		});
+	}
+
+	for (const skill of discoveredSkills) {
+		const existingEntry = byName.get(skill.name);
+		if (!existingEntry) {
+			byName.set(skill.name, skill);
+			continue;
+		}
+		byName.set(skill.name, {
+			...existingEntry,
+			path: existingEntry.path || skill.path,
+			relevance: relevanceRank(existingEntry.relevance) >= relevanceRank(skill.relevance) ? existingEntry.relevance : skill.relevance,
+			reason: combineEvidence(existingEntry.reason, skill.reason),
+		});
+	}
+
+	return [...byName.values()].slice(0, Math.max(0, limit));
 }

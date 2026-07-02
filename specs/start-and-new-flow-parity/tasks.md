@@ -391,7 +391,7 @@
   - _Requirements: FR-8, AC-3.2, AC-3.3_
   - _Design: Start discovery helper; Security Considerations_
 
-- [ ] 3.5 [GREEN] Pass smoke: implement non-destructive skill discovery
+- [x] 3.5 [GREEN] Pass smoke: implement non-destructive skill discovery
   - **Do**:
     1. Extend `start-discovery.ts` to read packaged/project skill metadata paths.
     2. Match relevant skills from names/descriptions/frontmatter without executing skill files.

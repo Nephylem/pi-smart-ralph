@@ -66,7 +66,7 @@ import {
 } from "./epics.ts";
 import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
-import { discoverRelatedSpecs, mergeRelatedSpecsByName } from "./start-discovery.ts";
+import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -1121,8 +1121,99 @@ async function notify(ctx: ExtensionCommandContext, message: string, type: "info
 	console.log(message);
 }
 
+const RALPH_STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const RALPH_STATUS_ANIMATION_INTERVAL_MS = 160;
+
+type RalphStatusAnimationState = {
+	active: boolean;
+	ctx: ExtensionCommandContext | null;
+	currentMessage: string | undefined;
+	fallbackMessage: string | undefined;
+	frameIndex: number;
+	startedAt: number;
+	timer: ReturnType<typeof setInterval> | null;
+};
+
+const ralphStatusAnimation: RalphStatusAnimationState = {
+	active: false,
+	ctx: null,
+	currentMessage: undefined,
+	fallbackMessage: undefined,
+	frameIndex: 0,
+	startedAt: 0,
+	timer: null,
+};
+
+function formatRalphElapsed(startedAt: number): string {
+	const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, "0")}s`;
+	const hours = Math.floor(minutes / 60);
+	const remainingMinutes = minutes % 60;
+	return `${hours}h${remainingMinutes.toString().padStart(2, "0")}m`;
+}
+
+function renderAnimatedRalphStatus(message: string): string {
+	const frame = RALPH_STATUS_SPINNER_FRAMES[ralphStatusAnimation.frameIndex % RALPH_STATUS_SPINNER_FRAMES.length] ?? "•";
+	ralphStatusAnimation.frameIndex += 1;
+	const elapsed = ralphStatusAnimation.startedAt > 0 ? ` (${formatRalphElapsed(ralphStatusAnimation.startedAt)})` : "";
+	return `${frame} ${message}${elapsed}`;
+}
+
+function renderRalphStatus(): void {
+	const ctx = ralphStatusAnimation.ctx;
+	if (!ctx?.hasUI) return;
+
+	const message = ralphStatusAnimation.currentMessage ?? ralphStatusAnimation.fallbackMessage;
+	if (!message) {
+		ctx.ui.setStatus("ralph", undefined);
+		return;
+	}
+
+	ctx.ui.setStatus("ralph", ralphStatusAnimation.active ? renderAnimatedRalphStatus(message) : message);
+}
+
 function setRalphStatus(ctx: ExtensionCommandContext, message?: string): void {
+	if (ralphStatusAnimation.active) {
+		ralphStatusAnimation.ctx = ctx;
+		ralphStatusAnimation.currentMessage = message;
+		renderRalphStatus();
+		return;
+	}
+
 	if (ctx.hasUI) ctx.ui.setStatus("ralph", message);
+}
+
+function startRalphStatusAnimation(ctx: ExtensionCommandContext, fallbackMessage: string): void {
+	if (!ctx.hasUI) return;
+	stopRalphStatusAnimation();
+	ralphStatusAnimation.active = true;
+	ralphStatusAnimation.ctx = ctx;
+	ralphStatusAnimation.currentMessage = undefined;
+	ralphStatusAnimation.fallbackMessage = fallbackMessage;
+	ralphStatusAnimation.frameIndex = 0;
+	ralphStatusAnimation.startedAt = Date.now();
+	renderRalphStatus();
+	const timer = setInterval(renderRalphStatus, RALPH_STATUS_ANIMATION_INTERVAL_MS);
+	(timer as { unref?: () => void }).unref?.();
+	ralphStatusAnimation.timer = timer;
+}
+
+function stopRalphStatusAnimation(ctx?: ExtensionCommandContext): void {
+	if (ralphStatusAnimation.timer) {
+		clearInterval(ralphStatusAnimation.timer);
+		ralphStatusAnimation.timer = null;
+	}
+	const statusCtx = ctx ?? ralphStatusAnimation.ctx;
+	ralphStatusAnimation.active = false;
+	ralphStatusAnimation.ctx = null;
+	ralphStatusAnimation.currentMessage = undefined;
+	ralphStatusAnimation.fallbackMessage = undefined;
+	ralphStatusAnimation.frameIndex = 0;
+	ralphStatusAnimation.startedAt = 0;
+	if (statusCtx?.hasUI) statusCtx.ui.setStatus("ralph", undefined);
 }
 
 function printJsonOutput(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info"): void {
@@ -3238,8 +3329,10 @@ async function runStartCommand(
 
 	const phase = determineStartPhase(spec, stateRead.state, parsed, resolved.target.isNew);
 	const discoveredRelatedSpecs = discoverRelatedSpecs(spec, parsed.goal, options);
+	const discoveredSkills = discoverSkills(spec, parsed.goal, options);
 	let statePatch = startStatePatch(spec, parsed, phase, stateRead.state);
 	statePatch.relatedSpecs = mergeRelatedSpecsByName(statePatch.relatedSpecs, discoveredRelatedSpecs);
+	statePatch.discoveredSkills = mergeDiscoveredSkillsByName(statePatch.discoveredSkills, discoveredSkills);
 	if (epicStartContext) {
 		statePatch = {
 			...statePatch,
@@ -3270,6 +3363,7 @@ async function runStartCommand(
 			statePatch: {
 				phase,
 				relatedSpecs: statePatch.relatedSpecs,
+				discoveredSkills: statePatch.discoveredSkills,
 			},
 		},
 	};
@@ -3823,57 +3917,133 @@ function rpcCall<T>(pi: ExtensionAPI, channel: string, payload: Record<string, u
 	});
 }
 
-function waitForSubagentCompletion(pi: ExtensionAPI, agentId: string, timeoutMs: number): Promise<SubagentCompletion> {
-	return new Promise<SubagentCompletion>((resolvePromise, reject) => {
-		let settled = false;
-		let unsubscribeCompleted = () => {};
-		let unsubscribeFailed = () => {};
-		const timer = setTimeout(() => {
-			cleanup();
-			reject(new Error(`Timed out waiting for subagent ${agentId} to finish.`));
-		}, timeoutMs);
+type SubagentTerminalEvent = {
+	completion?: SubagentCompletion;
+	error?: Error;
+};
 
-		function cleanup() {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			unsubscribeCompleted();
-			unsubscribeFailed();
+type SubagentCompletionWaiter = {
+	waitFor(agentId: string): Promise<SubagentCompletion>;
+	dispose(): void;
+};
+
+type SubagentSpawnCallback = (agentId: string) => void | Promise<void>;
+
+function createSubagentCompletionWaiter(pi: ExtensionAPI, timeoutMs: number): SubagentCompletionWaiter {
+	let targetAgentId: string | null = null;
+	let settled = false;
+	let unsubscribeCompleted = () => {};
+	let unsubscribeFailed = () => {};
+	const bufferedTerminalEvents = new Map<string, SubagentTerminalEvent>();
+	let resolvePromise: (completion: SubagentCompletion) => void = () => {};
+	let rejectPromise: (error: Error) => void = () => {};
+
+	const promise = new Promise<SubagentCompletion>((resolve, reject) => {
+		resolvePromise = resolve;
+		rejectPromise = reject;
+	});
+
+	const timer = setTimeout(() => {
+		rejectOnce(new Error(`Timed out waiting for subagent ${targetAgentId ?? "<pending spawn>"} to finish.`));
+	}, timeoutMs);
+
+	function cleanup() {
+		clearTimeout(timer);
+		unsubscribeCompleted();
+		unsubscribeFailed();
+	}
+
+	function resolveOnce(completion: SubagentCompletion) {
+		if (settled) return;
+		settled = true;
+		cleanup();
+		resolvePromise(completion);
+	}
+
+	function rejectOnce(error: Error) {
+		if (settled) return;
+		settled = true;
+		cleanup();
+		rejectPromise(error);
+	}
+
+	function settleTerminalEvent(event: SubagentTerminalEvent) {
+		if (event.error) rejectOnce(event.error);
+		else if (event.completion) resolveOnce(event.completion);
+	}
+
+	function handleTerminalEvent(agentId: string | undefined, event: SubagentTerminalEvent) {
+		if (!agentId) return;
+		if (targetAgentId === agentId) {
+			settleTerminalEvent(event);
+			return;
 		}
 
-		unsubscribeCompleted = eventOn(pi.events, "subagents:completed", (raw) => {
-			const event = raw as SubagentCompletion;
-			if (event?.id !== agentId) return;
-			cleanup();
-			resolvePromise(event);
-		});
-		unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => {
-			const event = raw as SubagentCompletion;
-			if (event?.id !== agentId) return;
-			cleanup();
-			reject(new Error(event.error ?? `Subagent ${agentId} failed with status ${event.status ?? "unknown"}.`));
+		// The subagent can fail or finish quickly after spawn. Because the spawn RPC
+		// reply and lifecycle event are separate event-bus messages, subscribe before
+		// spawning and buffer terminal events until the spawned id is known.
+		if (!targetAgentId) bufferedTerminalEvents.set(agentId, event);
+	}
+
+	unsubscribeCompleted = eventOn(pi.events, "subagents:completed", (raw) => {
+		const event = raw as SubagentCompletion;
+		handleTerminalEvent(event?.id, { completion: event });
+	});
+	unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => {
+		const event = raw as SubagentCompletion;
+		const agentId = event?.id;
+		handleTerminalEvent(agentId, {
+			error: new Error(event.error ?? `Subagent ${agentId ?? "<unknown>"} failed with status ${event.status ?? "unknown"}.`),
 		});
 	});
+
+	return {
+		waitFor(agentId: string) {
+			targetAgentId = agentId;
+			const buffered = bufferedTerminalEvents.get(agentId);
+			if (buffered) settleTerminalEvent(buffered);
+			return promise;
+		},
+		dispose() {
+			if (settled) return;
+			settled = true;
+			cleanup();
+		},
+	};
 }
 
-async function runRalphSubagent(pi: ExtensionAPI, definition: SubagentRunDefinition, prompt: string): Promise<SubagentCompletion> {
-	await rpcCall<{ version: number }>(pi, "subagents:rpc:ping", {}, 5000);
-	const spawned = await rpcCall<{ id: string }>(
-		pi,
-		"subagents:rpc:spawn",
-		{
-			type: definition.agentName,
-			prompt,
-			options: {
-				description: definition.description,
-				isBackground: false,
-				maxTurns: definition.maxTurns,
+async function runRalphSubagent(
+	pi: ExtensionAPI,
+	definition: SubagentRunDefinition,
+	prompt: string,
+	onSpawned?: SubagentSpawnCallback,
+): Promise<SubagentCompletion> {
+	const completionWaiter = createSubagentCompletionWaiter(pi, 45 * 60 * 1000);
+	try {
+		await rpcCall<{ version: number }>(pi, "subagents:rpc:ping", {}, 5000);
+		const spawned = await rpcCall<{ id: string }>(
+			pi,
+			"subagents:rpc:spawn",
+			{
+				type: definition.agentName,
+				prompt,
+				options: {
+					description: definition.description,
+					// RPC-spawned Ralph agents do not have an inline Agent-tool result surface.
+					// Leave isBackground undefined so pi-subagents treats the record as RPC
+					// managed and keeps it visible in the default background-only widget.
+					maxTurns: definition.maxTurns,
+				},
 			},
-		},
-		10000,
-	);
-	if (!spawned?.id) throw new Error("pi-subagents spawn returned no agent id.");
-	return waitForSubagentCompletion(pi, spawned.id, 45 * 60 * 1000);
+			10000,
+		);
+		if (!spawned?.id) throw new Error("pi-subagents spawn returned no agent id.");
+		await onSpawned?.(spawned.id);
+		return await completionWaiter.waitFor(spawned.id);
+	} catch (error) {
+		completionWaiter.dispose();
+		throw error;
+	}
 }
 
 function buildArtifactReviewPrompt(
@@ -3949,7 +4119,7 @@ async function runArtifactReview(
 	options: RalphPathOptions,
 ): Promise<ArtifactReviewResult> {
 	const prompt = buildArtifactReviewPrompt(definition, spec, state, iteration, priorFindings, options);
-	if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph review: ${definition.phase} iteration ${iteration}`);
+	setRalphStatus(ctx, `Ralph review: ${definition.phase} iteration ${iteration}`);
 	try {
 		await notify(ctx, `Reviewing ${definition.phase}.md with ${ARTIFACT_REVIEWER_AGENT} (${iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})...`);
 		const completion = await runRalphSubagent(
@@ -4324,11 +4494,13 @@ async function generatePhaseArtifact(
 	}
 
 	const prompt = buildPhasePrompt(definition, spec, updatedState, parsed, options, reviewContext);
-	if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph ${definition.phase}: running ${definition.agentName}`);
+	setRalphStatus(ctx, `Ralph ${definition.phase}: running ${definition.agentName}`);
 	try {
 		const iterationSuffix = reviewContext ? ` (${reviewContext.iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})` : "";
 		await notify(ctx, `Running ${definition.agentName} for ${spec.name}${iterationSuffix}...`);
-		await runRalphSubagent(pi, definition, prompt);
+		await runRalphSubagent(pi, definition, prompt, (agentId) => {
+			setRalphStatus(ctx, `Ralph ${definition.phase}: ${agentId} running ${definition.agentName}`);
+		});
 	} catch (error) {
 		try {
 			mergeRalphState(spec, { phase: definition.phase, awaitingApproval: false, validationError: formatError(error) }, options);
@@ -4337,7 +4509,7 @@ async function generatePhaseArtifact(
 		}
 		throw error;
 	} finally {
-		if (ctx.hasUI) ctx.ui.setStatus("ralph", undefined);
+		setRalphStatus(ctx);
 	}
 
 	return readRalphState(spec, options) ?? updatedState;
@@ -4556,7 +4728,7 @@ async function runQuickFlow(
 		}
 		await notify(ctx, `Quick mode blocked for ${spec.name}: ${formatError(error)}`, "warning");
 	} finally {
-		if (ctx.hasUI) ctx.ui.setStatus("ralph", undefined);
+		setRalphStatus(ctx);
 	}
 }
 
@@ -5456,7 +5628,7 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 	}
 
 	const completedSummaries: string[] = [...startupSummaries];
-	if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph implement: ${spec.name}`);
+	setRalphStatus(ctx, `Ralph implement: ${spec.name}`);
 
 	try {
 		while (true) {
@@ -5534,11 +5706,13 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 				return;
 			}
 
-			if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph implement: ${task.activeForm}`);
+			setRalphStatus(ctx, `Ralph implement: ${task.activeForm}`);
 			const prompt = buildImplementationPrompt(task, definition, spec, state, options);
 			let validation: CompletionValidation;
 			try {
-				const completion = await runRalphSubagent(pi, definition, prompt);
+				const completion = await runRalphSubagent(pi, definition, prompt, (agentId) => {
+					setRalphStatus(ctx, `Ralph implement: ${agentId} ${task.activeForm}`);
+				});
 				validation = validateSubagentCompletion(completion, definition);
 			} catch (error) {
 				validation = {
@@ -5626,7 +5800,7 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 	} catch (error) {
 		await blockImplementation(ctx, spec, null, formatError(error), options);
 	} finally {
-		if (ctx.hasUI) ctx.ui.setStatus("ralph", undefined);
+		setRalphStatus(ctx);
 	}
 }
 
@@ -7641,6 +7815,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 				pi,
 				{ agentName: TRIAGE_AGENT, description: `Triage epic ${epic.name}`, maxTurns: 80 },
 				buildTriagePrompt(epic, parsed, goal, files),
+				(agentId) => setRalphStatus(ctx, `Ralph triage: ${agentId} running ${TRIAGE_AGENT}`),
 			);
 			const output = subagentCompletionOutput(completion);
 			if (/USER_INPUT_REQUIRED/i.test(output)) {
@@ -7704,8 +7879,54 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 }
 
 export default function ralphSpecumExtension(pi: ExtensionAPI) {
+	type RalphCoordinatorJob = {
+		label: string;
+		startedAt: number;
+	};
+
+	let activeRalphCoordinatorJob: RalphCoordinatorJob | null = null;
+
+	async function startRalphCoordinatorJob(
+		ctx: ExtensionCommandContext,
+		label: string,
+		run: () => Promise<void>,
+	): Promise<void> {
+		if (activeRalphCoordinatorJob) {
+			const elapsedSeconds = Math.max(0, Math.floor((Date.now() - activeRalphCoordinatorJob.startedAt) / 1000));
+			await notify(
+				ctx,
+				`Ralph is already running '${activeRalphCoordinatorJob.label}' (${elapsedSeconds}s elapsed). Wait for it to finish before starting another Ralph workflow command.`,
+				"warning",
+			);
+			return;
+		}
+
+		const job: RalphCoordinatorJob = { label, startedAt: Date.now() };
+		activeRalphCoordinatorJob = job;
+		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
+		await notify(ctx, `Started Ralph ${label}. The coordinator will continue in the background; you can keep using Pi while its subagent runs.`);
+
+		void (async () => {
+			try {
+				await run();
+			} catch (error) {
+				await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
+			} finally {
+				if (activeRalphCoordinatorJob === job) {
+					activeRalphCoordinatorJob = null;
+					stopRalphStatusAnimation(ctx);
+				}
+			}
+		})();
+	}
+
 	pi.on("session_start", async () => {
 		await bootstrapBundledRuntimes(pi);
+	});
+
+	pi.on("session_shutdown", async () => {
+		activeRalphCoordinatorJob = null;
+		stopRalphStatusAnimation();
 	});
 
 	pi.on("resources_discover", async () => {
@@ -7752,7 +7973,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	pi.registerCommand("ralph-triage", {
 		description: "Create or resume a dependency-aware Ralph epic",
 		getArgumentCompletions: triageArgumentCompletions,
-		handler: async (args, ctx) => runTriageCommand(pi, args, ctx),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "triage", () => runTriageCommand(pi, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-epic-status", {
@@ -7876,7 +8097,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					return;
 				}
 				writeCurrentEpic(target.epic.name, options);
-				await runStartCommand(pi, "--next-epic-spec", ctx);
+				await startRalphCoordinatorJob(ctx, "start", () => runStartCommand(pi, "--next-epic-spec", ctx));
 				return;
 			}
 
@@ -7998,43 +8219,43 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	pi.registerCommand("ralph-start", {
 		description: "Create/resume a Ralph spec; --quick reviews artifacts and implements",
 		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => runStartCommand(pi, args, ctx, RALPH_START_INVOCATION),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "start", () => runStartCommand(pi, args, ctx, RALPH_START_INVOCATION)),
 	});
 
 	pi.registerCommand("ralph-new", {
 		description: "Compatibility alias for /ralph-start",
 		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => runStartCommand(pi, args, ctx, RALPH_NEW_INVOCATION),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "start", () => runStartCommand(pi, args, ctx, RALPH_NEW_INVOCATION)),
 	});
 
 	pi.registerCommand("ralph-research", {
 		description: "Generate research.md for the active Ralph spec",
 		getArgumentCompletions: phaseArgumentCompletions,
-		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.research, args, ctx),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "research", () => runPhaseCommand(pi, PHASE_DEFINITIONS.research, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-requirements", {
 		description: "Generate requirements.md for the active Ralph spec",
 		getArgumentCompletions: phaseArgumentCompletions,
-		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.requirements, args, ctx),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "requirements", () => runPhaseCommand(pi, PHASE_DEFINITIONS.requirements, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-design", {
 		description: "Generate design.md for the active Ralph spec",
 		getArgumentCompletions: phaseArgumentCompletions,
-		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.design, args, ctx),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "design", () => runPhaseCommand(pi, PHASE_DEFINITIONS.design, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-tasks", {
 		description: "Generate canonical tasks.md for the active Ralph spec",
 		getArgumentCompletions: (prefix) => phaseArgumentCompletions(prefix, true),
-		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.tasks, args, ctx),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "tasks", () => runPhaseCommand(pi, PHASE_DEFINITIONS.tasks, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-implement", {
 		description: "Execute tasks.md through Ralph subagents",
 		getArgumentCompletions: specArgumentCompletions,
-		handler: async (args, ctx) => runImplementCommand(pi, args, ctx),
+		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "implement", () => runImplementCommand(pi, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-status", {
