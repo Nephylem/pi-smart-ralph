@@ -14,7 +14,7 @@
   - _Requirements: FR-2, AC-1.3_
   - _Design: Index option parser; Smoke verifier_
 
-- [ ] 1.2 [GREEN] Pass test: implement minimal index option parser errors
+- [x] 1.2 [GREEN] Pass test: implement minimal index option parser errors
   - **Do**:
     1. Create `extensions/ralph-specum/indexing.ts`.
     2. Export `parseIndexArgs` with hand-rolled option parsing.
