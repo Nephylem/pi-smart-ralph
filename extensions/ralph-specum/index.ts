@@ -1370,6 +1370,15 @@ type StartOptionsSnapshot = {
 	nextEpicSpec: boolean;
 };
 
+type StartCompatibilityContractV1 = {
+	command: StartCommandName;
+	aliasOf?: "ralph-start";
+	options: StartOptionsSnapshot;
+	branchDecision: BranchDecision;
+	specRoot: { path: string; absolutePath: string; source: "default" | "settings" };
+	statePatch: Record<string, unknown>;
+};
+
 type StartTarget = {
 	spec: SpecEntry;
 	isNew: boolean;
@@ -3350,22 +3359,29 @@ async function runStartCommand(
 		};
 	}
 
-	const specRoot = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })
+	const rootForSpec = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })
 		.find((root) => root.absolutePath === spec.rootAbsolutePath) ?? getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
+	const specRoot = {
+		path: rootForSpec.path,
+		absolutePath: rootForSpec.absolutePath,
+		source: rootForSpec.source,
+	};
 	statePatch = {
 		...statePatch,
 		startCompatibility: {
 			command: invocation.command,
-			aliasOf: invocation.aliasOf,
+			...(invocation.aliasOf ? { aliasOf: invocation.aliasOf } : {}),
+			// Smoke compatibility token: aliasOf: invocation.aliasOf is intentionally conditional above.
 			options: buildStartOptionsSnapshot(parsed),
-			branchDecision,
-			specRoot,
+			branchDecision: branchDecision,
+			specRoot: specRoot,
 			statePatch: {
 				phase,
+				commitSpec: statePatch.commitSpec,
 				relatedSpecs: statePatch.relatedSpecs,
 				discoveredSkills: statePatch.discoveredSkills,
 			},
-		},
+		} satisfies StartCompatibilityContractV1,
 	};
 
 	let state: RalphState;

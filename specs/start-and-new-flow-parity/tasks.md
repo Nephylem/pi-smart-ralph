@@ -437,7 +437,7 @@
   - _Requirements: FR-9, AC-3.4_
   - _Design: Start contract builder; Interfaces_
 
-- [ ] 3.8 [GREEN] Pass smoke: persist StartCompatibilityContractV1-compatible state
+- [x] 3.8 [GREEN] Pass smoke: persist StartCompatibilityContractV1-compatible state
   - **Do**:
     1. Build `startCompatibility` from invocation metadata, option snapshot, branch decision, spec root metadata, and state patch snapshot.
     2. Persist the contract in `.ralph-state.json` for both start and new flows.
