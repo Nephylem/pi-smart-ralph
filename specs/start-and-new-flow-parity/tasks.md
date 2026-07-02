@@ -78,7 +78,7 @@
   - _Requirements: FR-2, FR-3, AC-1.2, AC-1.4_
   - _Design: Start contract builder; Interfaces_
 
-- [ ] 1.6 [YELLOW] Refactor parser parity checks for maintainability
+- [x] 1.6 [YELLOW] Refactor parser parity checks for maintainability
   - **Do**:
     1. Move repetitive smoke cases into a table inside the verifier.
     2. Ensure the table includes every option named in AC-1.2.

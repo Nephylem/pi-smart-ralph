@@ -72,29 +72,95 @@ assert(
   'ralph-new must not introduce duplicated start option parsing.',
 );
 
-const optionSnapshotFields = [
-  'reference',
-  'goalProvided',
-  'skipResearch',
-  'specsDir',
-  'tasksSize',
-  'commitSpec',
-  'quickMode',
-  'autonomousMode',
-  'nextEpicSpec',
+const optionParitySmokeCases = [
+  {
+    label: '<spec-name> [goal]',
+    ac12Token: '<spec-name> [goal]',
+    snapshotFields: ['reference', 'goalProvided'],
+    parserPatterns: [/positionals\.push\(token\)/, /goal\s*=\s*positionals\.slice\(1\)\.join\(["'] ["']\)\.trim\(\)/],
+  },
+  {
+    label: '--skip-research',
+    ac12Token: '--skip-research',
+    snapshotFields: ['skipResearch'],
+    parserPatterns: [/token\s*===\s*["']--skip-research["']/, /skipResearch\s*=\s*true/],
+  },
+  {
+    label: '--specs-dir <path>',
+    ac12Token: '--specs-dir',
+    snapshotFields: ['specsDir'],
+    parserPatterns: [/token\s*===\s*["']--specs-dir["']/, /token\.startsWith\(["']--specs-dir=["']\)/],
+  },
+  {
+    label: '--tasks-size fine|coarse',
+    ac12Token: '--tasks-size',
+    snapshotFields: ['tasksSize'],
+    parserPatterns: [/token\s*===\s*["']--tasks-size["']/, /value\s*===\s*["']fine["']\s*\|\|\s*value\s*===\s*["']coarse["']/],
+  },
+  {
+    label: '--commit-spec',
+    ac12Token: '--commit-spec',
+    snapshotFields: ['commitSpec'],
+    parserPatterns: [/token\s*===\s*["']--commit-spec["']/, /commitSpec\s*=\s*true/],
+  },
+  {
+    label: '--no-commit-spec',
+    ac12Token: '--no-commit-spec',
+    snapshotFields: ['commitSpec'],
+    parserPatterns: [/token\s*===\s*["']--no-commit-spec["']/, /commitSpec\s*=\s*false/],
+  },
+  {
+    label: '--quick',
+    snapshotFields: ['quickMode'],
+    parserPatterns: [/token\s*===\s*["']--quick["']/, /quickMode\s*=\s*true/],
+  },
+  {
+    label: '--autonomous/--auto',
+    snapshotFields: ['autonomousMode'],
+    parserPatterns: [/token\s*===\s*["']--autonomous["']\s*\|\|\s*token\s*===\s*["']--auto["']/, /autonomousMode\s*=\s*true/],
+  },
+  {
+    label: '--next-epic-spec/--epic-next',
+    snapshotFields: ['nextEpicSpec'],
+    parserPatterns: [/token\s*===\s*["']--next-epic-spec["']\s*\|\|\s*token\s*===\s*["']--epic-next["']/, /nextEpicSpec\s*=\s*true/],
+  },
 ];
+
+const ac12RequiredTokens = ['<spec-name> [goal]', '--skip-research', '--specs-dir', '--tasks-size', '--commit-spec', '--no-commit-spec'];
+const optionSnapshotFields = [...new Set(optionParitySmokeCases.flatMap((smokeCase) => smokeCase.snapshotFields))];
 
 assert(
   /type\s+StartOptionsSnapshot\s*=\s*\{[\s\S]*?\}/.test(source),
   'StartOptionsSnapshot must define the shared start/new option state shape.',
 );
 
-for (const field of optionSnapshotFields) {
+for (const token of ac12RequiredTokens) {
   assert(
-    new RegExp(`type\\s+StartOptionsSnapshot\\s*=\\s*\\{[\\s\\S]*?${field}\\??:`).test(source),
-    `StartOptionsSnapshot must include ${field} for start/new parity.`,
+    optionParitySmokeCases.some((smokeCase) => smokeCase.ac12Token === token),
+    `Option parity smoke table must include AC-1.2 case ${token}.`,
   );
 }
+
+for (const smokeCase of optionParitySmokeCases) {
+  for (const field of smokeCase.snapshotFields) {
+    assert(
+      new RegExp(`type\\s+StartOptionsSnapshot\\s*=\\s*\\{[\\s\\S]*?${field}\\??:`).test(source),
+      `StartOptionsSnapshot must include ${field} for ${smokeCase.label} parity.`,
+    );
+    assert(
+      new RegExp(`${field}:\\s*parsed\\.${field === 'goalProvided' ? 'goal\\.trim\\(\\)\\.length > 0' : field}`).test(source),
+      `buildStartOptionsSnapshot must derive ${field} for ${smokeCase.label} from canonical parsed args.`,
+    );
+  }
+  for (const pattern of smokeCase.parserPatterns) {
+    assert(pattern.test(source), `parseStartArgs must support ${smokeCase.label} through the canonical parser.`);
+  }
+}
+
+assert(
+  optionSnapshotFields.length === 9,
+  'Option parity smoke table must cover all shared StartOptionsSnapshot fields without ad hoc field checks.',
+);
 
 assert(
   /function\s+buildStartOptionsSnapshot\s*\(\s*parsed:\s*StartArguments\s*\)\s*:\s*StartOptionsSnapshot/.test(source),
