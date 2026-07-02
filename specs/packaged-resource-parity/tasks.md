@@ -245,7 +245,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
 
 ## Phase 3: Manifest Completeness and Integrity
 
-- [ ] 3.1 [RED] Failing verifier: manifest must cover every original resource file
+- [x] 3.1 [RED] Failing verifier: manifest must cover every original resource file
   - **Do**:
     1. Add original resource root discovery with default `/home/nephy/pi-custom-workflow/smart-ralph/plugins/ralph-specum` and `RALPH_ORIGINAL_RESOURCE_ROOT` override.
     2. Enumerate original `commands`, `templates`, `references`, `skills`, and `schemas` files.

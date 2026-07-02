@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 const root = process.cwd();
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
@@ -12,6 +12,9 @@ const RESOURCE_MANIFEST_FULL_PATH = join(root, RESOURCE_MANIFEST_PATH);
 const SCHEMA_RESOURCE_PATH = 'schemas/spec.schema.json';
 const RESOURCE_MANIFEST_KINDS = new Set(['command', 'template', 'prompt', 'reference', 'skill', 'schema']);
 const RESOURCE_MANIFEST_STATUSES = new Set(['copied', 'adapted', 'renamed', 'pi-native', 'excluded', 'deferred']);
+const DEFAULT_ORIGINAL_RESOURCE_ROOT = '/home/nephy/pi-custom-workflow/smart-ralph/plugins/ralph-specum';
+const ORIGINAL_RESOURCE_ROOT = process.env.RALPH_ORIGINAL_RESOURCE_ROOT ?? DEFAULT_ORIGINAL_RESOURCE_ROOT;
+const ORIGINAL_RESOURCE_DIRECTORIES = ['commands', 'templates', 'references', 'skills', 'schemas'];
 
 function parseJsonFile(filePath, label) {
   try {
@@ -27,6 +30,49 @@ function formatManifestEntryLabel(index, entry) {
     ? JSON.stringify(entry.originalPath)
     : 'unavailable';
   return `${RESOURCE_MANIFEST_PATH}[${index}] originalPath=${originalPath}`;
+}
+
+function toPosixPath(filePath) {
+  return filePath.replace(/\\/g, '/');
+}
+
+function collectFilesRecursive(directoryPath) {
+  let entries;
+  try {
+    entries = readdirSync(directoryPath, { withFileTypes: true });
+  } catch (error) {
+    failures.push(`${toPosixPath(relative(root, directoryPath)) || directoryPath} must be readable: ${error.message}`);
+    return [];
+  }
+
+  return entries.flatMap((entry) => {
+    const entryPath = join(directoryPath, entry.name);
+    if (entry.isDirectory()) return collectFilesRecursive(entryPath);
+    if (entry.isFile()) return [entryPath];
+    return [];
+  });
+}
+
+function listOriginalResourcePaths() {
+  if (!existsSync(ORIGINAL_RESOURCE_ROOT)) {
+    failures.push(`original resource root must exist at ${ORIGINAL_RESOURCE_ROOT} (override with RALPH_ORIGINAL_RESOURCE_ROOT)`);
+    return [];
+  }
+
+  const originalPaths = [];
+  for (const directory of ORIGINAL_RESOURCE_DIRECTORIES) {
+    const directoryPath = join(ORIGINAL_RESOURCE_ROOT, directory);
+    if (!existsSync(directoryPath)) {
+      failures.push(`original resource directory must exist: ${toPosixPath(join(ORIGINAL_RESOURCE_ROOT, directory))}`);
+      continue;
+    }
+
+    for (const filePath of collectFilesRecursive(directoryPath)) {
+      originalPaths.push(toPosixPath(relative(ORIGINAL_RESOURCE_ROOT, filePath)));
+    }
+  }
+
+  return originalPaths.sort();
 }
 
 function hasPackageResourceFile(directoryPath, ignoredFileNames = new Set()) {
@@ -67,15 +113,30 @@ function validatePackageFilesIncludes(relativePath) {
   }
 }
 
+function validateManifestOriginalCoverage(resourceManifest) {
+  if (!Array.isArray(resourceManifest)) return;
+
+  const manifestOriginalPaths = new Set(
+    resourceManifest
+      .filter((entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.originalPath === 'string')
+      .map((entry) => entry.originalPath),
+  );
+  const missingOriginalPaths = listOriginalResourcePaths().filter((originalPath) => !manifestOriginalPaths.has(originalPath));
+
+  if (missingOriginalPaths.length > 0) {
+    failures.push(`${RESOURCE_MANIFEST_PATH} must cover every original resource file; missing ${missingOriginalPaths.length}: ${missingOriginalPaths.join(', ')}`);
+  }
+}
+
 function validateResourceManifest() {
-  if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return;
+  if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return undefined;
 
   const resourceManifest = parseJsonFile(RESOURCE_MANIFEST_FULL_PATH, RESOURCE_MANIFEST_PATH);
-  if (resourceManifest === undefined) return;
+  if (resourceManifest === undefined) return undefined;
 
   if (!Array.isArray(resourceManifest)) {
     failures.push(`${RESOURCE_MANIFEST_PATH} must contain a top-level JSON array`);
-    return;
+    return undefined;
   }
 
   for (const [index, entry] of resourceManifest.entries()) {
@@ -111,6 +172,9 @@ function validateResourceManifest() {
       failures.push(`${label}.notes must be a non-empty string when status is ${entry.status}`);
     }
   }
+
+  validateManifestOriginalCoverage(resourceManifest);
+  return resourceManifest;
 }
 
 const expectedManifest = {
