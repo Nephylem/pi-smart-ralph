@@ -304,7 +304,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-3, FR-4, FR-9, AC-1.3, AC-1.4, AC-3.1_
   - _Design: Checksums, Error Handling_
 
-- [ ] 3.5 [GREEN] Add checksum data and fix integrity failures
+- [x] 3.5 [GREEN] Add checksum data and fix integrity failures
   - **Do**:
     1. Compute packaged-file SHA-256 values for entries with non-empty `piPath`.
     2. Update manifest `sha256` fields.

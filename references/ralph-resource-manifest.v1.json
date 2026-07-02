@@ -4,347 +4,402 @@
     "piPath": "references/original-commands/cancel.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "7e32a2f9dc33a4f6b73ee5f72228ae0ce2d4316cfd5afecf7b411d8637545a21"
   },
   {
     "originalPath": "commands/design.md",
     "piPath": "references/original-commands/design.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "d1f73b82bdde8e6ce37967c522dcfde57c9ed8127bd84da6007d0f522af660b3"
   },
   {
     "originalPath": "commands/feedback.md",
     "piPath": "references/original-commands/feedback.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "4323ff327e680148f63e54ea67dca87f2104a4b9d209932bacc5353df6cae47b"
   },
   {
     "originalPath": "commands/help.md",
     "piPath": "references/original-commands/help.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "adc3f16e32652554cafae331d6ecf0ce44e3e910b95fb1dea0d4e8ea10df0a78"
   },
   {
     "originalPath": "commands/implement.md",
     "piPath": "references/original-commands/implement.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "c6560d19e95fcaaa9c272613622998927db1ea775aba0974c1dfe0adb386a001"
   },
   {
     "originalPath": "commands/index.md",
     "piPath": "references/original-commands/index.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "297995c5a6302c43ff718b6fce66fdeb7deed07ca047bbe012738b9968112128"
   },
   {
     "originalPath": "commands/new.md",
     "piPath": "references/original-commands/new.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "9d84e1c0ee6abd032afed4daf3c6c963c66fbae501acf3689dce2f61aed5a9a2"
   },
   {
     "originalPath": "commands/refactor.md",
     "piPath": "references/original-commands/refactor.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "c3a0f92acd25bea30de73c29fd7c502595bf2417e1075719a9c0d5e0965c3d24"
   },
   {
     "originalPath": "commands/requirements.md",
     "piPath": "references/original-commands/requirements.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "ddab9f4aa5b14587d3caf1bb30f745f8574a17057cc272ae23a110937998665c"
   },
   {
     "originalPath": "commands/research.md",
     "piPath": "references/original-commands/research.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "19f34578dca2cb541a72ee84e1e0c93971d172b53ee8dd8413bacf14cae6ecbd"
   },
   {
     "originalPath": "commands/start.md",
     "piPath": "references/original-commands/start.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "00984aa54d18cb3335f3c174c9c4ea4b46a5490c109e26798c9bf4433586713a"
   },
   {
     "originalPath": "commands/status.md",
     "piPath": "references/original-commands/status.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "857701f9e74c7e4d09b129280bfc7ddb7a963b14d87bf17ebe1b2ddee81d4508"
   },
   {
     "originalPath": "commands/switch.md",
     "piPath": "references/original-commands/switch.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "f41b446f8009cbd6621ed61a50504a92e3533be8ca19815055f0d0c5ec9036e2"
   },
   {
     "originalPath": "commands/tasks.md",
     "piPath": "references/original-commands/tasks.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "52a9385b1a208f5109994a291cb6eade1a5c7679a1843b121e9564fdd35da6db"
   },
   {
     "originalPath": "commands/triage.md",
     "piPath": "references/original-commands/triage.md",
     "kind": "command",
     "status": "renamed",
-    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension.",
+    "sha256": "bf37201646b7e09e10f5eff3bd2a26e0a9e3f83144213f319bc381dc9d56b2e7"
   },
   {
     "originalPath": "references/branch-management.md",
     "piPath": "references/branch-management.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "d1ad7addc0742108d90ba8a586e71db4bd416ccaa682f5f29dff1ec66543c880"
   },
   {
     "originalPath": "references/commit-discipline.md",
     "piPath": "references/commit-discipline.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "d7c584535ca4d678754e0924b264e729550f8e756f85e750fe43669e36447e0b"
   },
   {
     "originalPath": "references/coordinator-pattern.md",
     "piPath": "references/coordinator-pattern.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "07243aa5cfaf585667910da3691cdbcd4ea1a3ac9dd8b736ac1e567ab785d81d"
   },
   {
     "originalPath": "references/failure-recovery.md",
     "piPath": "references/failure-recovery.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "313069ce8f8a4b4abb85e02d0345f8cc5e00d8563ddc73a9597b2723125b1cc1"
   },
   {
     "originalPath": "references/goal-interview.md",
     "piPath": "references/goal-interview.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "ab27422054a919f290cfa8c3e49e472813ac802d6e1b3e7efb37d39c49531d01"
   },
   {
     "originalPath": "references/intent-classification.md",
     "piPath": "references/intent-classification.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "c37f4ab51c6fb9907ad268f094bde952e74da029a5e71d87a3210d291b6c107f"
   },
   {
     "originalPath": "references/parallel-research.md",
     "piPath": "references/parallel-research.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "5d4acc6e39156d8d4f925b71e515de7458354142494dc5486b70a63908103941"
   },
   {
     "originalPath": "references/phase-rules.md",
     "piPath": "references/phase-rules.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "febead514dbcfd4e91b06cdf4f5181b2043625297698eb423b8b31c0d947d695"
   },
   {
     "originalPath": "references/quality-checkpoints.md",
     "piPath": "references/quality-checkpoints.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "d5b44b5f153ec73622120e72aadc9d62591d0396b7964603096beac7b08190a8"
   },
   {
     "originalPath": "references/quality-commands.md",
     "piPath": "references/quality-commands.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "6842f1f921b68968c2675ce25fbc90c1306a0bc0f4248a8c461184f0320295f3"
   },
   {
     "originalPath": "references/quick-mode.md",
     "piPath": "references/quick-mode.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "46245448ca0dcfa996da0e7127dbed8e6f84c790b03404d6e63a1aa433d7e528"
   },
   {
     "originalPath": "references/sizing-rules.md",
     "piPath": "references/sizing-rules.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "3e66baad1d7a6d361e2ca5fb49a44051952d377b4bdaee1d14ffbeb41c3afd96"
   },
   {
     "originalPath": "references/spec-scanner.md",
     "piPath": "references/spec-scanner.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "09dad24bbe137cd6224483e7ebed2f462ece448a95076b6d145f4a40f475c404"
   },
   {
     "originalPath": "references/triage-flow.md",
     "piPath": "references/triage-flow.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "f13f21accc1d44a576137ff5263ffa249083827c5f5092f74f78064eb1d8b1f6"
   },
   {
     "originalPath": "references/verification-layers.md",
     "piPath": "references/verification-layers.md",
     "kind": "reference",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "407b3e6fa332b56cb7421d4792c77ac27c6f58aa8aae84183d6f00cd54e26064"
   },
   {
     "originalPath": "schemas/spec.schema.json",
     "piPath": "schemas/spec.schema.json",
     "kind": "schema",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "6b1b7a4d9a0ce0aebfc33698fe679895f350105e5c0d82a19def7afac1b796d3"
   },
   {
     "originalPath": "skills/communication-style/references/examples.md",
     "piPath": "skills/communication-style/references/examples.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "db68d2368fc2f033480fc5041b165b7f1ac0ef2bc619d1f985f1e2a4660c54d4"
   },
   {
     "originalPath": "skills/communication-style/SKILL.md",
     "piPath": "skills/communication-style/SKILL.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "0283f66c09a5bceae556a2f531d68c84263e4c14e7f57ad0a6f040da72e3995c"
   },
   {
     "originalPath": "skills/interview-framework/references/algorithm.md",
     "piPath": "skills/interview-framework/references/algorithm.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "ce1eddadc7b1fe2e5a7276940afeedd48baf1b22bf817c5f7bdb44004c86ea47"
   },
   {
     "originalPath": "skills/interview-framework/references/examples.md",
     "piPath": "skills/interview-framework/references/examples.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "514397b18a96666c1654619fdab855f4d3f1bd8988ae2e8565c1b52627b2e582"
   },
   {
     "originalPath": "skills/interview-framework/SKILL.md",
     "piPath": "skills/interview-framework/SKILL.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "3713d80da4ea7f0d42b9c0264e39dcfbcbc7aa75c1c4c77e6597e045bb4c980d"
   },
   {
     "originalPath": "skills/reality-verification/references/goal-detection-patterns.md",
     "piPath": "skills/reality-verification/references/goal-detection-patterns.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "ba857b7d5678af4066dd775051c6aedab41d707d005c61af779758a35cda8fc6"
   },
   {
     "originalPath": "skills/reality-verification/references/mock-quality-checks.md",
     "piPath": "skills/reality-verification/references/mock-quality-checks.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "f475ea33e9acd5b803395bf2302841fc5e821597e95d78dc977868efe7873a73"
   },
   {
     "originalPath": "skills/reality-verification/SKILL.md",
     "piPath": "skills/reality-verification/SKILL.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "dd5607ae544b0ac8e55a6b6a694a97ebe9ae7be9ddf75f38dad7cc300fd6e8ed"
   },
   {
     "originalPath": "skills/smart-ralph/references/state-file-schema.md",
     "piPath": "skills/smart-ralph/references/state-file-schema.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "29e2f800ac5a68fe9ece94a69f157d23ec1e74dba88e04cef84ddfb864dc0452"
   },
   {
     "originalPath": "skills/smart-ralph/SKILL.md",
     "piPath": "skills/smart-ralph/SKILL.md",
     "kind": "skill",
     "status": "adapted",
-    "notes": "Packaged resource is intentionally adapted for Pi-safe wording and package context."
+    "notes": "Packaged resource is intentionally adapted for Pi-safe wording and package context.",
+    "sha256": "882d05e0952dd1bc3d3d2003a88b3140cc5ce205b8a13a4bee76c1b0d2fcf885"
   },
   {
     "originalPath": "skills/spec-workflow/references/phase-transitions.md",
     "piPath": "skills/spec-workflow/references/phase-transitions.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "677c92d327abe3755afd34ce245180bc67b08559079e9b26eedcbb938e79a813"
   },
   {
     "originalPath": "skills/spec-workflow/SKILL.md",
     "piPath": "skills/spec-workflow/SKILL.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "9d411e392c8524156507ba3511684477da45fd20950c00ec76f3a64ca546e7ec"
   },
   {
     "originalPath": "templates/component-spec.md",
     "piPath": "templates/component-spec.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "3477ddf6f6ebf0371bf6a34a7fbedd0ea6ea2e72918652514f07b7cf9263237c"
   },
   {
     "originalPath": "templates/design.md",
     "piPath": "templates/design.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "0b5c5824d180f486d6f59b9ed66261746d80258942f38769e1b84fd9c3ced407"
   },
   {
     "originalPath": "templates/epic.md",
     "piPath": "templates/epic.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "c6ec4ee7a26e85164542f43302d7e30a243f3bfafe8550b927d2882f9de2b752"
   },
   {
     "originalPath": "templates/external-spec.md",
     "piPath": "templates/external-spec.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "223612aaa678684c7bb0f1fa7659a16b718f20b388b194cd925e051e910e4db5"
   },
   {
     "originalPath": "templates/index-summary.md",
     "piPath": "templates/index-summary.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "3ba8c2abe530d652ebc52c5d1700020e039683415d0304bd8446247c27144964"
   },
   {
     "originalPath": "templates/progress.md",
     "piPath": "templates/progress.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "4d4031f4a601b6d3589b349961a0c01b65d4ea298b7f4c10260b050b01da485c"
   },
   {
     "originalPath": "templates/prompts/executor-prompt.md",
     "piPath": "prompts/executor-prompt.md",
     "kind": "prompt",
     "status": "renamed",
-    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption."
+    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption.",
+    "sha256": "efbe45ada13970860fb676f78f2743dd16c1d13f8c409c93e3a752704e6edf92"
   },
   {
     "originalPath": "templates/prompts/research-prompt.md",
     "piPath": "prompts/research-prompt.md",
     "kind": "prompt",
     "status": "renamed",
-    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption."
+    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption.",
+    "sha256": "9473cc92c4a3ba2ff25d02338e74dc06dc1f46e8d5ac6ac2d071d3693ccc3b88"
   },
   {
     "originalPath": "templates/requirements.md",
     "piPath": "templates/requirements.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "42e6c85cd9733726df40aad43197f64ded48438cd018855fa0c75a0cffd8fc53"
   },
   {
     "originalPath": "templates/research.md",
     "piPath": "templates/research.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "2f2cb25f256599f0f23fcfcc057bfac04c84f965713ef4e0ff3dfc314210ece4"
   },
   {
     "originalPath": "templates/settings-template.md",
     "piPath": "templates/settings-template.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "9eb09f3d4135fd0ae67b10793fabb51ce1d63ac38bb1e6b5122041958e40bcab"
   },
   {
     "originalPath": "templates/tasks.md",
     "piPath": "templates/tasks.md",
     "kind": "template",
-    "status": "copied"
+    "status": "copied",
+    "sha256": "7b412963acc2ed9696bc5f4949ef1cae12d3485ad2b207ac81abf9fdbad0f6b5"
   }
 ]
