@@ -131,7 +131,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-9, AC-2.1, AC-3.1_
   - _Design: Packaged resource tree, Prepack verifier_
 
-- [ ] 2.4 [GREEN] Populate Pi prompt resources
+- [x] 2.4 [GREEN] Populate Pi prompt resources
   - **Do**:
     1. Copy or adapt original `templates/prompts/*.md` into `prompts/`.
     2. Keep prompt filenames predictable for Pi package consumers.
