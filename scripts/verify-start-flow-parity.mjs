@@ -72,6 +72,50 @@ assert(
   'ralph-new must not introduce duplicated start option parsing.',
 );
 
+const optionSnapshotFields = [
+  'reference',
+  'goalProvided',
+  'skipResearch',
+  'specsDir',
+  'tasksSize',
+  'commitSpec',
+  'quickMode',
+  'autonomousMode',
+  'nextEpicSpec',
+];
+
+assert(
+  /type\s+StartOptionsSnapshot\s*=\s*\{[\s\S]*?\}/.test(source),
+  'StartOptionsSnapshot must define the shared start/new option state shape.',
+);
+
+for (const field of optionSnapshotFields) {
+  assert(
+    new RegExp(`type\\s+StartOptionsSnapshot\\s*=\\s*\\{[\\s\\S]*?${field}\\??:`).test(source),
+    `StartOptionsSnapshot must include ${field} for start/new parity.`,
+  );
+}
+
+assert(
+  /function\s+buildStartOptionsSnapshot\s*\(\s*parsed:\s*StartArguments\s*\)\s*:\s*StartOptionsSnapshot/.test(source),
+  'A single buildStartOptionsSnapshot(parsed) helper must derive option snapshots from canonical parsed start args.',
+);
+
+assert(
+  /buildStartOptionsSnapshot\(\s*parsed\s*\)/.test(source),
+  'runStartCommand must use buildStartOptionsSnapshot(parsed) when building start/new state metadata.',
+);
+
+assert(
+  /startCompatibility\s*:\s*\{[\s\S]*?command:\s*invocation\.command[\s\S]*?aliasOf:\s*invocation\.aliasOf[\s\S]*?options:\s*buildStartOptionsSnapshot\(\s*parsed\s*\)/.test(source),
+  'Output state snapshots must share options and differ only by invocation command/aliasOf metadata.',
+);
+
+assert(
+  !/void\s+invocation\s*;/.test(source),
+  'runStartCommand must persist invocation metadata instead of discarding it.',
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);

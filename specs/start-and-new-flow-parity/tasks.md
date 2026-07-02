@@ -44,7 +44,7 @@
   - _Requirements: FR-1, FR-12, AC-1.1_
   - _Design: Pi command registration; Existing Patterns to Follow_
 
-- [ ] Q1 [VERIFY] Quality check: command registration package verification
+- [x] Q1 [VERIFY] Quality check: command registration package verification
   - **Do**:
     1. Run research-discovered package verification commands after the first command-registration cycle.
   - **Files**: None
@@ -54,7 +54,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Smoke verification script; Test Strategy_
 
-- [ ] 1.4 [RED] Failing smoke: start/new option snapshots are equivalent except alias metadata
+- [x] 1.4 [RED] Failing smoke: start/new option snapshots are equivalent except alias metadata
   - **Do**:
     1. Add smoke assertions for `<spec-name> [goal]`, `--skip-research`, `--specs-dir`, `--tasks-size`, `--commit-spec`, and `--no-commit-spec` parity.
     2. Assert output state snapshots differ only by `command` and `aliasOf` metadata.
