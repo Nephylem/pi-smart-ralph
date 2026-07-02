@@ -848,6 +848,16 @@ assert(
 );
 
 assert(
+  /export\s+type\s+RelatedSpecDiscoveryWarning\s*=\s*\{[\s\S]*?candidatePath:\s*string[\s\S]*?reason:\s*string/.test(startDiscoverySource),
+  'Related spec discovery must expose warning metadata for skipped unreadable candidates.',
+);
+
+assert(
+  /const\s+DEFAULT_RELATED_SPEC_LIMIT\s*=\s*5/.test(startDiscoverySource),
+  'Related spec discovery must centralize the design result limit of 5.',
+);
+
+assert(
   /export\s+function\s+discoverRelatedSpecs\s*\(/.test(startDiscoverySource),
   'Start discovery helper must expose discoverRelatedSpecs for keyword and metadata scanning of existing spec artifacts.',
 );
@@ -865,6 +875,31 @@ assert(
 assert(
   /keyword|token|score|goal/i.test(startDiscoverySource),
   'Related spec discovery must inspect keyword matches from current goal and existing spec artifacts.',
+);
+
+assert(
+  /function\s+scoreRelatedArtifact\s*\([\s\S]*?function\s+buildRelatedSpecEvidence\s*\(/.test(startDiscoverySource),
+  'Related spec discovery must centralize relevance scoring and evidence string construction.',
+);
+
+assert(
+  /function\s+compareScoredDiscoveries\s*\([\s\S]*?b\.score\s*-\s*a\.score[\s\S]*?localeCompare[\s\S]*?candidateOrder/.test(startDiscoverySource),
+  'Related spec discovery must preserve deterministic ordering by score, name, and candidate order.',
+);
+
+assert(
+  /function\s+limitRelatedSpecs[\s\S]*?slice\(0,\s*Math\.max\(0,\s*limit\)\)/.test(startDiscoverySource),
+  'Related spec discovery must cap discovered and merged results through one deterministic limit helper.',
+);
+
+assert(
+  /readCandidateText[\s\S]*?recordDiscoveryWarning\(warnings,\s*path[\s\S]*?return\s+null/.test(startDiscoverySource),
+  'Related spec discovery must skip unreadable candidates with warning metadata instead of failing kickoff.',
+);
+
+assert(
+  /catch\s*\(error\)\s*\{[\s\S]*?recordDiscoveryWarning\(options\.warnings,\s*indexDir[\s\S]*?\}/.test(startDiscoverySource),
+  'Related spec discovery must record warning metadata for unreadable index hint directories.',
 );
 
 assert(

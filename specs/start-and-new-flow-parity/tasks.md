@@ -321,7 +321,7 @@
   - _Requirements: FR-10, FR-11, NFR-3, AC-4.1, AC-4.3_
   - _Design: Gitignore updater; Edge Cases_
 
-- [ ] Q5a [VERIFY] Quality check: gitignore package verification
+- [x] Q5a [VERIFY] Quality check: gitignore package verification
   - **Do**:
     1. Run package verification after gitignore idempotency changes, satisfying the 2-3 task checkpoint cadence from the tasks review.
   - **Files**: None
@@ -357,7 +357,7 @@
   - _Requirements: FR-7, FR-3, AC-3.1, AC-3.3_
   - _Design: Start discovery helper; Performance Considerations_
 
-- [ ] 3.3 [YELLOW] Refactor related discovery scoring and limits
+- [x] 3.3 [YELLOW] Refactor related discovery scoring and limits
   - **Do**:
     1. Centralize relevance scoring and evidence string construction.
     2. Cap results to the design limit while preserving deterministic ordering.

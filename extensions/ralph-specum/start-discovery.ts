@@ -11,6 +11,11 @@ export type RelatedSpecDiscovery = {
 	evidence: string;
 };
 
+export type RelatedSpecDiscoveryWarning = {
+	candidatePath: string;
+	reason: string;
+};
+
 type CandidateArtifact = {
 	spec: SpecEntry;
 	artifact: string;
@@ -19,8 +24,15 @@ type CandidateArtifact = {
 	frontmatter: string;
 };
 
+type ScoredRelatedSpecDiscovery = {
+	discovery: RelatedSpecDiscovery;
+	score: number;
+	candidateOrder: number;
+};
+
 type DiscoveryOptions = RalphPathOptions & {
 	limit?: number;
+	warnings?: RelatedSpecDiscoveryWarning[];
 };
 
 const DEFAULT_RELATED_SPEC_LIMIT = 5;
@@ -45,10 +57,22 @@ const TOKEN_STOP_WORDS = new Set([
 	"with",
 ]);
 
-function readText(path: string): string | null {
+type ArtifactScore = {
+	score: number;
+	reasons: string[];
+	relationship?: string;
+};
+
+function recordDiscoveryWarning(warnings: RelatedSpecDiscoveryWarning[] | undefined, candidatePath: string, reason: string): void {
+	warnings?.push({ candidatePath, reason });
+}
+
+function readCandidateText(path: string, warnings?: RelatedSpecDiscoveryWarning[]): string | null {
+	if (!existsSync(path)) return null;
 	try {
-		return existsSync(path) ? readFileSync(path, "utf8") : null;
-	} catch {
+		return readFileSync(path, "utf8");
+	} catch (error) {
+		recordDiscoveryWarning(warnings, path, `Skipped unreadable related-spec candidate: ${error instanceof Error ? error.message : String(error)}`);
 		return null;
 	}
 }
@@ -73,13 +97,13 @@ function contractNames(text: string): Set<string> {
 	return new Set(text.match(CONTRACT_RE) ?? []);
 }
 
-function scanSpecArtifacts(currentSpecName: string, options: RalphPathOptions): CandidateArtifact[] {
+function scanSpecArtifacts(currentSpecName: string, options: DiscoveryOptions): CandidateArtifact[] {
 	const artifacts: CandidateArtifact[] = [];
 	for (const spec of listSpecs({ ...options, allowMissingConfiguredRoots: true })) {
 		if (spec.name === currentSpecName) continue;
 		for (const artifact of SPEC_ARTIFACTS) {
 			const path = join(spec.absolutePath, artifact);
-			const text = readText(path);
+			const text = readCandidateText(path, options.warnings);
 			if (!text) continue;
 			artifacts.push({ spec, artifact, path, text, frontmatter: extractFrontmatter(text) });
 		}
@@ -87,7 +111,7 @@ function scanSpecArtifacts(currentSpecName: string, options: RalphPathOptions): 
 	return artifacts;
 }
 
-function scanIndexHintArtifacts(options: RalphPathOptions): CandidateArtifact[] {
+function scanIndexHintArtifacts(options: DiscoveryOptions): CandidateArtifact[] {
 	const artifacts: CandidateArtifact[] = [];
 	for (const root of getSpecRoots({ ...options, allowMissingConfiguredRoots: true })) {
 		const indexDir = join(root.absolutePath, ".index");
@@ -96,7 +120,7 @@ function scanIndexHintArtifacts(options: RalphPathOptions): CandidateArtifact[] 
 			for (const entry of readdirSync(indexDir, { withFileTypes: true })) {
 				if (!entry.isFile() || !/\.(?:json|md|txt)$/i.test(entry.name)) continue;
 				const path = join(indexDir, entry.name);
-				const text = readText(path);
+				const text = readCandidateText(path, options.warnings);
 				if (!text) continue;
 				const name = entry.name.replace(/\.(?:json|md|txt)$/i, "");
 				artifacts.push({
@@ -114,8 +138,8 @@ function scanIndexHintArtifacts(options: RalphPathOptions): CandidateArtifact[] 
 					frontmatter: extractFrontmatter(text),
 				});
 			}
-		} catch {
-			// Optional index hints are best-effort and must not rebuild or fail kickoff discovery.
+		} catch (error) {
+			recordDiscoveryWarning(options.warnings, indexDir, `Skipped unreadable related-spec index hints: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 	return artifacts;
@@ -137,7 +161,7 @@ function relationshipForArtifact(artifact: CandidateArtifact, currentContracts: 
 	return undefined;
 }
 
-function scoreArtifact(artifact: CandidateArtifact, goalTokens: Set<string>, currentContracts: Set<string>): { score: number; reasons: string[]; relationship?: string } {
+function scoreRelatedArtifact(artifact: CandidateArtifact, goalTokens: Set<string>, currentContracts: Set<string>): ArtifactScore {
 	let score = 0;
 	const reasons: string[] = [];
 	const metadata = artifact.frontmatter || artifact.text.slice(0, 1200);
@@ -165,23 +189,26 @@ function scoreArtifact(artifact: CandidateArtifact, goalTokens: Set<string>, cur
 	return { score, reasons, relationship };
 }
 
-function mergeDiscoveryBySpecName(entries: RelatedSpecDiscovery[]): RelatedSpecDiscovery[] {
-	const byName = new Map<string, RelatedSpecDiscovery>();
-	for (const entry of entries) {
-		const existing = byName.get(entry.name);
-		if (!existing) {
-			byName.set(entry.name, entry);
-			continue;
-		}
-		byName.set(entry.name, {
-			...existing,
-			relevance: relevanceRank(entry.relevance) > relevanceRank(existing.relevance) ? entry.relevance : existing.relevance,
-			relationship: existing.relationship ?? entry.relationship,
-			mayNeedUpdate: existing.mayNeedUpdate || entry.mayNeedUpdate,
-			evidence: combineEvidence(existing.evidence, entry.evidence),
-		});
-	}
-	return [...byName.values()];
+function buildRelatedSpecEvidence(score: ArtifactScore, artifact: CandidateArtifact): string {
+	const reasonText = score.reasons.length > 0 ? score.reasons.join(", ") : "keyword score";
+	return `${reasonText} in ${artifact.artifact}`;
+}
+
+function scoredDiscoveryForArtifact(artifact: CandidateArtifact, goalTokens: Set<string>, currentContracts: Set<string>, candidateOrder: number): ScoredRelatedSpecDiscovery | null {
+	const scored = scoreRelatedArtifact(artifact, goalTokens, currentContracts);
+	if (scored.score <= 0) return null;
+	return {
+		discovery: {
+			name: artifact.spec.name,
+			path: artifact.spec.path,
+			relationship: scored.relationship,
+			relevance: relevanceForScore(scored.score),
+			mayNeedUpdate: /mayNeedUpdate|needs update|may need update/i.test(artifact.text),
+			evidence: buildRelatedSpecEvidence(scored, artifact),
+		},
+		score: scored.score,
+		candidateOrder,
+	};
 }
 
 function relevanceRank(relevance: RelatedSpecDiscovery["relevance"] | undefined): number {
@@ -191,11 +218,42 @@ function relevanceRank(relevance: RelatedSpecDiscovery["relevance"] | undefined)
 	return 0;
 }
 
+function compareScoredDiscoveries(a: ScoredRelatedSpecDiscovery, b: ScoredRelatedSpecDiscovery): number {
+	return b.score - a.score || relevanceRank(b.discovery.relevance) - relevanceRank(a.discovery.relevance) || a.discovery.name.localeCompare(b.discovery.name) || a.candidateOrder - b.candidateOrder;
+}
+
+function limitRelatedSpecs<T>(entries: T[], limit: number): T[] {
+	return entries.slice(0, Math.max(0, limit));
+}
+
 function combineEvidence(left: string, right: string): string {
 	if (!left) return right;
 	if (!right || left.includes(right)) return left;
 	if (right.includes(left)) return right;
 	return `${left}; ${right}`;
+}
+
+function mergeScoredDiscoveryBySpecName(entries: ScoredRelatedSpecDiscovery[]): ScoredRelatedSpecDiscovery[] {
+	const byName = new Map<string, ScoredRelatedSpecDiscovery>();
+	for (const entry of entries) {
+		const existing = byName.get(entry.discovery.name);
+		if (!existing) {
+			byName.set(entry.discovery.name, entry);
+			continue;
+		}
+		byName.set(entry.discovery.name, {
+			discovery: {
+				...existing.discovery,
+				relevance: relevanceRank(entry.discovery.relevance) > relevanceRank(existing.discovery.relevance) ? entry.discovery.relevance : existing.discovery.relevance,
+				relationship: existing.discovery.relationship ?? entry.discovery.relationship,
+				mayNeedUpdate: existing.discovery.mayNeedUpdate || entry.discovery.mayNeedUpdate,
+				evidence: combineEvidence(existing.discovery.evidence, entry.discovery.evidence),
+			},
+			score: Math.max(existing.score, entry.score),
+			candidateOrder: Math.min(existing.candidateOrder, entry.candidateOrder),
+		});
+	}
+	return [...byName.values()];
 }
 
 export function discoverRelatedSpecs(currentSpec: SpecEntry, currentGoal: string, options: DiscoveryOptions = {}): RelatedSpecDiscovery[] {
@@ -204,26 +262,16 @@ export function discoverRelatedSpecs(currentSpec: SpecEntry, currentGoal: string
 	const goalTokens = tokensFrom(currentText);
 	const currentContracts = contractNames(currentText);
 	const candidates = [...scanSpecArtifacts(currentSpec.name, options), ...scanIndexHintArtifacts(options)];
-	const discoveries: RelatedSpecDiscovery[] = [];
+	const discoveries: ScoredRelatedSpecDiscovery[] = [];
 
-	for (const artifact of candidates) {
+	for (const [candidateOrder, artifact] of candidates.entries()) {
 		if (!artifact.spec.name || artifact.spec.name === currentSpec.name) continue;
-		const scored = scoreArtifact(artifact, goalTokens, currentContracts);
-		if (scored.score <= 0) continue;
-		const reasonText = scored.reasons.length > 0 ? scored.reasons.join(", ") : "keyword score";
-		discoveries.push({
-			name: artifact.spec.name,
-			path: artifact.spec.path,
-			relationship: scored.relationship,
-			relevance: relevanceForScore(scored.score),
-			mayNeedUpdate: /mayNeedUpdate|needs update|may need update/i.test(artifact.text),
-			evidence: `${reasonText} in ${artifact.artifact}`,
-		});
+		const discovery = scoredDiscoveryForArtifact(artifact, goalTokens, currentContracts, candidateOrder);
+		if (discovery) discoveries.push(discovery);
 	}
 
-	return mergeDiscoveryBySpecName(discoveries)
-		.sort((a, b) => relevanceRank(b.relevance) - relevanceRank(a.relevance) || a.name.localeCompare(b.name))
-		.slice(0, limit);
+	return limitRelatedSpecs(mergeScoredDiscoveryBySpecName(discoveries).sort(compareScoredDiscoveries), limit)
+		.map((entry) => entry.discovery);
 }
 
 export function mergeRelatedSpecsByName(existing: unknown, discovered: RelatedSpecDiscovery[], limit = DEFAULT_RELATED_SPEC_LIMIT): RelatedSpecDiscovery[] {
@@ -258,5 +306,5 @@ export function mergeRelatedSpecsByName(existing: unknown, discovered: RelatedSp
 		});
 	}
 
-	return [...byName.values()].slice(0, limit);
+	return limitRelatedSpecs([...byName.values()], limit);
 }
