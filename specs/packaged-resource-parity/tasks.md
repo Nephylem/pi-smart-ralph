@@ -232,7 +232,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-6, FR-7, AC-2.2, AC-2.3_
   - _Design: Schemas exposure, File Structure_
 
-- [ ] 2.11 [YELLOW] Remove stale placeholder files from populated roots
+- [x] 2.11 [YELLOW] Remove stale placeholder files from populated roots
   - **Do**:
     1. Remove `.gitkeep` files from resource roots that now contain real package files.
     2. Keep directory structure stable for Pi package consumers.
