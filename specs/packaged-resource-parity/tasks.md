@@ -384,7 +384,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-10, AC-3.3, AC-3.4_
   - _Design: Dry-run pack verifier, Package boundary_
 
-- [ ] 4.5 [GREEN] Implement machine-readable dry-run pack verifier
+- [x] 4.5 [GREEN] Implement machine-readable dry-run pack verifier
   - **Do**:
     1. Create `scripts/verify-pack-dry-run.mjs` that runs `npm pack --dry-run --json` discovered in `research.md` Verification Tooling.
     2. Parse JSON output and normalize optional `package/` path prefixes.
