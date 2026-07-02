@@ -352,6 +352,63 @@ assert(
   'Git command application must be represented as serializable command plans.',
 );
 
+function stripSourceComments(text) {
+  return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+const executableStartBranchSource = stripSourceComments(startBranchSource);
+
+const safeGitCommandConstructionSmokeFixture = {
+  allowedOperations: ['create-current-branch', 'use-existing-branch', 'create-worktree'],
+  recordedCommandCases: [
+    {
+      label: 'current-directory branch creation',
+      mode: 'create-current-branch',
+      expectedArgs: ['switch', '-c'],
+    },
+    {
+      label: 'worktree creation',
+      mode: 'create-worktree',
+      expectedArgs: ['worktree', 'add', '-b'],
+    },
+  ],
+};
+
+assert(
+  /const\s+ALLOWED_START_GIT_OPERATIONS:\s*Record<AllowedStartGitOperation,\s*AllowedStartGitOperationSpec>/.test(startBranchSource),
+  'Safe git command construction must be centralized in the branch helper allowlist.',
+);
+
+assert(
+  /Destructive operations[\s\S]*?intentionally absent from this allowlist/.test(startBranchSource),
+  'Branch helper source comments must explain why destructive git operations are excluded.',
+);
+
+for (const operation of safeGitCommandConstructionSmokeFixture.allowedOperations) {
+  assert(
+    new RegExp(`["']${operation}["']:\\s*\\{[\\s\\S]*?buildArgs:`).test(startBranchSource),
+    `Safe git command allowlist must centralize operation ${operation}.`,
+  );
+}
+
+for (const commandCase of safeGitCommandConstructionSmokeFixture.recordedCommandCases) {
+  assert(
+    new RegExp(`mode:\\s*["']${commandCase.mode}["']`).test(startBranchSource),
+    `Smoke fixture command recording must cover ${commandCase.label}.`,
+  );
+  for (const arg of commandCase.expectedArgs) {
+    assert(
+      new RegExp(`["']${arg}["']`).test(startBranchSource),
+      `Smoke fixture command recording for ${commandCase.label} must include git arg ${arg}.`,
+    );
+  }
+}
+
+assert(
+  /function\s+commandForAllowedStartGitOperation\s*\([\s\S]*?ALLOWED_START_GIT_OPERATIONS\[operation\]/.test(startBranchSource),
+  'planStartBranchApplication must construct commands through the centralized safe git operation allowlist.',
+);
+
 const purePlannerBody = startBranchSource.match(/export\s+function\s+planStartBranchDecision[\s\S]*?\n\}/)?.[0] ?? '';
 assert(
   !/spawnSync\(|defaultGitRunner|git\(/.test(purePlannerBody),
@@ -370,8 +427,8 @@ assert(
 
 for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGitPatterns) {
   assert(
-    !destructivePattern.test(startBranchSource),
-    `Branch helper must not plan destructive git operation matching ${destructivePattern}.`,
+    !destructivePattern.test(executableStartBranchSource),
+    `Branch helper executable command construction must not plan destructive git operation matching ${destructivePattern}.`,
   );
 }
 

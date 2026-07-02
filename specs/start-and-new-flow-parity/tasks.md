@@ -263,7 +263,7 @@
   - _Requirements: FR-6, NFR-1, NFR-2, AC-2.4, AC-2.5_
   - _Design: Technical Decisions; Security Considerations_
 
-- [ ] 2.9 [YELLOW] Refactor safe git command construction
+- [x] 2.9 [YELLOW] Refactor safe git command construction
   - **Do**:
     1. Centralize allowed git operations in the branch helper.
     2. Add source comments explaining why destructive flags are excluded.

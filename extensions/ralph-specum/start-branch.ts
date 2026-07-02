@@ -64,6 +64,31 @@ export type StartBranchGitCommand = {
 	description: string;
 };
 
+type AllowedStartGitOperation = "create-current-branch" | "use-existing-branch" | "create-worktree";
+
+type AllowedStartGitOperationSpec = {
+	description: string;
+	buildArgs: (decision: BranchDecision) => string[];
+};
+
+// Start/new may create or select a target, but must never repair or clean a checkout.
+// Destructive operations such as forced switches, discarding local changes, history rewrites,
+// branch deletion, and worktree removal are intentionally absent from this allowlist.
+const ALLOWED_START_GIT_OPERATIONS: Record<AllowedStartGitOperation, AllowedStartGitOperationSpec> = {
+	"create-current-branch": {
+		description: "Create and switch to the planned Ralph branch.",
+		buildArgs: (decision) => ["switch", "-c", decision.targetBranch ?? ""],
+	},
+	"use-existing-branch": {
+		description: "Switch to the selected existing branch.",
+		buildArgs: (decision) => ["switch", decision.targetBranch ?? ""],
+	},
+	"create-worktree": {
+		description: "Create the selected Ralph worktree.",
+		buildArgs: (decision) => ["worktree", "add", "-b", decision.targetBranch ?? "", decision.worktreePath ?? ""],
+	},
+};
+
 export type StartBranchDependencies = {
 	cwd: string;
 	git?: StartBranchGitRunner;
@@ -259,22 +284,25 @@ export function planStartBranchDecision(input: StartBranchPlanInput): BranchDeci
 	});
 }
 
+function commandForAllowedStartGitOperation(operation: AllowedStartGitOperation, decision: BranchDecision): StartBranchGitCommand {
+	const operationSpec = ALLOWED_START_GIT_OPERATIONS[operation];
+	return {
+		args: operationSpec.buildArgs(decision),
+		description: operationSpec.description,
+	};
+}
+
 export function planStartBranchApplication(decision: BranchDecision): StartBranchGitCommand[] {
 	if (decision.mode === "create-current-branch" && decision.targetBranch) {
-		return [{ args: ["switch", "-c", decision.targetBranch], description: "Create and switch to the planned Ralph branch." }];
+		return [commandForAllowedStartGitOperation("create-current-branch", decision)];
 	}
 
 	if (decision.mode === "use-existing-branch" && decision.targetBranch) {
-		return [{ args: ["switch", decision.targetBranch], description: "Switch to the selected existing branch." }];
+		return [commandForAllowedStartGitOperation("use-existing-branch", decision)];
 	}
 
 	if (decision.mode === "create-worktree" && decision.worktreePath && decision.targetBranch) {
-		return [
-			{
-				args: ["worktree", "add", "-b", decision.targetBranch, decision.worktreePath],
-				description: "Create the selected Ralph worktree.",
-			},
-		];
+		return [commandForAllowedStartGitOperation("create-worktree", decision)];
 	}
 
 	return [];
