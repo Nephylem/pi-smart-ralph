@@ -497,7 +497,7 @@
   - _Requirements: FR-11, AC-5.2_
   - _Design: Smoke verification script; Test Strategy_
 
-- [ ] 4.3 [YELLOW] Refactor smoke verifier cleanup and temp fixture handling
+- [x] 4.3 [YELLOW] Refactor smoke verifier cleanup and temp fixture handling
   - **Do**:
     1. Ensure smoke fixtures use isolated temporary directories and remove them on success/failure.
     2. Add an internal cleanup assertion to the verifier.

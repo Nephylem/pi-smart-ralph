@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -15,6 +15,32 @@ const startDiscoverySource = existsSync(startDiscoveryPath) ? readFileSync(start
 const quietForPackJson = process.env.npm_command === 'pack';
 
 const failures = [];
+const cleanupAssertions = [];
+const temporaryFixtureRoots = [];
+let explicitCleanupRan = false;
+
+function createIsolatedFixtureRoot(label) {
+  const safeLabel = label.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+  const fixtureRoot = mkdtempSync(join(tmpdir(), `ralph-start-flow-parity-${safeLabel}-`));
+  temporaryFixtureRoots.push(fixtureRoot);
+  return fixtureRoot;
+}
+
+function cleanupTemporaryFixtures({ recordAssertions } = { recordAssertions: false }) {
+  for (const fixtureRoot of temporaryFixtureRoots) {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+    if (recordAssertions) {
+      cleanupAssertions.push({
+        root: fixtureRoot,
+        removed: !existsSync(fixtureRoot),
+      });
+    }
+  }
+}
+
+process.on('exit', () => {
+  if (!explicitCleanupRan) cleanupTemporaryFixtures();
+});
 
 function assert(condition, message) {
   if (!condition) failures.push(message);
@@ -608,7 +634,7 @@ for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGi
   );
 }
 
-const isolatedBranchFixtureRoot = join(tmpdir(), 'ralph-start-flow-parity-branch-fixtures');
+const isolatedBranchFixtureRoot = createIsolatedFixtureRoot('branch-fixtures');
 
 const destructiveCommandPlanRegressionFixtures = [
   {
@@ -1270,9 +1296,28 @@ assert(
   'runStartCommand must pass separate summary metadata to existing summary output without changing quick flow handoff.',
 );
 
+explicitCleanupRan = true;
+cleanupTemporaryFixtures({ recordAssertions: true });
+
+for (const cleanupAssertion of cleanupAssertions) {
+  assert(
+    cleanupAssertion.removed,
+    `Smoke verifier cleanup assertion failed for isolated fixture root ${cleanupAssertion.root}.`,
+  );
+}
+
+assert(
+  cleanupAssertions.length === temporaryFixtureRoots.length,
+  'Smoke verifier cleanup assertion must inspect every isolated temporary fixture root.',
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
-  for (const failure of failures) console.error(`- ${failure}`);
+  const visibleFailures = failures.slice(0, 25);
+  for (const failure of visibleFailures) console.error(`- ${failure}`);
+  if (failures.length > visibleFailures.length) {
+    console.error(`- ... ${failures.length - visibleFailures.length} additional failure(s) omitted`);
+  }
   process.exit(1);
 }
 
