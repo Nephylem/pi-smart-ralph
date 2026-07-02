@@ -908,6 +908,21 @@ assert(
 );
 
 assert(
+  /function\s+mergeDiscoveriesByName\s*<\s*T\s+extends\s+NamedDiscoveryEntry\s*>[\s\S]*?new\s+Map<\s*string\s*,\s*T\s*>[\s\S]*?options\.normalizeExisting[\s\S]*?options\.merge/.test(startDiscoverySource),
+  'Discovery merge-by-name behavior must be shared by related specs and discovered skills through one generic helper.',
+);
+
+assert(
+  /Resume preservation is explicit[\s\S]*?existing state is normalized first[\s\S]*?same-name discoveries enrich it/.test(startDiscoverySource),
+  'Discovery merge helper must document explicit resume state preservation rules.',
+);
+
+assert(
+  /mergeRelatedSpecsByName[\s\S]*?mergeDiscoveriesByName\([\s\S]*?normalizeExistingRelatedSpec[\s\S]*?mergeRelatedSpec/.test(startDiscoverySource),
+  'Related spec merging must delegate to the shared merge-by-name helper while preserving related-spec-specific fields.',
+);
+
+assert(
   /discoverRelatedSpecs\([\s\S]*?relatedSpecs[\s\S]*?mergeRelatedSpecsByName/.test(source),
   'runStartCommand must merge discovered related specs with existing relatedSpecs before writing start state.',
 );
@@ -1047,6 +1062,16 @@ assert(
 assert(
   /new\s+Map<\s*string[\s\S]*?discoveredSkills[\s\S]*?\.name[\s\S]*?set\(/.test(startDiscoverySource),
   'Discovered skill merge behavior must de-duplicate and preserve entries by name on resume.',
+);
+
+assert(
+  /mergeDiscoveredSkillsByName[\s\S]*?mergeDiscoveriesByName\([\s\S]*?normalizeExistingSkill[\s\S]*?mergeDiscoveredSkill/.test(startDiscoverySource),
+  'Discovered skill merging must delegate to the shared merge-by-name helper while preserving skill-specific fields.',
+);
+
+assert(
+  /readCandidateText[\s\S]*?catch\s*\(error\)[\s\S]*?recordDiscoveryWarning[\s\S]*?return\s+null/.test(startDiscoverySource) && /discoverSkills[\s\S]*?readSkillMetadata\([\s\S]*?options\.warnings/.test(startDiscoverySource),
+  'Discovery warnings must remain non-blocking for kickoff across related spec and skill scans.',
 );
 
 assert(

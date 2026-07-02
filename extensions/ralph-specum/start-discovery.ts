@@ -262,6 +262,30 @@ function combineEvidence(left: string, right: string): string {
 	return `${left}; ${right}`;
 }
 
+type NamedDiscoveryEntry = { name: string };
+
+type MergeByNameOptions<T extends NamedDiscoveryEntry> = {
+	normalizeExisting: (entry: unknown) => T | null;
+	merge: (existing: T, discovered: T) => T;
+	limit: number;
+};
+
+function mergeDiscoveriesByName<T extends NamedDiscoveryEntry>(existing: unknown, discovered: T[], options: MergeByNameOptions<T>): T[] {
+	// Resume preservation is explicit: existing state is normalized first, then same-name discoveries enrich it without dropping curated fields.
+	const byName = new Map<string, T>();
+	for (const entry of Array.isArray(existing) ? existing : []) {
+		const normalized = options.normalizeExisting(entry);
+		if (normalized) byName.set(normalized.name, normalized);
+	}
+
+	for (const entry of discovered) {
+		const existingEntry = byName.get(entry.name);
+		byName.set(entry.name, existingEntry ? options.merge(existingEntry, entry) : entry);
+	}
+
+	return [...byName.values()].slice(0, Math.max(0, options.limit));
+}
+
 function mergeScoredDiscoveryBySpecName(entries: ScoredRelatedSpecDiscovery[]): ScoredRelatedSpecDiscovery[] {
 	const byName = new Map<string, ScoredRelatedSpecDiscovery>();
 	for (const entry of entries) {
@@ -303,39 +327,37 @@ export function discoverRelatedSpecs(currentSpec: SpecEntry, currentGoal: string
 		.map((entry) => entry.discovery);
 }
 
+function normalizeExistingRelatedSpec(entry: unknown): RelatedSpecDiscovery | null {
+	if (!entry || typeof entry !== "object") return null;
+	const candidate = entry as Partial<RelatedSpecDiscovery>;
+	if (typeof candidate.name !== "string" || !candidate.name) return null;
+	return {
+		name: candidate.name,
+		path: typeof candidate.path === "string" ? candidate.path : undefined,
+		relationship: typeof candidate.relationship === "string" ? candidate.relationship : undefined,
+		relevance: candidate.relevance === "High" || candidate.relevance === "Medium" || candidate.relevance === "Low" ? candidate.relevance : "Low",
+		mayNeedUpdate: typeof candidate.mayNeedUpdate === "boolean" ? candidate.mayNeedUpdate : false,
+		evidence: typeof candidate.evidence === "string" && candidate.evidence ? candidate.evidence : "Existing related spec preserved from state.",
+	};
+}
+
+function mergeRelatedSpec(existingEntry: RelatedSpecDiscovery, entry: RelatedSpecDiscovery): RelatedSpecDiscovery {
+	return {
+		...existingEntry,
+		path: existingEntry.path ?? entry.path,
+		relationship: existingEntry.relationship ?? entry.relationship,
+		relevance: relevanceRank(existingEntry.relevance) >= relevanceRank(entry.relevance) ? existingEntry.relevance : entry.relevance,
+		mayNeedUpdate: existingEntry.mayNeedUpdate || entry.mayNeedUpdate,
+		evidence: combineEvidence(existingEntry.evidence, entry.evidence),
+	};
+}
+
 export function mergeRelatedSpecsByName(existing: unknown, discovered: RelatedSpecDiscovery[], limit = DEFAULT_RELATED_SPEC_LIMIT): RelatedSpecDiscovery[] {
-	const byName = new Map<string, RelatedSpecDiscovery>();
-	for (const entry of Array.isArray(existing) ? existing : []) {
-		if (!entry || typeof entry !== "object") continue;
-		const candidate = entry as Partial<RelatedSpecDiscovery>;
-		if (typeof candidate.name !== "string" || !candidate.name) continue;
-		byName.set(candidate.name, {
-			name: candidate.name,
-			path: typeof candidate.path === "string" ? candidate.path : undefined,
-			relationship: typeof candidate.relationship === "string" ? candidate.relationship : undefined,
-			relevance: candidate.relevance === "High" || candidate.relevance === "Medium" || candidate.relevance === "Low" ? candidate.relevance : "Low",
-			mayNeedUpdate: typeof candidate.mayNeedUpdate === "boolean" ? candidate.mayNeedUpdate : false,
-			evidence: typeof candidate.evidence === "string" && candidate.evidence ? candidate.evidence : "Existing related spec preserved from state.",
-		});
-	}
-
-	for (const entry of discovered) {
-		const existingEntry = byName.get(entry.name);
-		if (!existingEntry) {
-			byName.set(entry.name, entry);
-			continue;
-		}
-		byName.set(entry.name, {
-			...existingEntry,
-			path: existingEntry.path ?? entry.path,
-			relationship: existingEntry.relationship ?? entry.relationship,
-			relevance: relevanceRank(existingEntry.relevance) >= relevanceRank(entry.relevance) ? existingEntry.relevance : entry.relevance,
-			mayNeedUpdate: existingEntry.mayNeedUpdate || entry.mayNeedUpdate,
-			evidence: combineEvidence(existingEntry.evidence, entry.evidence),
-		});
-	}
-
-	return limitRelatedSpecs([...byName.values()], limit);
+	return mergeDiscoveriesByName(existing, discovered, {
+		normalizeExisting: normalizeExistingRelatedSpec,
+		merge: mergeRelatedSpec,
+		limit,
+	});
 }
 
 const START_DISCOVERY_DIR = dirname(fileURLToPath(import.meta.url));
@@ -459,33 +481,31 @@ export function discoverSkills(currentSpec: SpecEntry, currentGoal: string, opti
 	return [...byName.values()].sort(compareScoredSkills).slice(0, Math.max(0, options.limit ?? DEFAULT_SKILL_LIMIT)).map((entry) => entry.discovery);
 }
 
+function normalizeExistingSkill(entry: unknown): DiscoveredSkill | null {
+	if (!entry || typeof entry !== "object") return null;
+	const candidate = entry as Partial<DiscoveredSkill>;
+	if (typeof candidate.name !== "string" || !candidate.name) return null;
+	return {
+		name: candidate.name,
+		path: typeof candidate.path === "string" && candidate.path ? candidate.path : "",
+		relevance: candidate.relevance === "High" || candidate.relevance === "Medium" || candidate.relevance === "Low" ? candidate.relevance : "Low",
+		reason: typeof candidate.reason === "string" && candidate.reason ? candidate.reason : "Existing discovered skill preserved from state.",
+	};
+}
+
+function mergeDiscoveredSkill(existingEntry: DiscoveredSkill, skill: DiscoveredSkill): DiscoveredSkill {
+	return {
+		...existingEntry,
+		path: existingEntry.path || skill.path,
+		relevance: relevanceRank(existingEntry.relevance) >= relevanceRank(skill.relevance) ? existingEntry.relevance : skill.relevance,
+		reason: combineEvidence(existingEntry.reason, skill.reason),
+	};
+}
+
 export function mergeDiscoveredSkillsByName(existing: unknown, discoveredSkills: DiscoveredSkill[], limit = DEFAULT_SKILL_LIMIT): DiscoveredSkill[] {
-	const byName = new Map<string, DiscoveredSkill>();
-	for (const entry of Array.isArray(existing) ? existing : []) {
-		if (!entry || typeof entry !== "object") continue;
-		const candidate = entry as Partial<DiscoveredSkill>;
-		if (typeof candidate.name !== "string" || !candidate.name) continue;
-		byName.set(candidate.name, {
-			name: candidate.name,
-			path: typeof candidate.path === "string" && candidate.path ? candidate.path : "",
-			relevance: candidate.relevance === "High" || candidate.relevance === "Medium" || candidate.relevance === "Low" ? candidate.relevance : "Low",
-			reason: typeof candidate.reason === "string" && candidate.reason ? candidate.reason : "Existing discovered skill preserved from state.",
-		});
-	}
-
-	for (const skill of discoveredSkills) {
-		const existingEntry = byName.get(skill.name);
-		if (!existingEntry) {
-			byName.set(skill.name, skill);
-			continue;
-		}
-		byName.set(skill.name, {
-			...existingEntry,
-			path: existingEntry.path || skill.path,
-			relevance: relevanceRank(existingEntry.relevance) >= relevanceRank(skill.relevance) ? existingEntry.relevance : skill.relevance,
-			reason: combineEvidence(existingEntry.reason, skill.reason),
-		});
-	}
-
-	return [...byName.values()].slice(0, Math.max(0, limit));
+	return mergeDiscoveriesByName(existing, discoveredSkills, {
+		normalizeExisting: normalizeExistingSkill,
+		merge: mergeDiscoveredSkill,
+		limit,
+	});
 }

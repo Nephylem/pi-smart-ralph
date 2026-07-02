@@ -403,7 +403,7 @@
   - _Requirements: FR-8, AC-3.2, AC-3.3_
   - _Design: Start discovery helper; Security Considerations_
 
-- [ ] 3.6 [YELLOW] Refactor discovery merge helpers
+- [x] 3.6 [YELLOW] Refactor discovery merge helpers
   - **Do**:
     1. Share merge-by-name behavior between related specs and discovered skills.
     2. Keep state preservation rules explicit for resume flows.
