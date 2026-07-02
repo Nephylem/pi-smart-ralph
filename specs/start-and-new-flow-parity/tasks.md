@@ -415,7 +415,7 @@
   - _Requirements: FR-7, FR-8, AC-3.1, AC-3.2, AC-3.3_
   - _Design: Start discovery helper; Existing Patterns to Follow_
 
-- [ ] Q7 [VERIFY] Quality check: skill discovery package verification
+- [x] Q7 [VERIFY] Quality check: skill discovery package verification
   - **Do**:
     1. Run package verification after skill discovery changes.
   - **Files**: None
@@ -425,7 +425,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 3.7 [RED] Failing smoke: start state includes StartCompatibilityContractV1 metadata
+- [x] 3.7 [RED] Failing smoke: start state includes StartCompatibilityContractV1 metadata
   - **Do**:
     1. Add smoke assertions for `startCompatibility.command`, optional `aliasOf`, `options`, `branchDecision`, `specRoot`, and `statePatch`.
     2. Assert `/ralph-new` records `aliasOf: "ralph-start"` and `/ralph-start` does not.

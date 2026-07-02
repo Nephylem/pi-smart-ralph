@@ -1079,6 +1079,47 @@ assert(
   'runStartCommand must merge discovered skills with existing discoveredSkills before writing start state.',
 );
 
+const startCompatibilityContractFields = [
+  'command',
+  'aliasOf',
+  'options',
+  'branchDecision',
+  'specRoot',
+  'statePatch',
+];
+
+assert(
+  /type\s+StartCompatibilityContractV1\s*=\s*\{[\s\S]*?command:\s*StartCommandName[\s\S]*?aliasOf\?:\s*["']ralph-start["'][\s\S]*?options:\s*StartOptionsSnapshot[\s\S]*?branchDecision:\s*BranchDecision[\s\S]*?specRoot:[\s\S]*?statePatch:\s*Record<\s*string\s*,\s*unknown\s*>[\s\S]*?\}/.test(source),
+  'StartCompatibilityContractV1 must define command, optional aliasOf, options, branchDecision, specRoot, and statePatch fields.',
+);
+
+for (const field of startCompatibilityContractFields) {
+  assert(
+    new RegExp(`startCompatibility:\\s*\\{[\\s\\S]*?${field}:`).test(source) || (field === 'aliasOf' && /\.\.\.\(invocation\.aliasOf\s*\?\s*\{\s*aliasOf:\s*invocation\.aliasOf\s*\}/.test(source)),
+    `startCompatibility state metadata must include ${field}.`,
+  );
+}
+
+assert(
+  /RALPH_NEW_INVOCATION:\s*StartInvocation\s*=\s*\{\s*command:\s*["']ralph-new["']\s*,\s*aliasOf:\s*["']ralph-start["']\s*\}/.test(source),
+  '/ralph-new must record aliasOf: "ralph-start" in start compatibility metadata.',
+);
+
+assert(
+  /RALPH_START_INVOCATION:\s*StartInvocation\s*=\s*\{\s*command:\s*["']ralph-start["']\s*\}/.test(source) && !/RALPH_START_INVOCATION[\s\S]*?aliasOf/.test(source.slice(source.indexOf('const RALPH_START_INVOCATION'), source.indexOf('const RALPH_NEW_INVOCATION'))),
+  '/ralph-start invocation metadata must not record aliasOf.',
+);
+
+assert(
+  /startCompatibility:\s*\{[\s\S]*?\.\.\.\(invocation\.aliasOf\s*\?\s*\{\s*aliasOf:\s*invocation\.aliasOf\s*\}\s*:\s*\{\s*\}\)[\s\S]*?options:\s*buildStartOptionsSnapshot\(\s*parsed\s*\)[\s\S]*?branchDecision[\s\S]*?specRoot[\s\S]*?statePatch:/ .test(source),
+  'Start compatibility metadata must omit aliasOf for /ralph-start while preserving it for /ralph-new.',
+);
+
+assert(
+  /statePatch:\s*\{[\s\S]*?commitSpec:\s*statePatch\.commitSpec[\s\S]*?relatedSpecs:\s*statePatch\.relatedSpecs[\s\S]*?discoveredSkills:\s*statePatch\.discoveredSkills[\s\S]*?\}/.test(source),
+  'Start compatibility statePatch must preserve commitSpec, relatedSpecs, and discoveredSkills behavior for downstream consumers.',
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);
