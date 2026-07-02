@@ -309,7 +309,7 @@
   - _Requirements: FR-10, NFR-3, AC-4.1, AC-4.2, AC-4.3_
   - _Design: Gitignore updater; Data Flow_
 
-- [ ] 2.12 [YELLOW] Refactor gitignore newline and duplicate handling
+- [x] 2.12 [YELLOW] Refactor gitignore newline and duplicate handling
   - **Do**:
     1. Normalize final newline handling for created and appended `.gitignore` files.
     2. Keep duplicate detection exact for the required patterns.

@@ -615,26 +615,87 @@ const requiredRalphGitignorePatterns = [
 const gitignoreIdempotencySmokeFixtures = [
   {
     label: 'missing .gitignore',
-    initialEntries: [],
+    initialContent: '',
     runs: 1,
     expectedEntries: requiredRalphGitignorePatterns,
+    expectedFinalNewline: true,
   },
   {
     label: 'existing .gitignore preserves unrelated entries',
-    initialEntries: ['node_modules/', 'dist/'],
+    initialContent: 'node_modules/\ndist/\n',
     runs: 1,
     expectedEntries: ['node_modules/', 'dist/', ...requiredRalphGitignorePatterns],
+    expectedFinalNewline: true,
+  },
+  {
+    label: 'existing .gitignore without trailing newline is normalized before append',
+    initialContent: 'node_modules/',
+    runs: 1,
+    expectedEntries: ['node_modules/', ...requiredRalphGitignorePatterns],
+    expectedFinalNewline: true,
   },
   {
     label: 'two repeated updater runs do not duplicate Ralph entries',
-    initialEntries: ['node_modules/', 'specs/.current-spec'],
+    initialContent: 'node_modules/\nspecs/.current-spec\n',
     runs: 2,
     expectedEntries: ['node_modules/', ...requiredRalphGitignorePatterns],
+    expectedFinalNewline: true,
   },
 ];
 
-function formatGitignoreDiagnostic(smokeCase, reason) {
-  return `Ralph gitignore idempotency smoke failed for ${smokeCase.label}: ${reason}`;
+function formatGitignoreDiagnostic(smokeCase, reason, details = undefined) {
+  const detailText = details ? ` (${details})` : '';
+  return `Ralph gitignore idempotency smoke failed for ${smokeCase.label}: ${reason}${detailText}`;
+}
+
+function splitFixtureGitignoreEntries(content) {
+  return content.split(/\r?\n/).filter((entry) => entry.length > 0);
+}
+
+function applyGitignoreFixtureRun(content) {
+  const entries = new Set(splitFixtureGitignoreEntries(content));
+  const missing = requiredRalphGitignorePatterns.filter((pattern) => !entries.has(pattern));
+  if (missing.length === 0) return content.endsWith('\n') || content.length === 0 ? content : `${content}\n`;
+  const prefix = content.length === 0 || content.endsWith('\n') ? content : `${content}\n`;
+  return `${prefix}${missing.join('\n')}\n`;
+}
+
+function assertGitignoreFixtureStable(smokeCase) {
+  let content = smokeCase.initialContent;
+  for (let run = 0; run < smokeCase.runs; run += 1) content = applyGitignoreFixtureRun(content);
+  const actualEntries = splitFixtureGitignoreEntries(content);
+
+  assert(
+    smokeCase.runs === 1 || smokeCase.runs === 2,
+    formatGitignoreDiagnostic(smokeCase, 'fixture must exercise one or two updater runs'),
+  );
+  assert(
+    actualEntries.join('\u0000') === smokeCase.expectedEntries.join('\u0000'),
+    formatGitignoreDiagnostic(
+      smokeCase,
+      'entry order mismatch after updater run',
+      `expected=${JSON.stringify(smokeCase.expectedEntries)} actual=${JSON.stringify(actualEntries)}`,
+    ),
+  );
+  assert(
+    content.endsWith('\n') === smokeCase.expectedFinalNewline,
+    formatGitignoreDiagnostic(smokeCase, 'final newline normalization mismatch', `content=${JSON.stringify(content)}`),
+  );
+
+  for (const requiredPattern of requiredRalphGitignorePatterns) {
+    const occurrences = actualEntries.filter((entry) => entry === requiredPattern).length;
+    assert(
+      occurrences === 1,
+      formatGitignoreDiagnostic(smokeCase, `required pattern ${requiredPattern} occurrence count must be exactly 1`, `actual=${occurrences}`),
+    );
+  }
+
+  for (const unrelatedEntry of splitFixtureGitignoreEntries(smokeCase.initialContent).filter((entry) => !requiredRalphGitignorePatterns.includes(entry))) {
+    assert(
+      actualEntries.indexOf(unrelatedEntry) === smokeCase.expectedEntries.indexOf(unrelatedEntry),
+      formatGitignoreDiagnostic(smokeCase, `unrelated existing entry ${unrelatedEntry} must be preserved in order`),
+    );
+  }
 }
 
 for (const pattern of requiredRalphGitignorePatterns) {
@@ -644,24 +705,7 @@ for (const pattern of requiredRalphGitignorePatterns) {
   );
 }
 
-for (const smokeCase of gitignoreIdempotencySmokeFixtures) {
-  assert(
-    smokeCase.runs === 1 || smokeCase.runs === 2,
-    formatGitignoreDiagnostic(smokeCase, 'fixture must exercise one or two updater runs'),
-  );
-  for (const expectedEntry of smokeCase.expectedEntries) {
-    assert(
-      smokeCase.expectedEntries.indexOf(expectedEntry) === smokeCase.expectedEntries.lastIndexOf(expectedEntry),
-      formatGitignoreDiagnostic(smokeCase, `expected entries must not duplicate ${expectedEntry}`),
-    );
-  }
-  for (const unrelatedEntry of smokeCase.initialEntries.filter((entry) => !requiredRalphGitignorePatterns.includes(entry))) {
-    assert(
-      smokeCase.expectedEntries.indexOf(unrelatedEntry) === smokeCase.initialEntries.indexOf(unrelatedEntry),
-      formatGitignoreDiagnostic(smokeCase, `unrelated existing entry ${unrelatedEntry} must be preserved in order`),
-    );
-  }
-}
+for (const smokeCase of gitignoreIdempotencySmokeFixtures) assertGitignoreFixtureStable(smokeCase);
 
 assert(
   /export\s+const\s+REQUIRED_RALPH_GITIGNORE_PATTERNS\s*=\s*\[[\s\S]*?specs\/\.current-spec[\s\S]*?specs\/\.current-epic[\s\S]*?\*\*\/\.progress\.md[\s\S]*?\*\*\/\.ralph-state\.json[\s\S]*?\]/.test(gitignoreSource),
@@ -679,13 +723,18 @@ assert(
 );
 
 assert(
-  /existingEntries[\s\S]*?includes\(pattern\)[\s\S]*?missingPatterns/.test(gitignoreSource),
-  'Ralph gitignore updater must append only missing Ralph patterns to remain idempotent across repeated runs.',
+  /function\s+findMissingRequiredPatterns[\s\S]*?new\s+Set\(splitGitignoreEntries\(content\)\)[\s\S]*?!existingEntries\.has\(pattern\)/.test(gitignoreSource),
+  'Ralph gitignore updater must use exact line matching to append only missing Ralph patterns across repeated runs.',
 );
 
 assert(
-  /existingEntries[\s\S]*?\.\.\.existingEntries[\s\S]*?\.\.\.missingPatterns/.test(gitignoreSource),
-  'Ralph gitignore updater must preserve unrelated existing entries before appended Ralph patterns.',
+  /function\s+appendMissingGitignoreEntries[\s\S]*?hasFinalNewline\(content\)[\s\S]*?formatGitignoreEntries\(missingPatterns\)/.test(gitignoreSource),
+  'Ralph gitignore updater must preserve existing content/order and append missing Ralph patterns after a normalized newline.',
+);
+
+assert(
+  /missingPatterns\.length\s*>\s*0[\s\S]*?appendMissingGitignoreEntries\(existing,\s*missingPatterns\)[\s\S]*?hasFinalNewline\(existing\)[\s\S]*?`\$\{existing\}\\n`/.test(gitignoreSource),
+  'Ralph gitignore updater must normalize the final newline even when no Ralph patterns are missing.',
 );
 
 if (failures.length > 0) {
