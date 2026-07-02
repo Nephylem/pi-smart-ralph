@@ -369,7 +369,7 @@
   - _Requirements: FR-7, FR-11, AC-3.1, AC-5.1_
   - _Design: Start discovery helper; Edge Cases_
 
-- [ ] Q6 [VERIFY] Quality check: related discovery package verification
+- [x] Q6 [VERIFY] Quality check: related discovery package verification
   - **Do**:
     1. Run package verification after related-spec discovery changes.
   - **Files**: None
@@ -379,7 +379,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 3.4 [RED] Failing smoke: discovered skills are persisted from metadata only
+- [x] 3.4 [RED] Failing smoke: discovered skills are persisted from metadata only
   - **Do**:
     1. Add smoke fixtures for packaged/project `SKILL.md` metadata matching the spec goal.
     2. Assert discovery results include `name`, `path`, relevance, and reason.

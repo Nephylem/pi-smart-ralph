@@ -912,6 +912,148 @@ assert(
   'runStartCommand must merge discovered related specs with existing relatedSpecs before writing start state.',
 );
 
+const skillDiscoverySmokeFixtures = [
+  {
+    label: 'packaged skill metadata matches start goal without execution',
+    currentGoal: 'improve branch safety and discovery for start command parity',
+    existingState: { discoveredSkills: [] },
+    skills: [
+      {
+        name: 'clean-architecture',
+        path: '/packaged/skills/clean-architecture/SKILL.md',
+        frontmatter: { name: 'clean-architecture' },
+        description: 'Structure software around dependency boundaries, ports, adapters, and safety-focused architecture.',
+        executableBody: 'throw new Error("SKILL_CODE_EXECUTED")',
+      },
+    ],
+    expectedNames: ['clean-architecture'],
+    expectedReasonIncludes: ['branch', 'safety'],
+  },
+  {
+    label: 'project skill metadata matches spec goal and preserves path',
+    currentGoal: 'build FastAPI async API kickoff context',
+    existingState: { discoveredSkills: [] },
+    skills: [
+      {
+        name: 'fastapi-python',
+        path: '/project/.ralph/skills/fastapi-python/SKILL.md',
+        frontmatter: { name: 'fastapi-python', description: 'Expert in FastAPI Python development with async API patterns' },
+        description: 'Use when building FastAPI Python APIs and async operations.',
+        executableBody: 'process.exit(99)',
+      },
+    ],
+    expectedNames: ['fastapi-python'],
+    expectedReasonIncludes: ['FastAPI', 'async'],
+  },
+  {
+    label: 'resume merge preserves existing discoveredSkills by name',
+    currentGoal: 'preserve curated skills while scanning metadata',
+    existingState: {
+      discoveredSkills: [
+        {
+          name: 'frontend-design',
+          path: '/existing/skills/frontend-design/SKILL.md',
+          relevance: 'High',
+          reason: 'Manual kickoff curation must be preserved on resume.',
+        },
+        {
+          name: 'python-patterns',
+          path: '/existing/skills/python-patterns/SKILL.md',
+          relevance: 'Medium',
+          reason: 'Existing project skill remains useful.',
+        },
+      ],
+    },
+    skills: [
+      {
+        name: 'frontend-design',
+        path: '/project/skills/frontend-design/SKILL.md',
+        frontmatter: { name: 'frontend-design' },
+        description: 'Create distinctive production-grade frontend interfaces.',
+        executableBody: 'globalThis.__skillExecuted = true',
+      },
+      {
+        name: 'software-design-philosophy',
+        path: '/packaged/skills/software-design-philosophy/SKILL.md',
+        frontmatter: { name: 'software-design-philosophy' },
+        description: 'Manage software complexity through deep modules and information hiding.',
+        executableBody: 'require("node:fs").rmSync("/tmp/should-not-run", { recursive: true })',
+      },
+    ],
+    expectedNames: ['frontend-design', 'python-patterns', 'software-design-philosophy'],
+    expectedReasonIncludes: ['Manual kickoff curation', 'complexity'],
+  },
+];
+
+function formatSkillDiscoveryDiagnostic(smokeCase, reason) {
+  return `Skill discovery smoke failed for ${smokeCase.label}: ${reason}`;
+}
+
+function assertSkillDiscoveryEntryShape(smokeCase, entry) {
+  assert(typeof entry.name === 'string' && entry.name.length > 0, formatSkillDiscoveryDiagnostic(smokeCase, 'entry must include name'));
+  assert(typeof entry.path === 'string' && entry.path.endsWith('SKILL.md'), formatSkillDiscoveryDiagnostic(smokeCase, `entry ${entry.name ?? '<unknown>'} must include SKILL.md path`));
+  assert(
+    entry.relevance === 'High' || entry.relevance === 'Medium' || entry.relevance === 'Low',
+    formatSkillDiscoveryDiagnostic(smokeCase, `entry ${entry.name ?? '<unknown>'} must include High/Medium/Low relevance`),
+  );
+  assert(
+    typeof entry.reason === 'string' && entry.reason.length > 0,
+    formatSkillDiscoveryDiagnostic(smokeCase, `entry ${entry.name ?? '<unknown>'} must include reason text`),
+  );
+}
+
+for (const smokeCase of skillDiscoverySmokeFixtures) {
+  assert(smokeCase.skills.length > 0, formatSkillDiscoveryDiagnostic(smokeCase, 'fixture must include packaged/project SKILL.md metadata to scan'));
+  assert(smokeCase.expectedNames.length > 0, formatSkillDiscoveryDiagnostic(smokeCase, 'fixture must expect at least one discovered or preserved skill'));
+  for (const skill of smokeCase.skills) {
+    assert(skill.path.endsWith('SKILL.md'), formatSkillDiscoveryDiagnostic(smokeCase, `fixture skill ${skill.name} must use a SKILL.md path`));
+    assert(
+      typeof skill.description === 'string' || typeof skill.frontmatter?.description === 'string',
+      formatSkillDiscoveryDiagnostic(smokeCase, `fixture skill ${skill.name} must provide metadata description text`),
+    );
+    assert(
+      /throw|process\.exit|rmSync|__skillExecuted/.test(skill.executableBody),
+      formatSkillDiscoveryDiagnostic(smokeCase, `fixture skill ${skill.name} must contain executable body that would be unsafe if evaluated`),
+    );
+  }
+  for (const existingEntry of smokeCase.existingState.discoveredSkills) assertSkillDiscoveryEntryShape(smokeCase, existingEntry);
+}
+
+assert(
+  /export\s+type\s+DiscoveredSkill\s*=\s*\{[\s\S]*?name:\s*string[\s\S]*?path:\s*string[\s\S]*?relevance:\s*["']High["']\s*\|\s*["']Medium["']\s*\|\s*["']Low["'][\s\S]*?reason:\s*string/.test(startDiscoverySource),
+  'DiscoveredSkill must include name, path, High/Medium/Low relevance, and reason text.',
+);
+
+assert(
+  /export\s+function\s+discoverSkills\s*\(/.test(startDiscoverySource),
+  'Start discovery helper must expose discoverSkills for read-only packaged/project SKILL.md metadata scanning.',
+);
+
+assert(
+  /export\s+function\s+mergeDiscoveredSkillsByName\s*\(/.test(startDiscoverySource),
+  'Start discovery helper must expose mergeDiscoveredSkillsByName to preserve and merge discoveredSkills by skill name on resume.',
+);
+
+assert(
+  /SKILL\.md[\s\S]*?(frontmatter|metadata|description)/.test(startDiscoverySource),
+  'Skill discovery must read SKILL.md metadata/frontmatter/description text instead of relying on executable skill code.',
+);
+
+assert(
+  /discoverSkills[\s\S]*?readFileSync[\s\S]*?!\s*(?:import|eval|Function)\s*\(/.test(startDiscoverySource) || (/discoverSkills[\s\S]*?readFileSync/.test(startDiscoverySource) && !/\b(?:eval|Function)\s*\(|\bimport\s*\(/.test(startDiscoverySource)),
+  'Skill discovery must be non-destructive metadata scanning only: read SKILL.md text and do not eval/import/execute skills.',
+);
+
+assert(
+  /new\s+Map<\s*string[\s\S]*?discoveredSkills[\s\S]*?\.name[\s\S]*?set\(/.test(startDiscoverySource),
+  'Discovered skill merge behavior must de-duplicate and preserve entries by name on resume.',
+);
+
+assert(
+  /discoverSkills\([\s\S]*?discoveredSkills[\s\S]*?mergeDiscoveredSkillsByName/.test(source),
+  'runStartCommand must merge discovered skills with existing discoveredSkills before writing start state.',
+);
+
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
   for (const failure of failures) console.error(`- ${failure}`);
