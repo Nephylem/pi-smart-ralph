@@ -217,7 +217,7 @@
   - _Requirements: FR-5, AC-2.2, AC-2.3_
   - _Design: Start branch/worktree helper; Error Handling_
 
-- [ ] 2.6 [YELLOW] Refactor interactive choice labels and decision serialization
+- [x] 2.6 [YELLOW] Refactor interactive choice labels and decision serialization
   - **Do**:
     1. Keep Pi-native labels centralized inside the branch helper.
     2. Serialize selected mode, current branch, default branch, target branch, worktree path, dirty state, applied flag, and reason.

@@ -313,6 +313,7 @@ const branchPlannerBoundarySmokeFixture = {
     'planStartBranchApplication',
     'applyStartBranchApplication',
     'decideStartBranchDecision',
+    'serializeBranchDecision',
   ],
   decisionFields: ['mode', 'currentBranch', 'defaultBranch', 'targetBranch', 'worktreePath', 'dirty', 'applied', 'reason'],
   destructiveGitPatterns: [/--force/, /--discard-changes/, /\breset\b/, /\bbranch\s+-D\b/, /\bworktree\s+remove\b/],
@@ -334,6 +335,10 @@ for (const field of branchPlannerBoundarySmokeFixture.decisionFields) {
   assert(
     new RegExp(`export\\s+type\\s+BranchDecision\\s*=\\s*\\{[\\s\\S]*?${field}\\??:`).test(startBranchSource),
     `BranchDecision must serialize ${field} for smoke fixtures and downstream state.`,
+  );
+  assert(
+    new RegExp(`export\\s+function\\s+serializeBranchDecision[\\s\\S]*?${field}:\\s*(?:cleanBranchName\\()?decision\\.${field}`).test(startBranchSource),
+    `serializeBranchDecision must persist ${field} in stable downstream branch metadata.`,
   );
 }
 
@@ -382,7 +387,6 @@ const interactiveBranchChoiceSmokeFixtures = [
       autonomousMode: false,
     },
     expectedModes: ['create-current-branch', 'create-worktree'],
-    expectedLabelTokens: ['current-directory', 'worktree'],
   },
   {
     label: 'non-default-branch interactive mode',
@@ -395,7 +399,6 @@ const interactiveBranchChoiceSmokeFixtures = [
       autonomousMode: false,
     },
     expectedModes: ['stay-current', 'create-worktree'],
-    expectedLabelTokens: ['stay-current', 'worktree'],
   },
 ];
 
@@ -423,13 +426,22 @@ for (const smokeCase of interactiveBranchChoiceSmokeFixtures) {
       formatInteractiveChoiceDiagnostic(smokeCase, `missing offered mode ${expectedMode}`),
     );
   }
-  for (const labelToken of smokeCase.expectedLabelTokens) {
-    assert(
-      new RegExp(labelToken.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'i').test(interactiveChoicePlannerBody),
-      formatInteractiveChoiceDiagnostic(smokeCase, `missing Pi UI label token ${labelToken}`),
-    );
-  }
 }
+
+assert(
+  /export\s+const\s+START_BRANCH_CHOICE_LABELS/.test(startBranchSource),
+  'Interactive branch choice labels must be centralized inside the branch helper.',
+);
+
+assert(
+  /function\s+labelStartBranchChoice\s*\(\s*decision:\s*BranchDecision\s*\):\s*string[\s\S]*?START_BRANCH_CHOICE_LABELS\[decision\.mode\]\(decision\)/.test(startBranchSource),
+  'Interactive branch fixtures should verify label centralization instead of exact prose labels.',
+);
+
+assert(
+  /label:\s*labelStartBranchChoice\(/.test(interactiveChoicePlannerBody),
+  'Interactive branch choices must derive labels through the centralized label helper.',
+);
 
 assert(
   /currentBranch\s*===\s*defaultBranch[\s\S]*?create-current-branch[\s\S]*?create-worktree/.test(interactiveChoicePlannerBody),
