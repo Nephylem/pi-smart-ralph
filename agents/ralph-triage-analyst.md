@@ -4,7 +4,6 @@ display_name: "Ralph Triage Analyst"
 tools: read, bash, grep, find, ls, edit, write
 extensions: false
 skills: true
-model: sonnet
 thinking: high
 max_turns: 60
 prompt_mode: replace

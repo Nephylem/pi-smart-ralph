@@ -4,7 +4,6 @@ display_name: "Ralph Refactor Specialist"
 tools: read, bash, grep, find, ls, edit, write
 extensions: false
 skills: true
-model: sonnet
 thinking: medium
 max_turns: 50
 prompt_mode: replace

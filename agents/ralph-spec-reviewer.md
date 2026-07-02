@@ -4,7 +4,6 @@ display_name: "Ralph Spec Reviewer"
 tools: read, grep, find, ls
 extensions: false
 skills: true
-model: haiku
 thinking: medium
 max_turns: 40
 prompt_mode: replace

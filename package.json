@@ -1,6 +1,6 @@
 {
   "name": "pi-smart-ralph",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "Pi-native Smart Ralph package for spec-driven development workflows.",
   "license": "MIT",
   "author": {
@@ -24,14 +24,12 @@
     "subagents"
   ],
   "files": [
-    ".pi/README.md",
-    ".pi/agents",
-    ".pi/extensions",
-    ".pi/prompts",
-    ".pi/references",
-    ".pi/skills",
-    ".pi/templates",
-    "docs",
+    "agents",
+    "extensions",
+    "prompts",
+    "references",
+    "skills",
+    "templates",
     "README.md",
     "LICENSE",
     "smart-ralph.png"
@@ -57,13 +55,16 @@
   ],
   "pi": {
     "extensions": [
-      "./.pi/extensions/ralph-specum/index.ts"
+      "./extensions/ralph-specum/index.ts"
     ],
     "skills": [
-      "./.pi/skills"
+      "./skills"
     ],
     "prompts": [
-      "./.pi/prompts"
+      "./prompts"
     ]
+  },
+  "scripts": {
+    "prepack": "node scripts/verify-publish-bundle.mjs"
   }
 }

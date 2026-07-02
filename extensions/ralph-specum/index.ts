@@ -66,10 +66,12 @@ import {
 } from "./epics.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
-const PACKAGE_ROOT = resolve(EXTENSION_DIR, "../../..");
-const PI_ROOT = join(PACKAGE_ROOT, ".pi");
+const PACKAGE_ROOT = resolve(EXTENSION_DIR, "../..");
+const PACKAGE_RESOURCE_ROOT = PACKAGE_ROOT;
 
-const RALPH_EXTENSION_MANIFEST_PATH = "./.pi/extensions/ralph-specum/index.ts";
+const RALPH_EXTENSION_MANIFEST_PATH = "./extensions/ralph-specum/index.ts";
+const RALPH_SKILLS_MANIFEST_PATH = "./skills";
+const RALPH_PROMPTS_MANIFEST_PATH = "./prompts";
 
 const REQUIRED_RUNTIME_PACKAGES = [
 	{
@@ -101,10 +103,10 @@ const REQUIRED_RUNTIME_PACKAGES = [
 
 const REQUIRED_PACKAGE_PATHS = [
 	{ label: "Package manifest", path: join(PACKAGE_ROOT, "package.json"), type: "file" },
-	{ label: "Pi agents directory", path: join(PI_ROOT, "agents"), type: "directory" },
-	{ label: "Pi prompts directory", path: join(PI_ROOT, "prompts"), type: "directory" },
-	{ label: "Pi skills directory", path: join(PI_ROOT, "skills"), type: "directory" },
-	{ label: "Ralph templates directory", path: join(PI_ROOT, "templates"), type: "directory" },
+	{ label: "Ralph agents directory", path: join(PACKAGE_RESOURCE_ROOT, "agents"), type: "directory" },
+	{ label: "Ralph prompts directory", path: join(PACKAGE_RESOURCE_ROOT, "prompts"), type: "directory" },
+	{ label: "Ralph skills directory", path: join(PACKAGE_RESOURCE_ROOT, "skills"), type: "directory" },
+	{ label: "Ralph templates directory", path: join(PACKAGE_RESOURCE_ROOT, "templates"), type: "directory" },
 ] as const;
 
 const EXPECTED_RALPH_AGENTS = [
@@ -123,8 +125,25 @@ const REQUIRED_AGENT_FRONTMATTER_FIELDS = [
 	"description",
 	"display_name",
 	"tools",
-	"model",
 	"prompt_mode",
+] as const;
+
+const RALPH_SUPPORTED_MODEL_PROVIDERS = [
+	{
+		provider: "anthropic",
+		label: "Anthropic subscription/API provider",
+		preferredModels: ["claude-sonnet-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-sonnet", "claude-opus", "claude-haiku"],
+	},
+	{
+		provider: "openai-codex",
+		label: "OpenAI subscription provider",
+		preferredModels: ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
+	},
+	{
+		provider: "github-copilot",
+		label: "GitHub Copilot",
+		preferredModels: ["claude-sonnet", "gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gemini", "claude"],
+	},
 ] as const;
 
 type Check = {
@@ -218,7 +237,7 @@ function piInstallCommand(packageJson: PackageJson | null, packageName: string, 
 }
 
 const RALPH_AGENT_MANAGED_MARKER_PREFIX = "smart-ralph-managed: pi-smart-ralph";
-const RALPH_AGENT_MANAGED_MARKER_RE = /\s*<!-- smart-ralph-managed: pi-smart-ralph; source=\.pi\/agents\/[^;]+; sha256=[a-f0-9]{64} -->\s*$/;
+const RALPH_AGENT_MANAGED_MARKER_RE = /\s*<!-- smart-ralph-managed: pi-smart-ralph; source=(?:\.pi\/)?agents\/[^;]+; sha256=[a-f0-9]{64} -->\s*$/;
 
 type RalphAgentBootstrapConflict = {
 	name: string;
@@ -241,7 +260,7 @@ type RalphAgentBootstrapResult = {
 };
 
 function packageRalphAgentsDir(): string {
-	return join(PI_ROOT, "agents");
+	return join(PACKAGE_RESOURCE_ROOT, "agents");
 }
 
 function projectRalphAgentsDir(cwd: string): string {
@@ -287,7 +306,7 @@ function sameRalphAgentDefinition(left: string, right: string): boolean {
 function managedRalphAgentContent(agentName: string, sourceContent: string): string {
 	const body = stripSmartRalphAgentMarker(sourceContent);
 	const hash = createHash("sha256").update(body).digest("hex");
-	return `${body}\n\n<!-- ${RALPH_AGENT_MANAGED_MARKER_PREFIX}; source=.pi/agents/${agentFileName(agentName)}; sha256=${hash} -->\n`;
+	return `${body}\n\n<!-- ${RALPH_AGENT_MANAGED_MARKER_PREFIX}; source=agents/${agentFileName(agentName)}; sha256=${hash} -->\n`;
 }
 
 function emptyRalphAgentBootstrapResult(cwd: string, refresh: boolean): RalphAgentBootstrapResult {
@@ -421,6 +440,215 @@ function frontmatterFields(content: string): Set<string> | null {
 	return fields;
 }
 
+type RalphModelProviderProfile = (typeof RALPH_SUPPORTED_MODEL_PROVIDERS)[number];
+type RalphModelLike = {
+	provider: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+};
+
+type RalphModelRegistryLike = {
+	getAvailable?: () => unknown[];
+	getAll?: () => unknown[];
+	find?: (provider: string, modelId: string) => unknown;
+};
+
+function isRalphModelLike(value: unknown): value is RalphModelLike {
+	return isRecordValue(value) && typeof value.provider === "string" && typeof value.id === "string";
+}
+
+function normalizeModelText(value: string): string {
+	return value.toLowerCase().replace(/[._]/g, "-");
+}
+
+function ralphModelLabel(model: RalphModelLike): string {
+	return `${model.provider}/${model.id}`;
+}
+
+function currentPiModel(ctx: ExtensionCommandContext): RalphModelLike | null {
+	const model = (ctx as unknown as { model?: unknown }).model;
+	return isRalphModelLike(model) ? model : null;
+}
+
+function modelRegistryFromContext(ctx: ExtensionCommandContext): RalphModelRegistryLike | null {
+	const registry = (ctx as unknown as { modelRegistry?: unknown }).modelRegistry;
+	return isRecordValue(registry) ? registry as RalphModelRegistryLike : null;
+}
+
+function availablePiModels(ctx: ExtensionCommandContext): RalphModelLike[] {
+	const registry = modelRegistryFromContext(ctx);
+	if (!registry) return [];
+
+	let raw: unknown[] = [];
+	try {
+		raw = typeof registry.getAvailable === "function" ? registry.getAvailable() : typeof registry.getAll === "function" ? registry.getAll() : [];
+	} catch {
+		return [];
+	}
+
+	return raw.filter(isRalphModelLike);
+}
+
+function profileForProvider(provider: string): RalphModelProviderProfile | undefined {
+	return RALPH_SUPPORTED_MODEL_PROVIDERS.find((profile) => profile.provider === provider);
+}
+
+function scoreModelForProfile(model: RalphModelLike, profile: RalphModelProviderProfile): number {
+	if (model.provider !== profile.provider) return -1;
+	const id = normalizeModelText(model.id);
+	const name = normalizeModelText(model.name ?? "");
+	let score = model.reasoning ? 20 : 0;
+	for (let index = 0; index < profile.preferredModels.length; index += 1) {
+		const preferred = normalizeModelText(profile.preferredModels[index]);
+		if (id === preferred) return 1000 - index;
+		if (id.includes(preferred)) return 900 - index;
+		if (name.includes(preferred)) return 800 - index;
+	}
+	return score;
+}
+
+function bestModelForProvider(models: RalphModelLike[], provider: string): RalphModelLike | null {
+	const profile = profileForProvider(provider);
+	const candidates = models.filter((model) => model.provider === provider);
+	if (candidates.length === 0) return null;
+	if (!profile) return candidates[0];
+
+	return candidates
+		.map((model) => ({ model, score: scoreModelForProfile(model, profile) }))
+		.sort((left, right) => right.score - left.score || ralphModelLabel(left.model).localeCompare(ralphModelLabel(right.model)))[0]?.model ?? null;
+}
+
+function findModelByQuery(models: RalphModelLike[], query: string): RalphModelLike | null {
+	const trimmed = query.trim();
+	if (!trimmed) return null;
+	const normalized = normalizeModelText(trimmed);
+	const slash = trimmed.indexOf("/");
+
+	if (slash !== -1) {
+		const provider = trimmed.slice(0, slash);
+		const modelId = trimmed.slice(slash + 1);
+		const exact = models.find((model) => model.provider === provider && model.id === modelId);
+		if (exact) return exact;
+	}
+
+	let best: { model: RalphModelLike; score: number } | null = null;
+	for (const model of models) {
+		const label = normalizeModelText(ralphModelLabel(model));
+		const id = normalizeModelText(model.id);
+		const name = normalizeModelText(model.name ?? "");
+		let score = 0;
+		if (label === normalized || id === normalized) score = 100;
+		else if (label.includes(normalized) || id.includes(normalized)) score = 80;
+		else if (name.includes(normalized)) score = 60;
+		if (score > 0 && (!best || score > best.score)) best = { model, score };
+	}
+	return best?.model ?? null;
+}
+
+function providerAvailabilityLines(models: RalphModelLike[]): string[] {
+	return RALPH_SUPPORTED_MODEL_PROVIDERS.map((profile) => {
+		const count = models.filter((model) => model.provider === profile.provider).length;
+		const best = bestModelForProvider(models, profile.provider);
+		return `- ${profile.provider}: ${count > 0 ? `${count} available; recommended ${best ? ralphModelLabel(best) : "<none>"}` : "not authenticated/available"} (${profile.label})`;
+	});
+}
+
+function chooseAutoRalphProvider(ctx: ExtensionCommandContext, models: RalphModelLike[]): string | null {
+	const current = currentPiModel(ctx);
+	if (current && profileForProvider(current.provider) && models.some((model) => model.provider === current.provider)) return current.provider;
+	const available = RALPH_SUPPORTED_MODEL_PROVIDERS.filter((profile) => models.some((model) => model.provider === profile.provider));
+	return available.length === 1 ? available[0].provider : null;
+}
+
+function formatRalphModelStatus(ctx: ExtensionCommandContext): string {
+	const models = availablePiModels(ctx);
+	const current = currentPiModel(ctx);
+	return [
+		"# Ralph Model Mode",
+		"",
+		`Current Pi model: ${current ? ralphModelLabel(current) : "unknown"}`,
+		"Ralph subagents inherit the active Pi model by default; bundled agents do not pin provider-specific `model:` frontmatter.",
+		"",
+		"Supported Pi login providers:",
+		...providerAvailabilityLines(models),
+		"",
+		"Usage:",
+		"- /ralph-model auto                         Select the recommended model for the current/only authenticated supported provider.",
+		"- /ralph-model anthropic                    Select the recommended Anthropic model.",
+		"- /ralph-model openai-codex                 Select the recommended OpenAI subscription model.",
+		"- /ralph-model github-copilot               Select the recommended GitHub Copilot model.",
+		"- /ralph-model <provider>/<model-id>        Select an exact available Pi model.",
+		"- /ralph-model inherit                      Refresh Ralph agents so they inherit the active Pi model.",
+	].join("\n");
+}
+
+async function switchRalphModel(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const token = args.trim();
+	if (!token) {
+		await notify(ctx, formatRalphModelStatus(ctx));
+		return;
+	}
+
+	if (token === "inherit" || token === "current") {
+		const bootstrap = bootstrapRalphAgents(ctx.cwd);
+		await notify(
+			ctx,
+			[
+				"Ralph agents now inherit the active Pi model.",
+				`Current Pi model: ${currentPiModel(ctx) ? ralphModelLabel(currentPiModel(ctx) as RalphModelLike) : "unknown"}`,
+				`Agent bootstrap: ${formatBootstrapSummary(bootstrap)}.`,
+				"Use Pi's /model command any time to change the model Ralph subagents inherit.",
+			].join("\n"),
+			bootstrap.errors.length > 0 || bootstrap.conflicts.length > 0 ? "warning" : "info",
+		);
+		return;
+	}
+
+	const models = availablePiModels(ctx);
+	if (models.length === 0) {
+		await notify(ctx, "No authenticated/available Pi models found. Run /login or set an API key, then retry /ralph-model.", "warning");
+		return;
+	}
+
+	const provider = token === "auto" ? chooseAutoRalphProvider(ctx, models) : profileForProvider(token)?.provider ?? null;
+	if (token === "auto" && !provider) {
+		await notify(ctx, [`Could not choose one provider automatically. Current provider is unsupported or multiple supported providers are available.`, "", ...providerAvailabilityLines(models), "", "Run /ralph-model anthropic, /ralph-model openai-codex, or /ralph-model github-copilot."].join("\n"), "warning");
+		return;
+	}
+
+	const target = provider ? bestModelForProvider(models, provider) : findModelByQuery(models, token);
+	if (!target) {
+		await notify(ctx, [`No available model matched '${token}'.`, "", ...providerAvailabilityLines(models), "", "Use /model or /login to enable more models, then retry /ralph-model."].join("\n"), "warning");
+		return;
+	}
+
+	const setter = (pi as unknown as { setModel?: (model: unknown) => boolean | Promise<boolean> }).setModel;
+	if (typeof setter !== "function") {
+		await notify(ctx, "This Pi version does not expose pi.setModel() to extensions. Use Pi's /model command; Ralph agents inherit the selected model.", "warning");
+		return;
+	}
+
+	const success = await setter.call(pi, target);
+	if (!success) {
+		await notify(ctx, `Pi refused model ${ralphModelLabel(target)}. Authenticate that provider with /login or an API key first.`, "warning");
+		return;
+	}
+
+	const bootstrap = bootstrapRalphAgents(ctx.cwd);
+	await notify(
+		ctx,
+		[
+			`Ralph model switched to ${ralphModelLabel(target)}.`,
+			"Ralph subagents inherit the active Pi model for anthropic, openai-codex, and github-copilot sessions.",
+			`Agent bootstrap: ${formatBootstrapSummary(bootstrap)}.`,
+			"Run /ralph-init for full diagnostics if needed.",
+		].join("\n"),
+		bootstrap.errors.length > 0 || bootstrap.conflicts.length > 0 ? "warning" : "info",
+	);
+}
+
 function getToolRegistryState(pi: ExtensionAPI): ToolRegistryState {
 	const state: ToolRegistryState = {
 		allToolNames: new Set<string>(),
@@ -550,16 +778,16 @@ function validatePackageResources(packageJson: PackageJson | null): CheckSection
 		action: `Add ${RALPH_EXTENSION_MANIFEST_PATH} to package.json pi.extensions.`,
 	});
 	checks.push({
-		label: "Pi manifest includes project skills",
-		ok: manifestIncludes(packageJson?.pi?.skills, "./.pi/skills"),
-		detail: "package.json pi.skills includes ./.pi/skills",
-		action: "Add ./.pi/skills to package.json pi.skills.",
+		label: "Pi manifest includes Ralph skills",
+		ok: manifestIncludes(packageJson?.pi?.skills, RALPH_SKILLS_MANIFEST_PATH),
+		detail: `package.json pi.skills includes ${RALPH_SKILLS_MANIFEST_PATH}`,
+		action: `Add ${RALPH_SKILLS_MANIFEST_PATH} to package.json pi.skills.`,
 	});
 	checks.push({
-		label: "Pi manifest includes project prompts",
-		ok: manifestIncludes(packageJson?.pi?.prompts, "./.pi/prompts"),
-		detail: "package.json pi.prompts includes ./.pi/prompts",
-		action: "Add ./.pi/prompts to package.json pi.prompts.",
+		label: "Pi manifest includes Ralph prompts",
+		ok: manifestIncludes(packageJson?.pi?.prompts, RALPH_PROMPTS_MANIFEST_PATH),
+		detail: `package.json pi.prompts includes ${RALPH_PROMPTS_MANIFEST_PATH}`,
+		action: `Add ${RALPH_PROMPTS_MANIFEST_PATH} to package.json pi.prompts.`,
 	});
 
 	return { title: "Package resources", checks };
@@ -693,7 +921,7 @@ function bootstrapAgentNames(names: string[]): string {
 }
 
 function formatBootstrapSummary(result: RalphAgentBootstrapResult): string {
-	if (result.sourceIsTarget) return "package .pi/agents is already the project discovery directory; no copy needed";
+	if (result.sourceIsTarget) return "package agents directory is already the project discovery directory; no copy needed";
 	return [
 		`copied ${result.copied.length}`,
 		`updated ${result.updated.length}`,
@@ -718,7 +946,7 @@ function validateRalphAgents(cwd: string, bootstrapResult?: RalphAgentBootstrapR
 			detail: bootstrapResult.missingSource.length > 0
 				? `missing bundled agent file(s): ${bootstrapAgentNames(bootstrapResult.missingSource)}`
 				: `${formatPath(bootstrapResult.sourceDir)} contains bundled Ralph agent resources`,
-			action: "Reinstall the Smart Ralph package so bundled .pi/agents/ralph-*.md resources are present.",
+			action: "Reinstall the Smart Ralph package so bundled agents/ralph-*.md resources are present.",
 		});
 		checks.push({
 			label: "Project-local Ralph subagent bootstrap",
@@ -751,6 +979,8 @@ function validateRalphAgents(cwd: string, bootstrapResult?: RalphAgentBootstrapR
 		action: `Run /ralph-init to copy expected files into ${formatProjectPath(agentsDir, cwd)}: ${EXPECTED_RALPH_AGENTS.join(", ")}`,
 	});
 
+	const pinnedModelAgents: string[] = [];
+
 	for (const agentName of EXPECTED_RALPH_AGENTS) {
 		const agentPath = projectRalphAgentPath(cwd, agentName);
 		const exists = pathCheck(agentPath, "file");
@@ -764,6 +994,8 @@ function validateRalphAgents(cwd: string, bootstrapResult?: RalphAgentBootstrapR
 				readError = formatError(error);
 			}
 		}
+
+		if (fields?.has("model")) pinnedModelAgents.push(agentName);
 
 		const missingFields = fields
 			? REQUIRED_AGENT_FRONTMATTER_FIELDS.filter((field) => !fields.has(field))
@@ -785,6 +1017,15 @@ function validateRalphAgents(cwd: string, bootstrapResult?: RalphAgentBootstrapR
 			action: `Run /ralph-init to restore ${formatProjectPath(agentPath, cwd)} with pi-subagents frontmatter fields: ${REQUIRED_AGENT_FRONTMATTER_FIELDS.join(", ")}.`,
 		});
 	}
+
+	checks.push({
+		label: "Ralph subagent model inheritance",
+		ok: pinnedModelAgents.length === 0,
+		detail: pinnedModelAgents.length === 0
+			? "Ralph agents do not pin a provider-specific model; they inherit the active Pi model"
+			: `model: frontmatter still present in ${pinnedModelAgents.join(", ")}`,
+		action: "Run /ralph-init --refresh-agents to replace old provider-pinned Ralph agent files, then switch models with /ralph-model or Pi's /model.",
+	});
 
 	return { title: "Ralph subagents", checks };
 }
@@ -2076,6 +2317,7 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"- /ralph-implement [spec]             Execute tasks.md through Ralph subagents",
 		"- /ralph-switch <spec-name-or-path>  Switch active spec",
 		"- /ralph-cancel [spec-name-or-path]   Clear execution state for a spec",
+		"- /ralph-model [auto|provider|model] Switch Ralph's inherited Pi model profile",
 		"- /ralph-init [--refresh-agents]      Bootstrap/check package tools and project Ralph subagents",
 	);
 
@@ -3421,7 +3663,7 @@ function buildPhasePrompt(
 		`- required artifact: ${artifactPath(spec, definition.phase)}`,
 		`- command: /${definition.commandName}`,
 		"- Write only files inside basePath unless inspecting the codebase.",
-		"- Do not edit legacy Claude/Codex plugin files.",
+		"- Do not edit Smart Ralph package/runtime files unless explicitly listed in the spec.",
 		"- Do not proceed to the next Ralph phase.",
 		"- The coordinator will validate the artifact, ask for normal-mode approval, and set final awaitingApproval state.",
 		"",
@@ -4642,7 +4884,7 @@ function buildImplementationPrompt(
 		`- progressPath: ${progressPath}`,
 		`- statePath: ${getRalphStatePath(spec, options)} (read-only; never edit this file)`,
 		"- Write only files required by the task block unless inspection is needed.",
-		"- Do not edit legacy Claude/Codex plugin files unless they are explicitly listed in the task.",
+		"- Do not edit Smart Ralph package/runtime files unless they are explicitly listed in the task.",
 		"- Never ask the user; report USER_INPUT_REQUIRED or a blocker instead.",
 		"- The coordinator will update native pi-task cards and will not advance without evidence.",
 		"",
@@ -7140,7 +7382,7 @@ function buildTriagePrompt(epic: CurrentEpic, parsed: TriageArguments, goal: str
 		`- required progress artifact: ${files.progressPath}`,
 		`- output: ${parsed.output}`,
 		"- Write only inside basePath unless inspecting the codebase.",
-		"- Do not edit legacy Claude/Codex plugin files.",
+		"- Do not edit Smart Ralph package/runtime files unless explicitly listed in the spec.",
 		"- Do not call gh or create GitHub issues; the coordinator will perform requested GitHub output after validation and confirmation.",
 		"- Produce vertical-slice child specs with kebab-case names and a valid dependency graph.",
 		"- If user input is required, return USER_INPUT_REQUIRED and questions without writing partial final state.",
@@ -7403,10 +7645,16 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"/ralph-status        Show specs across configured roots.",
 					"/ralph-switch        Switch the active spec marker.",
 					"/ralph-cancel        Clear execution state for a spec.",
+					"/ralph-model         Show/switch Ralph's inherited Pi model profile; supports anthropic, openai-codex, github-copilot.",
 					"/ralph-init          Bootstrap/check Pi tools and project Ralph subagents; --refresh-agents overwrites conflicts.",
 				].join("\n"),
 			);
 		},
+	});
+
+	pi.registerCommand("ralph-model", {
+		description: "Show or switch Ralph's inherited Pi model profile across anthropic, openai-codex, and github-copilot",
+		handler: async (args, ctx) => switchRalphModel(pi, args, ctx),
 	});
 
 	pi.registerCommand("ralph-triage", {

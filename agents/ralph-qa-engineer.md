@@ -4,7 +4,6 @@ display_name: "Ralph QA Engineer"
 tools: read, bash, grep, find, ls, edit, write, fetch_content, get_search_content, mcp
 extensions: true
 skills: true
-model: sonnet
 thinking: medium
 max_turns: 60
 prompt_mode: replace

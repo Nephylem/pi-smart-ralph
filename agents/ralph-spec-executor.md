@@ -4,7 +4,6 @@ display_name: "Ralph Spec Executor"
 tools: read, bash, grep, find, ls, edit, write, web_search, fetch_content, get_search_content, mcp
 extensions: true
 skills: true
-model: sonnet
 thinking: medium
 max_turns: 90
 prompt_mode: replace
