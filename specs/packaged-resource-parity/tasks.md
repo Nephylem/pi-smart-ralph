@@ -73,7 +73,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, FR-3, AC-1.1, AC-1.3_
   - _Design: Interfaces, Error Handling_
 
-- [ ] 1.5 [GREEN] Pass v1 shape validation with a valid seed entry
+- [x] 1.5 [GREEN] Pass v1 shape validation with a valid seed entry
   - **Do**:
     1. Replace the invalid placeholder with one valid `deferred` seed entry.
     2. Use source-root-relative `originalPath`, empty `piPath`, allowed `kind`, allowed `status`, and non-empty `notes`.

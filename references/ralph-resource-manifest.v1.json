@@ -1,8 +1,9 @@
 [
   {
-    "originalPath": "",
-    "piPath": 42,
-    "kind": "invalid-kind",
-    "status": "adapted"
+    "originalPath": "commands/ralph-start.md",
+    "piPath": "",
+    "kind": "command",
+    "status": "deferred",
+    "notes": "Seed entry for manifest shape validation; full resource coverage follows in later tasks."
   }
 ]
