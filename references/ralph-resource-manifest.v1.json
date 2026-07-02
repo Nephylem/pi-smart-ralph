@@ -201,20 +201,14 @@
     "status": "copied"
   },
   {
-    "originalPath": "skills/communication-style/SKILL.md",
-    "piPath": "skills/communication-style/SKILL.md",
-    "kind": "skill",
-    "status": "copied"
-  },
-  {
     "originalPath": "skills/communication-style/references/examples.md",
     "piPath": "skills/communication-style/references/examples.md",
     "kind": "skill",
     "status": "copied"
   },
   {
-    "originalPath": "skills/interview-framework/SKILL.md",
-    "piPath": "skills/interview-framework/SKILL.md",
+    "originalPath": "skills/communication-style/SKILL.md",
+    "piPath": "skills/communication-style/SKILL.md",
     "kind": "skill",
     "status": "copied"
   },
@@ -231,8 +225,8 @@
     "status": "copied"
   },
   {
-    "originalPath": "skills/reality-verification/SKILL.md",
-    "piPath": "skills/reality-verification/SKILL.md",
+    "originalPath": "skills/interview-framework/SKILL.md",
+    "piPath": "skills/interview-framework/SKILL.md",
     "kind": "skill",
     "status": "copied"
   },
@@ -249,11 +243,10 @@
     "status": "copied"
   },
   {
-    "originalPath": "skills/smart-ralph/SKILL.md",
-    "piPath": "skills/smart-ralph/SKILL.md",
+    "originalPath": "skills/reality-verification/SKILL.md",
+    "piPath": "skills/reality-verification/SKILL.md",
     "kind": "skill",
-    "status": "adapted",
-    "notes": "Packaged resource is intentionally adapted for Pi-safe wording and package context."
+    "status": "copied"
   },
   {
     "originalPath": "skills/smart-ralph/references/state-file-schema.md",
@@ -262,14 +255,21 @@
     "status": "copied"
   },
   {
-    "originalPath": "skills/spec-workflow/SKILL.md",
-    "piPath": "skills/spec-workflow/SKILL.md",
+    "originalPath": "skills/smart-ralph/SKILL.md",
+    "piPath": "skills/smart-ralph/SKILL.md",
     "kind": "skill",
-    "status": "copied"
+    "status": "adapted",
+    "notes": "Packaged resource is intentionally adapted for Pi-safe wording and package context."
   },
   {
     "originalPath": "skills/spec-workflow/references/phase-transitions.md",
     "piPath": "skills/spec-workflow/references/phase-transitions.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/spec-workflow/SKILL.md",
+    "piPath": "skills/spec-workflow/SKILL.md",
     "kind": "skill",
     "status": "copied"
   },

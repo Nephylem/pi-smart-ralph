@@ -270,7 +270,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, FR-2, FR-3, AC-1.1, AC-1.2, AC-1.3_
   - _Design: `RalphResourceManifestV1` fixture, Data Flow_
 
-- [ ] 3.3 [YELLOW] Normalize manifest ordering and kind classification
+- [x] 3.3 [YELLOW] Normalize manifest ordering and kind classification
   - **Do**:
     1. Sort manifest entries by `originalPath`.
     2. Ensure `templates/prompts/*` entries use `kind: "prompt"`.
