@@ -28,22 +28,36 @@ function formatManifestEntryLabel(index, entry) {
   return `${RESOURCE_MANIFEST_PATH}[${index}] originalPath=${originalPath}`;
 }
 
-function hasPackageResourceFile(directoryPath) {
+function hasPackageResourceFile(directoryPath, ignoredFileNames = new Set()) {
   if (!existsSync(directoryPath)) return false;
 
   for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
     const entryPath = join(directoryPath, entry.name);
-    if (entry.isDirectory() && hasPackageResourceFile(entryPath)) return true;
-    if (entry.isFile() && entry.name !== '.gitkeep') return true;
+    if (entry.isDirectory() && hasPackageResourceFile(entryPath, ignoredFileNames)) return true;
+    if (entry.isFile() && entry.name !== '.gitkeep' && !ignoredFileNames.has(entry.name)) return true;
   }
 
   return false;
 }
 
-function validatePackageResourceRoot(relativePath) {
-  if (!hasPackageResourceFile(join(root, relativePath))) {
-    failures.push(`${relativePath}/ must contain at least one packaged resource file besides .gitkeep`);
+function validatePackageResourceRoot(relativePath, options = {}) {
+  const ignoredFileNames = options.ignoredFileNames ?? new Set();
+  const ignoredFiles = [...ignoredFileNames].sort().map((name) => name === '.gitkeep' ? name : `the ${name}`).join(' and ');
+  if (!hasPackageResourceFile(join(root, relativePath), ignoredFileNames)) {
+    failures.push(`${relativePath}/ must contain at least one packaged resource file besides ${ignoredFiles || '.gitkeep'}`);
   }
+}
+
+function validateDirectoryExists(relativePath) {
+  const fullPath = join(root, relativePath);
+  let existsAsDirectory = false;
+  try {
+    existsAsDirectory = existsSync(fullPath) && readdirSync(fullPath, { withFileTypes: true }) !== undefined;
+  } catch {
+    existsAsDirectory = false;
+  }
+
+  if (!existsAsDirectory) failures.push(`${relativePath}/ directory must exist`);
 }
 
 function validateResourceManifest() {
@@ -127,6 +141,10 @@ for (const file of requiredFiles) {
 validateResourceManifest();
 validatePackageResourceRoot('templates');
 validatePackageResourceRoot('prompts');
+validatePackageResourceRoot('references', {
+  ignoredFileNames: new Set(['.gitkeep', 'ralph-resource-manifest.v1.json']),
+});
+validateDirectoryExists('references/original-commands');
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {

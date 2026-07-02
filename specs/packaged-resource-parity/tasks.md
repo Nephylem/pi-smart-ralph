@@ -143,7 +143,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-5, FR-13, AC-2.1, AC-4.2_
   - _Design: Prompt resources, Security Considerations_
 
-- [ ] C2 [VERIFY] Quality check: prepack after templates and prompts
+- [x] C2 [VERIFY] Quality check: prepack after templates and prompts
   - **Do**:
     1. Run the discovered package verification command from `research.md` Quality Commands.
   - **Files**: None
@@ -153,7 +153,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-4_
   - _Design: Prepack verifier_
 
-- [ ] 2.5 [RED] Failing verifier: references root must contain workflow references
+- [x] 2.5 [RED] Failing verifier: references root must contain workflow references
   - **Do**:
     1. Add a prepack check that `references/` contains package files beyond `.gitkeep` and the manifest.
     2. Require the non-executable original command archive directory `references/original-commands/` to exist.
