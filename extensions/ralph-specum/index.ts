@@ -64,6 +64,7 @@ import {
 	type EpicState,
 	type SafeEpicStateRead,
 } from "./epics.ts";
+import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
@@ -3183,6 +3184,13 @@ async function runStartCommand(
 	});
 	if (branchDecision.aborted) {
 		await notify(ctx, branchDecision.reason, "warning");
+		return;
+	}
+
+	try {
+		ensureRalphGitignore(options.cwd);
+	} catch (error) {
+		await notify(ctx, `Failed to update Ralph .gitignore entries: ${formatError(error)}`, "warning");
 		return;
 	}
 

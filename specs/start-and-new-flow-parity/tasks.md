@@ -297,7 +297,7 @@
   - _Requirements: FR-10, NFR-3, AC-4.1, AC-4.2, AC-4.3_
   - _Design: Gitignore updater_
 
-- [ ] 2.11 [GREEN] Pass smoke: implement idempotent `.gitignore` updater
+- [x] 2.11 [GREEN] Pass smoke: implement idempotent `.gitignore` updater
   - **Do**:
     1. Create `gitignore.ts` with an updater that creates `.gitignore` when missing.
     2. Append missing required Ralph patterns without deleting or reordering existing entries.
