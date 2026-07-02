@@ -29,7 +29,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, AC-1.1_
   - _Design: `RalphResourceManifestV1` fixture, Prepack verifier_
 
-- [ ] 1.2 [GREEN] Pass manifest presence check with an empty fixture
+- [x] 1.2 [GREEN] Pass manifest presence check with an empty fixture
   - **Do**:
     1. Create `references/ralph-resource-manifest.v1.json` as a valid empty JSON array.
     2. Keep the file under the package-included `references/` root.
