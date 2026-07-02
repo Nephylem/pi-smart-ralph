@@ -275,7 +275,7 @@
   - _Requirements: FR-6, FR-11, NFR-1, AC-5.2_
   - _Design: Security Considerations; Test Strategy_
 
-- [ ] Q5 [VERIFY] Quality check: headless branch package verification
+- [x] Q5 [VERIFY] Quality check: headless branch package verification
   - **Do**:
     1. Run package verification after quick/autonomous branch changes.
   - **Files**: None
@@ -285,7 +285,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 2.10 [RED] Failing smoke: Ralph `.gitignore` entries are idempotent
+- [x] 2.10 [RED] Failing smoke: Ralph `.gitignore` entries are idempotent
   - **Do**:
     1. Add smoke fixtures for missing `.gitignore`, existing `.gitignore`, and two repeated updater runs.
     2. Assert required patterns are `specs/.current-spec`, `specs/.current-epic`, `**/.progress.md`, and `**/.ralph-state.json`.

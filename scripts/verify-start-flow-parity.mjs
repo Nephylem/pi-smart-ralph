@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const root = process.cwd();
 const extensionPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
 const startBranchPath = join(root, 'extensions', 'ralph-specum', 'start-branch.ts');
+const gitignorePath = join(root, 'extensions', 'ralph-specum', 'gitignore.ts');
 const source = readFileSync(extensionPath, 'utf8');
 const startBranchSource = readFileSync(startBranchPath, 'utf8');
+const gitignoreSource = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
 const quietForPackJson = process.env.npm_command === 'pack';
 
 const failures = [];
@@ -602,6 +604,89 @@ for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGi
     `Headless branch safety generated git commands must not include destructive operation matching ${destructivePattern}.`,
   );
 }
+
+const requiredRalphGitignorePatterns = [
+  'specs/.current-spec',
+  'specs/.current-epic',
+  '**/.progress.md',
+  '**/.ralph-state.json',
+];
+
+const gitignoreIdempotencySmokeFixtures = [
+  {
+    label: 'missing .gitignore',
+    initialEntries: [],
+    runs: 1,
+    expectedEntries: requiredRalphGitignorePatterns,
+  },
+  {
+    label: 'existing .gitignore preserves unrelated entries',
+    initialEntries: ['node_modules/', 'dist/'],
+    runs: 1,
+    expectedEntries: ['node_modules/', 'dist/', ...requiredRalphGitignorePatterns],
+  },
+  {
+    label: 'two repeated updater runs do not duplicate Ralph entries',
+    initialEntries: ['node_modules/', 'specs/.current-spec'],
+    runs: 2,
+    expectedEntries: ['node_modules/', ...requiredRalphGitignorePatterns],
+  },
+];
+
+function formatGitignoreDiagnostic(smokeCase, reason) {
+  return `Ralph gitignore idempotency smoke failed for ${smokeCase.label}: ${reason}`;
+}
+
+for (const pattern of requiredRalphGitignorePatterns) {
+  assert(
+    gitignoreSource.includes(pattern),
+    `Ralph gitignore updater must include required pattern ${pattern}.`,
+  );
+}
+
+for (const smokeCase of gitignoreIdempotencySmokeFixtures) {
+  assert(
+    smokeCase.runs === 1 || smokeCase.runs === 2,
+    formatGitignoreDiagnostic(smokeCase, 'fixture must exercise one or two updater runs'),
+  );
+  for (const expectedEntry of smokeCase.expectedEntries) {
+    assert(
+      smokeCase.expectedEntries.indexOf(expectedEntry) === smokeCase.expectedEntries.lastIndexOf(expectedEntry),
+      formatGitignoreDiagnostic(smokeCase, `expected entries must not duplicate ${expectedEntry}`),
+    );
+  }
+  for (const unrelatedEntry of smokeCase.initialEntries.filter((entry) => !requiredRalphGitignorePatterns.includes(entry))) {
+    assert(
+      smokeCase.expectedEntries.indexOf(unrelatedEntry) === smokeCase.initialEntries.indexOf(unrelatedEntry),
+      formatGitignoreDiagnostic(smokeCase, `unrelated existing entry ${unrelatedEntry} must be preserved in order`),
+    );
+  }
+}
+
+assert(
+  /export\s+const\s+REQUIRED_RALPH_GITIGNORE_PATTERNS\s*=\s*\[[\s\S]*?specs\/\.current-spec[\s\S]*?specs\/\.current-epic[\s\S]*?\*\*\/\.progress\.md[\s\S]*?\*\*\/\.ralph-state\.json[\s\S]*?\]/.test(gitignoreSource),
+  'Ralph gitignore updater must centralize required ignore patterns in the required order.',
+);
+
+assert(
+  /export\s+function\s+ensureRalphGitignore\s*\(/.test(gitignoreSource),
+  'Ralph gitignore updater must expose ensureRalphGitignore for start/new kickoff.',
+);
+
+assert(
+  /existsSync\(gitignorePath\)[\s\S]*?writeFileSync\(gitignorePath/.test(gitignoreSource),
+  'Ralph gitignore updater must create a missing .gitignore with required patterns.',
+);
+
+assert(
+  /existingEntries[\s\S]*?includes\(pattern\)[\s\S]*?missingPatterns/.test(gitignoreSource),
+  'Ralph gitignore updater must append only missing Ralph patterns to remain idempotent across repeated runs.',
+);
+
+assert(
+  /existingEntries[\s\S]*?\.\.\.existingEntries[\s\S]*?\.\.\.missingPatterns/.test(gitignoreSource),
+  'Ralph gitignore updater must preserve unrelated existing entries before appended Ralph patterns.',
+);
 
 if (failures.length > 0) {
   console.error('START_FLOW_PARITY_RED');
