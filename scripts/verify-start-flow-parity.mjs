@@ -209,34 +209,58 @@ const phaseParitySmokeCases = [
   },
 ];
 
+function formatPhaseSmokeDiagnostic(smokeCase, reason) {
+  return `Phase parity smoke failed for command=${smokeCase.command} args=${JSON.stringify(smokeCase.args)} expectedPhase=${smokeCase.expectedPhase}: ${reason}`;
+}
+
+function matchingPhaseSmokeCase(commandName, skipResearch, expectedPhase) {
+  return phaseParitySmokeCases.find(
+    (smokeCase) =>
+      smokeCase.command === commandName &&
+      smokeCase.skipResearch === skipResearch &&
+      smokeCase.expectedPhase === expectedPhase,
+  );
+}
+
+const phaseSmokeSummary = phaseParitySmokeCases
+  .map((smokeCase) => `${smokeCase.command} ${JSON.stringify(smokeCase.args)} -> ${smokeCase.expectedPhase}`)
+  .join('; ');
+
 for (const commandName of ['ralph-start', 'ralph-new']) {
   for (const skipResearch of [false, true]) {
     const expectedPhase = skipResearch ? 'requirements' : 'research';
+    const expectedCase = {
+      command: commandName,
+      args: skipResearch ? 'phase-skip --skip-research Start with requirements' : 'phase-default Start with research',
+      expectedPhase,
+    };
     assert(
-      phaseParitySmokeCases.some(
-        (smokeCase) =>
-          smokeCase.command === commandName &&
-          smokeCase.skipResearch === skipResearch &&
-          smokeCase.expectedPhase === expectedPhase,
-      ),
-      `${commandName} phase parity smoke must cover skipResearch=${skipResearch} producing phase ${expectedPhase}.`,
+      Boolean(matchingPhaseSmokeCase(commandName, skipResearch, expectedPhase)),
+      formatPhaseSmokeDiagnostic(expectedCase, `missing table case for skipResearch=${skipResearch}`),
     );
   }
 }
 
+for (const smokeCase of phaseParitySmokeCases) {
+  assert(
+    typeof smokeCase.args === 'string' && smokeCase.args.length > 0,
+    formatPhaseSmokeDiagnostic(smokeCase, 'args must be a non-empty deterministic fixture string'),
+  );
+}
+
 assert(
   /function\s+determineStartPhase\([\s\S]*?if\s*\(isNew\)\s*return\s+parsed\.skipResearch\s*\?\s*["']requirements["']\s*:\s*["']research["']/.test(source),
-  'New specs must resolve phase from --skip-research: requirements when set, research by default.',
+  `Phase parity resolver must support deterministic smoke cases (${phaseSmokeSummary}).`,
 );
 
 assert(
   /const\s+phase\s*=\s*determineStartPhase\(\s*spec\s*,\s*stateRead\.state\s*,\s*parsed\s*,\s*resolved\.target\.isNew\s*\)[\s\S]*?startStatePatch\(\s*spec\s*,\s*parsed\s*,\s*phase\s*,\s*stateRead\.state\s*\)/.test(source),
-  'runStartCommand must feed the resolved skip-research phase into the shared start/new state patch.',
+  `Phase parity state patch must receive the resolved phase for smoke cases (${phaseSmokeSummary}).`,
 );
 
 assert(
   /startCompatibility\s*:\s*\{[\s\S]*?command:\s*invocation\.command[\s\S]*?aliasOf:\s*invocation\.aliasOf[\s\S]*?statePatch:\s*\{[\s\S]*?phase\s*,/.test(source),
-  'Start/new phase parity must be observable in startCompatibility.statePatch.phase for both invocation names.',
+  `Phase parity diagnostics require startCompatibility.statePatch.phase for smoke cases (${phaseSmokeSummary}).`,
 );
 
 if (failures.length > 0) {

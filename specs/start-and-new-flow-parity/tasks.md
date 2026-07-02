@@ -124,7 +124,7 @@
   - _Requirements: FR-2, FR-12, AC-1.3_
   - _Design: Shared start coordinator; Error Handling_
 
-- [ ] 1.9 [YELLOW] Refactor phase parity smoke diagnostics
+- [x] 1.9 [YELLOW] Refactor phase parity smoke diagnostics
   - **Do**:
     1. Improve smoke verifier failure messages to name the command, args, and expected phase.
     2. Keep diagnostics deterministic and free of environment-specific paths.
