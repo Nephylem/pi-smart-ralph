@@ -3065,7 +3065,12 @@ function ensureEpicProgressContext(spec: SpecEntry, context: EpicStartContext, o
 	return getProgressPath(spec, options);
 }
 
-async function runStartCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function runStartCommand(
+	pi: ExtensionAPI,
+	args: string,
+	ctx: ExtensionCommandContext,
+	_invocation: { command: "ralph-start" | "ralph-new"; aliasOf?: "ralph-start" } = { command: "ralph-start" },
+): Promise<void> {
 	await ctx.waitForIdle();
 	const options = pathOptions(ctx);
 	const parsed = parseStartArgs(args);
@@ -7906,7 +7911,13 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	pi.registerCommand("ralph-start", {
 		description: "Create/resume a Ralph spec; --quick reviews artifacts and implements",
 		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => runStartCommand(pi, args, ctx),
+		handler: async (args, ctx) => runStartCommand(pi, args, ctx, { command: "ralph-start" }),
+	});
+
+	pi.registerCommand("ralph-new", {
+		description: "Compatibility alias for /ralph-start",
+		getArgumentCompletions: startArgumentCompletions,
+		handler: async (args, ctx) => runStartCommand(pi, args, ctx, { command: "ralph-new", aliasOf: "ralph-start" }),
 	});
 
 	pi.registerCommand("ralph-research", {

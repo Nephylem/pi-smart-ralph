@@ -20,7 +20,7 @@
   - _Requirements: FR-1, AC-1.1_
   - _Design: Pi command registration; Smoke verification script_
 
-- [ ] 1.2 [GREEN] Pass smoke: register `/ralph-new` through the shared start runner
+- [x] 1.2 [GREEN] Pass smoke: register `/ralph-new` through the shared start runner
   - **Do**:
     1. Update `ralph-start` registration to pass `{ command: "ralph-start" }` into a shared start runner.
     2. Register `ralph-new` with shared completions and `{ command: "ralph-new", aliasOf: "ralph-start" }` invocation metadata.
