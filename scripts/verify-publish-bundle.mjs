@@ -7,6 +7,27 @@ const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 const failures = [];
 
+const RESOURCE_MANIFEST_PATH = 'references/ralph-resource-manifest.v1.json';
+const RESOURCE_MANIFEST_FULL_PATH = join(root, RESOURCE_MANIFEST_PATH);
+
+function parseJsonFile(filePath, label) {
+  try {
+    return JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch (error) {
+    failures.push(`${label} must parse as JSON: ${error.message}`);
+    return undefined;
+  }
+}
+
+function validateResourceManifest() {
+  if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return;
+
+  const resourceManifest = parseJsonFile(RESOURCE_MANIFEST_FULL_PATH, RESOURCE_MANIFEST_PATH);
+  if (resourceManifest !== undefined && !Array.isArray(resourceManifest)) {
+    failures.push(`${RESOURCE_MANIFEST_PATH} must contain a top-level JSON array`);
+  }
+}
+
 const expectedManifest = {
   extensions: './extensions/ralph-specum/index.ts',
   skills: './skills',
@@ -32,25 +53,14 @@ const requiredFiles = [
   'agents/ralph-spec-executor.md',
   'agents/ralph-task-planner.md',
   'agents/ralph-triage-analyst.md',
-  'references/ralph-resource-manifest.v1.json',
+  RESOURCE_MANIFEST_PATH,
 ];
 
 for (const file of requiredFiles) {
   if (!existsSync(join(root, file))) failures.push(`missing package resource: ${file}`);
 }
 
-const resourceManifestPath = 'references/ralph-resource-manifest.v1.json';
-const resourceManifestFullPath = join(root, resourceManifestPath);
-if (existsSync(resourceManifestFullPath)) {
-  try {
-    const resourceManifest = JSON.parse(readFileSync(resourceManifestFullPath, 'utf8'));
-    if (!Array.isArray(resourceManifest)) {
-      failures.push(`${resourceManifestPath} must contain a top-level JSON array`);
-    }
-  } catch (error) {
-    failures.push(`${resourceManifestPath} must parse as JSON: ${error.message}`);
-  }
-}
+validateResourceManifest();
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {

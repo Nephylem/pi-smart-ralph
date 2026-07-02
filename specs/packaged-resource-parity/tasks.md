@@ -40,7 +40,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, AC-1.1_
   - _Design: `RalphResourceManifestV1` fixture, File Structure_
 
-- [ ] 1.3 [YELLOW] Refactor manifest verifier helpers
+- [x] 1.3 [YELLOW] Refactor manifest verifier helpers
   - **Do**:
     1. Extract manifest path constants and JSON parsing helpers inside `scripts/verify-publish-bundle.mjs`.
     2. Ensure parse failures include the manifest path in the aggregated failure item.
