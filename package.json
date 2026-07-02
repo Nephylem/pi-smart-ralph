@@ -64,7 +64,7 @@
     ]
   },
   "scripts": {
-    "prepack": "node scripts/verify-publish-bundle.mjs",
+    "prepack": "node scripts/verify-start-flow-parity.mjs && node scripts/verify-publish-bundle.mjs",
     "verify:pack": "node scripts/verify-pack-dry-run.mjs"
   }
 }
