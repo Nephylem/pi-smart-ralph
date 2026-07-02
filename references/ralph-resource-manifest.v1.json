@@ -1,9 +1,350 @@
 [
   {
-    "originalPath": "commands/ralph-start.md",
-    "piPath": "",
+    "originalPath": "commands/cancel.md",
+    "piPath": "references/original-commands/cancel.md",
     "kind": "command",
-    "status": "deferred",
-    "notes": "Seed entry for manifest shape validation; full resource coverage follows in later tasks."
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/design.md",
+    "piPath": "references/original-commands/design.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/feedback.md",
+    "piPath": "references/original-commands/feedback.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/help.md",
+    "piPath": "references/original-commands/help.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/implement.md",
+    "piPath": "references/original-commands/implement.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/index.md",
+    "piPath": "references/original-commands/index.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/new.md",
+    "piPath": "references/original-commands/new.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/refactor.md",
+    "piPath": "references/original-commands/refactor.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/requirements.md",
+    "piPath": "references/original-commands/requirements.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/research.md",
+    "piPath": "references/original-commands/research.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/start.md",
+    "piPath": "references/original-commands/start.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/status.md",
+    "piPath": "references/original-commands/status.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/switch.md",
+    "piPath": "references/original-commands/switch.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/tasks.md",
+    "piPath": "references/original-commands/tasks.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "commands/triage.md",
+    "piPath": "references/original-commands/triage.md",
+    "kind": "command",
+    "status": "renamed",
+    "notes": "Original command markdown is packaged as a non-executable reference archive; Pi command behavior remains implemented by the extension."
+  },
+  {
+    "originalPath": "references/branch-management.md",
+    "piPath": "references/branch-management.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/commit-discipline.md",
+    "piPath": "references/commit-discipline.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/coordinator-pattern.md",
+    "piPath": "references/coordinator-pattern.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/failure-recovery.md",
+    "piPath": "references/failure-recovery.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/goal-interview.md",
+    "piPath": "references/goal-interview.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/intent-classification.md",
+    "piPath": "references/intent-classification.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/parallel-research.md",
+    "piPath": "references/parallel-research.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/phase-rules.md",
+    "piPath": "references/phase-rules.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/quality-checkpoints.md",
+    "piPath": "references/quality-checkpoints.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/quality-commands.md",
+    "piPath": "references/quality-commands.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/quick-mode.md",
+    "piPath": "references/quick-mode.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/sizing-rules.md",
+    "piPath": "references/sizing-rules.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/spec-scanner.md",
+    "piPath": "references/spec-scanner.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/triage-flow.md",
+    "piPath": "references/triage-flow.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "references/verification-layers.md",
+    "piPath": "references/verification-layers.md",
+    "kind": "reference",
+    "status": "copied"
+  },
+  {
+    "originalPath": "schemas/spec.schema.json",
+    "piPath": "schemas/spec.schema.json",
+    "kind": "schema",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/communication-style/SKILL.md",
+    "piPath": "skills/communication-style/SKILL.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/communication-style/references/examples.md",
+    "piPath": "skills/communication-style/references/examples.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/interview-framework/SKILL.md",
+    "piPath": "skills/interview-framework/SKILL.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/interview-framework/references/algorithm.md",
+    "piPath": "skills/interview-framework/references/algorithm.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/interview-framework/references/examples.md",
+    "piPath": "skills/interview-framework/references/examples.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/reality-verification/SKILL.md",
+    "piPath": "skills/reality-verification/SKILL.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/reality-verification/references/goal-detection-patterns.md",
+    "piPath": "skills/reality-verification/references/goal-detection-patterns.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/reality-verification/references/mock-quality-checks.md",
+    "piPath": "skills/reality-verification/references/mock-quality-checks.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/smart-ralph/SKILL.md",
+    "piPath": "skills/smart-ralph/SKILL.md",
+    "kind": "skill",
+    "status": "adapted",
+    "notes": "Packaged resource is intentionally adapted for Pi-safe wording and package context."
+  },
+  {
+    "originalPath": "skills/smart-ralph/references/state-file-schema.md",
+    "piPath": "skills/smart-ralph/references/state-file-schema.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/spec-workflow/SKILL.md",
+    "piPath": "skills/spec-workflow/SKILL.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "skills/spec-workflow/references/phase-transitions.md",
+    "piPath": "skills/spec-workflow/references/phase-transitions.md",
+    "kind": "skill",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/component-spec.md",
+    "piPath": "templates/component-spec.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/design.md",
+    "piPath": "templates/design.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/epic.md",
+    "piPath": "templates/epic.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/external-spec.md",
+    "piPath": "templates/external-spec.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/index-summary.md",
+    "piPath": "templates/index-summary.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/progress.md",
+    "piPath": "templates/progress.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/prompts/executor-prompt.md",
+    "piPath": "prompts/executor-prompt.md",
+    "kind": "prompt",
+    "status": "renamed",
+    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption."
+  },
+  {
+    "originalPath": "templates/prompts/research-prompt.md",
+    "piPath": "prompts/research-prompt.md",
+    "kind": "prompt",
+    "status": "renamed",
+    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption."
+  },
+  {
+    "originalPath": "templates/requirements.md",
+    "piPath": "templates/requirements.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/research.md",
+    "piPath": "templates/research.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/settings-template.md",
+    "piPath": "templates/settings-template.md",
+    "kind": "template",
+    "status": "copied"
+  },
+  {
+    "originalPath": "templates/tasks.md",
+    "piPath": "templates/tasks.md",
+    "kind": "template",
+    "status": "copied"
   }
 ]

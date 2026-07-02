@@ -257,7 +257,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-2, FR-9, AC-1.2, AC-3.1_
   - _Design: Data Flow, Error Handling_
 
-- [ ] 3.2 [GREEN] Populate complete RalphResourceManifestV1 coverage
+- [x] 3.2 [GREEN] Populate complete RalphResourceManifestV1 coverage
   - **Do**:
     1. Replace the seed manifest with one entry per original command/template/reference/skill/schema file.
     2. Map original commands to `references/original-commands/` entries.
