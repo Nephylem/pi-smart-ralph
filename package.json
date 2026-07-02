@@ -1,0 +1,69 @@
+{
+  "name": "pi-smart-ralph",
+  "version": "0.1.1",
+  "description": "Pi-native Smart Ralph package for spec-driven development workflows.",
+  "license": "MIT",
+  "author": {
+    "name": "nephyyy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nephylem/pi-smart-ralph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Nephylem/pi-smart-ralph/issues"
+  },
+  "homepage": "https://github.com/Nephylem/pi-smart-ralph#readme",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "smart-ralph",
+    "ralph",
+    "spec-driven",
+    "tasks",
+    "subagents"
+  ],
+  "files": [
+    ".pi/README.md",
+    ".pi/agents",
+    ".pi/extensions",
+    ".pi/prompts",
+    ".pi/references",
+    ".pi/skills",
+    ".pi/templates",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "smart-ralph.png"
+  ],
+  "publishConfig": {
+    "tag": "beta",
+    "access": "public"
+  },
+  "dependencies": {
+    "@tintinweb/pi-subagents": "0.13.0",
+    "@tintinweb/pi-tasks": "0.7.1",
+    "pi-mcp-adapter": "2.10.0",
+    "pi-web-access": "0.13.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "bundledDependencies": [
+    "@tintinweb/pi-subagents",
+    "@tintinweb/pi-tasks",
+    "pi-mcp-adapter",
+    "pi-web-access"
+  ],
+  "pi": {
+    "extensions": [
+      "./.pi/extensions/ralph-specum/index.ts"
+    ],
+    "skills": [
+      "./.pi/skills"
+    ],
+    "prompts": [
+      "./.pi/prompts"
+    ]
+  }
+}

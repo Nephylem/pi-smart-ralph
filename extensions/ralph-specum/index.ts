@@ -1,0 +1,7826 @@
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+	findSpec,
+	getCurrentSpecFilePath,
+	getSpecRoots,
+	isPathReference,
+	listSpecs,
+	readCurrentSpecValue,
+	resolveCurrentSpec,
+	specEntryFromAbsolutePath,
+	SpecResolutionError,
+	writeCurrentSpec,
+	type RalphPathOptions,
+	type SpecEntry,
+	type SpecRoot,
+} from "./paths.ts";
+import {
+	appendProgress,
+	getProgressPath,
+	getRalphStatePath,
+	mergeRalphState,
+	readProgress,
+	readRalphState,
+	writeProgress,
+	type RalphState,
+} from "./state.ts";
+import {
+	createOrUpdateChildSpecIssue,
+	createOrUpdateEpicIssue,
+	detectGithub,
+	RALPH_GITHUB_METADATA_SCHEMA_VERSION,
+	RALPH_GITHUB_METADATA_TOOL,
+	type GithubDetection,
+	type GithubIssueSyncResult,
+	type GithubRepository,
+} from "./github.ts";
+import {
+	clearCurrentEpic,
+	completeEpicChildSpec,
+	computeEpicDependencyStatus,
+	deriveEpicStatus,
+	EPIC_SCHEMA_VERSION,
+	getEpicStatePath,
+	listEpics,
+	readCurrentEpic,
+	readCurrentEpicName,
+	resolveEpicDirectory,
+	safeReadEpicState,
+	startEpicChildSpec,
+	validateEpicState,
+	writeCurrentEpic,
+	writeEpicState,
+	type CurrentEpic,
+	type EpicChildSpec,
+	type EpicChildSpecStatus,
+	type EpicInterfaceContract,
+	type EpicSpecDependencyStatus,
+	type EpicState,
+	type SafeEpicStateRead,
+} from "./epics.ts";
+
+const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = resolve(EXTENSION_DIR, "../../..");
+const PI_ROOT = join(PACKAGE_ROOT, ".pi");
+
+const RALPH_EXTENSION_MANIFEST_PATH = "./.pi/extensions/ralph-specum/index.ts";
+
+const REQUIRED_RUNTIME_PACKAGES = [
+	{
+		name: "@tintinweb/pi-subagents",
+		version: "0.13.0",
+		resourcePath: join(PACKAGE_ROOT, "node_modules", "@tintinweb", "pi-subagents", "src", "index.ts"),
+		tools: ["Agent"],
+	},
+	{
+		name: "@tintinweb/pi-tasks",
+		version: "0.7.1",
+		resourcePath: join(PACKAGE_ROOT, "node_modules", "@tintinweb", "pi-tasks", "src", "index.ts"),
+		tools: ["TaskCreate", "TaskUpdate", "TaskExecute"],
+	},
+	{
+		name: "pi-mcp-adapter",
+		version: "2.10.0",
+		resourcePath: join(PACKAGE_ROOT, "node_modules", "pi-mcp-adapter", "index.ts"),
+		tools: ["mcp"],
+	},
+	{
+		name: "pi-web-access",
+		version: "0.13.0",
+		resourcePath: join(PACKAGE_ROOT, "node_modules", "pi-web-access", "index.ts"),
+		tools: ["web_search", "fetch_content", "get_search_content"],
+		optionalSkillResourcePath: join(PACKAGE_ROOT, "node_modules", "pi-web-access", "skills"),
+	},
+] as const;
+
+const REQUIRED_PACKAGE_PATHS = [
+	{ label: "Package manifest", path: join(PACKAGE_ROOT, "package.json"), type: "file" },
+	{ label: "Pi agents directory", path: join(PI_ROOT, "agents"), type: "directory" },
+	{ label: "Pi prompts directory", path: join(PI_ROOT, "prompts"), type: "directory" },
+	{ label: "Pi skills directory", path: join(PI_ROOT, "skills"), type: "directory" },
+	{ label: "Ralph templates directory", path: join(PI_ROOT, "templates"), type: "directory" },
+] as const;
+
+const EXPECTED_RALPH_AGENTS = [
+	"ralph-research-analyst.md",
+	"ralph-product-manager.md",
+	"ralph-architect-reviewer.md",
+	"ralph-task-planner.md",
+	"ralph-spec-executor.md",
+	"ralph-qa-engineer.md",
+	"ralph-refactor-specialist.md",
+	"ralph-spec-reviewer.md",
+	"ralph-triage-analyst.md",
+] as const;
+
+const REQUIRED_AGENT_FRONTMATTER_FIELDS = [
+	"description",
+	"display_name",
+	"tools",
+	"model",
+	"prompt_mode",
+] as const;
+
+type Check = {
+	label: string;
+	ok: boolean;
+	detail: string;
+	action?: string;
+};
+
+type CheckSection = {
+	title: string;
+	checks: Check[];
+};
+
+type ValidationReport = {
+	ready: boolean;
+	sections: CheckSection[];
+	installCommands: string[];
+};
+
+type PackageJson = {
+	name?: string;
+	version?: string;
+	pi?: { extensions?: string[]; skills?: string[]; prompts?: string[] };
+	dependencies?: Record<string, string>;
+	bundledDependencies?: string[];
+	bundleDependencies?: string[];
+};
+
+type ToolRegistryState = {
+	allToolNames: Set<string>;
+	activeToolNames: Set<string>;
+	allToolDetails: Map<string, string>;
+	allError?: string;
+	activeError?: string;
+};
+
+function readPackageJson(): PackageJson | null {
+	const packageJsonPath = join(PACKAGE_ROOT, "package.json");
+	if (!existsSync(packageJsonPath)) return null;
+
+	try {
+		return JSON.parse(readFileSync(packageJsonPath, "utf8")) as PackageJson;
+	} catch {
+		return null;
+	}
+}
+
+function formatPathFromRoot(path: string, root: string): string {
+	const rel = relative(root, path);
+	return rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : path;
+}
+
+function formatPath(path: string): string {
+	return formatPathFromRoot(path, PACKAGE_ROOT);
+}
+
+function formatProjectPath(path: string, cwd: string): string {
+	return formatPathFromRoot(path, resolve(cwd));
+}
+
+function pathCheck(path: string, type: "file" | "directory"): boolean {
+	try {
+		const stat = statSync(path);
+		return type === "file" ? stat.isFile() : stat.isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function formatError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function manifestIncludes(values: string[] | undefined, expected: string): boolean {
+	return Boolean(values?.includes(expected));
+}
+
+function bundledDependencies(packageJson: PackageJson | null): string[] {
+	return [...(packageJson?.bundledDependencies ?? []), ...(packageJson?.bundleDependencies ?? [])];
+}
+
+function declaredVersion(packageJson: PackageJson | null, packageName: string, fallback: string): string {
+	const declared = packageJson?.dependencies?.[packageName];
+	if (!declared || declared.startsWith("file:") || declared.startsWith("workspace:")) return fallback;
+	return declared.replace(/^[~^]/, "");
+}
+
+function piInstallCommand(packageJson: PackageJson | null, packageName: string, fallbackVersion: string): string {
+	return `pi install npm:${packageName}@${declaredVersion(packageJson, packageName, fallbackVersion)}`;
+}
+
+const RALPH_AGENT_MANAGED_MARKER_PREFIX = "smart-ralph-managed: pi-smart-ralph";
+const RALPH_AGENT_MANAGED_MARKER_RE = /\s*<!-- smart-ralph-managed: pi-smart-ralph; source=\.pi\/agents\/[^;]+; sha256=[a-f0-9]{64} -->\s*$/;
+
+type RalphAgentBootstrapConflict = {
+	name: string;
+	path: string;
+	reason: string;
+};
+
+type RalphAgentBootstrapResult = {
+	sourceDir: string;
+	targetDir: string;
+	refresh: boolean;
+	sourceIsTarget: boolean;
+	copied: string[];
+	updated: string[];
+	adopted: string[];
+	unchanged: string[];
+	conflicts: RalphAgentBootstrapConflict[];
+	missingSource: string[];
+	errors: string[];
+};
+
+function packageRalphAgentsDir(): string {
+	return join(PI_ROOT, "agents");
+}
+
+function projectRalphAgentsDir(cwd: string): string {
+	return join(resolve(cwd), ".pi", "agents");
+}
+
+function agentFileName(agentName: string): string {
+	return agentName.endsWith(".md") ? agentName : `${agentName}.md`;
+}
+
+function sourceRalphAgentPath(agentName: string): string {
+	return join(packageRalphAgentsDir(), agentFileName(agentName));
+}
+
+function projectRalphAgentPath(cwd: string, agentName: string): string {
+	return join(projectRalphAgentsDir(cwd), agentFileName(agentName));
+}
+
+function safeReadRalphAgentNames(agentsDir: string): { names: string[]; error?: string } {
+	try {
+		const names = readdirSync(agentsDir, { withFileTypes: true })
+			.filter((entry) => entry.isFile() && /^ralph-.*\.md$/.test(entry.name))
+			.map((entry) => entry.name)
+			.sort();
+		return { names };
+	} catch (error) {
+		return { names: [], error: formatError(error) };
+	}
+}
+
+function stripSmartRalphAgentMarker(content: string): string {
+	return content.replace(RALPH_AGENT_MANAGED_MARKER_RE, "").trimEnd();
+}
+
+function isSmartRalphManagedAgent(content: string): boolean {
+	return RALPH_AGENT_MANAGED_MARKER_RE.test(content);
+}
+
+function sameRalphAgentDefinition(left: string, right: string): boolean {
+	return stripSmartRalphAgentMarker(left) === stripSmartRalphAgentMarker(right);
+}
+
+function managedRalphAgentContent(agentName: string, sourceContent: string): string {
+	const body = stripSmartRalphAgentMarker(sourceContent);
+	const hash = createHash("sha256").update(body).digest("hex");
+	return `${body}\n\n<!-- ${RALPH_AGENT_MANAGED_MARKER_PREFIX}; source=.pi/agents/${agentFileName(agentName)}; sha256=${hash} -->\n`;
+}
+
+function emptyRalphAgentBootstrapResult(cwd: string, refresh: boolean): RalphAgentBootstrapResult {
+	const sourceDir = packageRalphAgentsDir();
+	const targetDir = projectRalphAgentsDir(cwd);
+	return {
+		sourceDir,
+		targetDir,
+		refresh,
+		sourceIsTarget: resolve(sourceDir) === resolve(targetDir),
+		copied: [],
+		updated: [],
+		adopted: [],
+		unchanged: [],
+		conflicts: [],
+		missingSource: [],
+		errors: [],
+	};
+}
+
+function bootstrapRalphAgents(cwd: string, refresh = false): RalphAgentBootstrapResult {
+	const result = emptyRalphAgentBootstrapResult(cwd, refresh);
+
+	if (!pathCheck(result.sourceDir, "directory")) {
+		result.errors.push(`Bundled Ralph agents directory is missing: ${formatPath(result.sourceDir)}`);
+		return result;
+	}
+
+	if (!result.sourceIsTarget) {
+		try {
+			mkdirSync(result.targetDir, { recursive: true });
+		} catch (error) {
+			result.errors.push(`Unable to create project Ralph agents directory ${formatProjectPath(result.targetDir, cwd)}: ${formatError(error)}`);
+			return result;
+		}
+	}
+
+	for (const agentName of EXPECTED_RALPH_AGENTS) {
+		const sourcePath = sourceRalphAgentPath(agentName);
+		if (!pathCheck(sourcePath, "file")) {
+			result.missingSource.push(agentName);
+			continue;
+		}
+
+		let sourceContent: string;
+		try {
+			sourceContent = readFileSync(sourcePath, "utf8");
+		} catch (error) {
+			result.errors.push(`Unable to read bundled Ralph agent ${formatPath(sourcePath)}: ${formatError(error)}`);
+			continue;
+		}
+
+		if (result.sourceIsTarget) {
+			result.unchanged.push(agentName);
+			continue;
+		}
+
+		const targetPath = projectRalphAgentPath(cwd, agentName);
+		const targetContent = managedRalphAgentContent(agentName, sourceContent);
+		let targetExists = false;
+		try {
+			const stat = statSync(targetPath);
+			targetExists = true;
+			if (!stat.isFile()) {
+				result.conflicts.push({ name: agentName, path: targetPath, reason: "target path exists but is not a file" });
+				continue;
+			}
+		} catch (error) {
+			const code = isRecordValue(error) && typeof error.code === "string" ? error.code : undefined;
+			if (code !== "ENOENT") {
+				result.errors.push(`Unable to inspect project Ralph agent ${formatProjectPath(targetPath, cwd)}: ${formatError(error)}`);
+				continue;
+			}
+		}
+
+		if (!targetExists) {
+			try {
+				writeFileSync(targetPath, targetContent, "utf8");
+				result.copied.push(agentName);
+			} catch (error) {
+				result.errors.push(`Unable to write project Ralph agent ${formatProjectPath(targetPath, cwd)}: ${formatError(error)}`);
+			}
+			continue;
+		}
+
+		let existingContent: string;
+		try {
+			existingContent = readFileSync(targetPath, "utf8");
+		} catch (error) {
+			result.errors.push(`Unable to read project Ralph agent ${formatProjectPath(targetPath, cwd)}: ${formatError(error)}`);
+			continue;
+		}
+
+		if (existingContent === targetContent) {
+			result.unchanged.push(agentName);
+			continue;
+		}
+
+		const managed = isSmartRalphManagedAgent(existingContent);
+		const sameDefinition = sameRalphAgentDefinition(existingContent, sourceContent);
+		if (managed || refresh || sameDefinition) {
+			try {
+				writeFileSync(targetPath, targetContent, "utf8");
+				if (sameDefinition && !managed && !refresh) result.adopted.push(agentName);
+				else result.updated.push(agentName);
+			} catch (error) {
+				result.errors.push(`Unable to refresh project Ralph agent ${formatProjectPath(targetPath, cwd)}: ${formatError(error)}`);
+			}
+			continue;
+		}
+
+		result.conflicts.push({
+			name: agentName,
+			path: targetPath,
+			reason: "existing file is user-owned; not overwritten without --refresh-agents",
+		});
+	}
+
+	return result;
+}
+
+function frontmatterFields(content: string): Set<string> | null {
+	const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+	if (!match) return null;
+
+	const fields = new Set<string>();
+	for (const line of match[1].split(/\r?\n/)) {
+		const field = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):/);
+		if (field) fields.add(field[1]);
+	}
+	return fields;
+}
+
+function getToolRegistryState(pi: ExtensionAPI): ToolRegistryState {
+	const state: ToolRegistryState = {
+		allToolNames: new Set<string>(),
+		activeToolNames: new Set<string>(),
+		allToolDetails: new Map<string, string>(),
+	};
+
+	try {
+		const allTools = pi.getAllTools();
+		for (const tool of allTools) {
+			state.allToolNames.add(tool.name);
+			const source = tool.sourceInfo?.source ?? "unknown source";
+			const path = tool.sourceInfo?.path ? ` (${tool.sourceInfo.path})` : "";
+			state.allToolDetails.set(tool.name, `${source}${path}`);
+		}
+	} catch (error) {
+		state.allError = formatError(error);
+	}
+
+	try {
+		state.activeToolNames = new Set(pi.getActiveTools());
+	} catch (error) {
+		state.activeError = formatError(error);
+	}
+
+	return state;
+}
+
+type RuntimeDependency = (typeof REQUIRED_RUNTIME_PACKAGES)[number];
+type RuntimeExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
+
+const loadedBundledRuntimePackages = new Set<string>();
+const bundledRuntimeLoadErrors = new Map<string, string>();
+
+function runtimeToolsActive(registry: ToolRegistryState, dependency: RuntimeDependency): boolean {
+	return !registry.allError
+		&& !registry.activeError
+		&& dependency.tools.every((toolName) => registry.allToolNames.has(toolName) && registry.activeToolNames.has(toolName));
+}
+
+function runtimeToolsMissingFromRegistry(registry: ToolRegistryState, dependency: RuntimeDependency): string[] {
+	if (registry.allError) return [...dependency.tools];
+	return dependency.tools.filter((toolName) => !registry.allToolNames.has(toolName));
+}
+
+function runtimeToolsInactive(registry: ToolRegistryState, dependency: RuntimeDependency): string[] {
+	if (registry.allError || registry.activeError) return [];
+	return dependency.tools.filter((toolName) => registry.allToolNames.has(toolName) && !registry.activeToolNames.has(toolName));
+}
+
+async function loadBundledRuntimeDependency(pi: ExtensionAPI, dependency: RuntimeDependency): Promise<void> {
+	if (loadedBundledRuntimePackages.has(dependency.name)) return;
+
+	if (!pathCheck(dependency.resourcePath, "file")) {
+		bundledRuntimeLoadErrors.set(dependency.name, `Bundled entrypoint missing: ${formatPath(dependency.resourcePath)}`);
+		return;
+	}
+
+	try {
+		const module = await import(pathToFileURL(dependency.resourcePath).href) as { default?: unknown };
+		if (typeof module.default !== "function") {
+			throw new Error(`${formatPath(dependency.resourcePath)} does not export a default extension factory.`);
+		}
+
+		await (module.default as RuntimeExtensionFactory)(pi);
+		loadedBundledRuntimePackages.add(dependency.name);
+		bundledRuntimeLoadErrors.delete(dependency.name);
+	} catch (error) {
+		bundledRuntimeLoadErrors.set(dependency.name, formatError(error));
+	}
+}
+
+async function bootstrapBundledRuntimes(pi: ExtensionAPI): Promise<void> {
+	let registry = getToolRegistryState(pi);
+	if (registry.allError || registry.activeError) return;
+
+	for (const dependency of REQUIRED_RUNTIME_PACKAGES) {
+		if (loadedBundledRuntimePackages.has(dependency.name)) continue;
+		if (runtimeToolsActive(registry, dependency)) {
+			bundledRuntimeLoadErrors.delete(dependency.name);
+			continue;
+		}
+
+		const missingTools = runtimeToolsMissingFromRegistry(registry, dependency);
+		if (missingTools.length === 0) {
+			// The provider is present but disabled by the active tool set. Do not load a
+			// duplicate bundled extension; /ralph-init will tell the user which tools to enable.
+			continue;
+		}
+
+		await loadBundledRuntimeDependency(pi, dependency);
+		registry = getToolRegistryState(pi);
+	}
+}
+
+function bundledWebAccessSkillsPath(): string | null {
+	const dependency = REQUIRED_RUNTIME_PACKAGES.find((candidate) => candidate.name === "pi-web-access");
+	if (!dependency || !loadedBundledRuntimePackages.has(dependency.name)) return null;
+	const skillPath = "optionalSkillResourcePath" in dependency ? dependency.optionalSkillResourcePath : undefined;
+	if (!skillPath || !pathCheck(skillPath, "directory")) return null;
+	return skillPath;
+}
+
+function validatePackageResources(packageJson: PackageJson | null): CheckSection {
+	const checks: Check[] = [];
+
+	for (const resource of REQUIRED_PACKAGE_PATHS) {
+		checks.push({
+			label: resource.label,
+			ok: pathCheck(resource.path, resource.type),
+			detail: `${formatPath(resource.path)} (${resource.type})`,
+			action: `Restore ${formatPath(resource.path)} in the Smart Ralph package.`,
+		});
+	}
+
+	checks.push({
+		label: "Package manifest parses",
+		ok: packageJson !== null,
+		detail: packageJson ? "package.json parsed successfully" : "package.json is missing or invalid JSON",
+		action: "Restore a valid root package.json for the Smart Ralph package.",
+	});
+
+	checks.push({
+		label: "Pi manifest includes Ralph extension",
+		ok: manifestIncludes(packageJson?.pi?.extensions, RALPH_EXTENSION_MANIFEST_PATH),
+		detail: `package.json pi.extensions includes ${RALPH_EXTENSION_MANIFEST_PATH}`,
+		action: `Add ${RALPH_EXTENSION_MANIFEST_PATH} to package.json pi.extensions.`,
+	});
+	checks.push({
+		label: "Pi manifest includes project skills",
+		ok: manifestIncludes(packageJson?.pi?.skills, "./.pi/skills"),
+		detail: "package.json pi.skills includes ./.pi/skills",
+		action: "Add ./.pi/skills to package.json pi.skills.",
+	});
+	checks.push({
+		label: "Pi manifest includes project prompts",
+		ok: manifestIncludes(packageJson?.pi?.prompts, "./.pi/prompts"),
+		detail: "package.json pi.prompts includes ./.pi/prompts",
+		action: "Add ./.pi/prompts to package.json pi.prompts.",
+	});
+
+	return { title: "Package resources", checks };
+}
+
+function formatRuntimeToolStatus(registry: ToolRegistryState, dependency: RuntimeDependency): string {
+	if (runtimeToolsActive(registry, dependency)) return `active tools satisfy requirement (${dependency.tools.join(", ")})`;
+	if (registry.allError) return `tool registry unavailable: ${registry.allError}`;
+	if (registry.activeError) return `active tool list unavailable: ${registry.activeError}`;
+
+	const missing = runtimeToolsMissingFromRegistry(registry, dependency);
+	if (missing.length > 0) return `missing tool(s): ${missing.join(", ")}`;
+
+	const inactive = runtimeToolsInactive(registry, dependency);
+	if (inactive.length > 0) return `registered but inactive: ${inactive.join(", ")}`;
+	return `required tools are not active (${dependency.tools.join(", ")})`;
+}
+
+function validateRuntimePackages(packageJson: PackageJson | null, registry: ToolRegistryState): { section: CheckSection; installCommands: string[] } {
+	const checks: Check[] = [];
+	const installCommands: string[] = [];
+	const bundled = bundledDependencies(packageJson);
+
+	for (const dependency of REQUIRED_RUNTIME_PACKAGES) {
+		const installCommand = piInstallCommand(packageJson, dependency.name, dependency.version);
+		const dependencyDeclared = Boolean(packageJson?.dependencies?.[dependency.name]);
+		const dependencyBundled = bundled.includes(dependency.name);
+		const toolsActive = runtimeToolsActive(registry, dependency);
+		const resourcePresent = pathCheck(dependency.resourcePath, "file");
+		const bootstrapSatisfied = resourcePresent || toolsActive;
+		const loadError = toolsActive ? undefined : bundledRuntimeLoadErrors.get(dependency.name);
+
+		if (!dependencyDeclared || !dependencyBundled || !bootstrapSatisfied || loadError) installCommands.push(installCommand);
+
+		checks.push({
+			label: `${dependency.name} package declaration`,
+			ok: dependencyDeclared && dependencyBundled,
+			detail: "package.json dependencies + bundledDependencies",
+			action: `Declare and bundle ${dependency.name}; install command: ${installCommand}`,
+		});
+		checks.push({
+			label: `${dependency.name} conditional bootstrap entrypoint`,
+			ok: bootstrapSatisfied,
+			detail: resourcePresent
+				? `${formatPath(dependency.resourcePath)} available for conditional bootstrap`
+				: `bundled entrypoint absent; ${formatRuntimeToolStatus(registry, dependency)}`,
+			action: `Install package resources: ${installCommand}`,
+		});
+
+		if (loadError) {
+			checks.push({
+				label: `${dependency.name} bundled bootstrap`,
+				ok: false,
+				detail: `failed to load bundled runtime: ${loadError}`,
+				action: `Reinstall bundled package resources or install a global provider: ${installCommand}`,
+			});
+		} else if (loadedBundledRuntimePackages.has(dependency.name)) {
+			checks.push({
+				label: `${dependency.name} bundled bootstrap`,
+				ok: true,
+				detail: "loaded bundled runtime for this session",
+			});
+		}
+
+		if ("optionalSkillResourcePath" in dependency) {
+			const shouldExposeSkills = loadedBundledRuntimePackages.has(dependency.name);
+			const skillResourcePresent = pathCheck(dependency.optionalSkillResourcePath, "directory");
+			checks.push({
+				label: `${dependency.name} bundled skills directory`,
+				ok: !shouldExposeSkills || skillResourcePresent,
+				detail: shouldExposeSkills
+					? skillResourcePresent
+						? `${formatPath(dependency.optionalSkillResourcePath)} exposed via resources_discover`
+						: `${formatPath(dependency.optionalSkillResourcePath)} missing while bundled web access is loaded`
+					: "not required unless bundled web access is loaded",
+				action: `Install package resources: ${installCommand}`,
+			});
+		}
+	}
+
+	return { section: { title: "Required Pi packages", checks }, installCommands: unique(installCommands) };
+}
+
+function validateTools(pi: ExtensionAPI, packageJson: PackageJson | null): { section: CheckSection; installCommands: string[] } {
+	const registry = getToolRegistryState(pi);
+	const checks: Check[] = [];
+	const installCommands: string[] = [];
+
+	checks.push({
+		label: "Pi tool registry is inspectable",
+		ok: !registry.allError,
+		detail: registry.allError ? `pi.getAllTools failed: ${registry.allError}` : `${registry.allToolNames.size} tool(s) registered`,
+		action: "Restart Pi or run /reload, then retry /ralph-init.",
+	});
+	checks.push({
+		label: "Pi active tool list is inspectable",
+		ok: !registry.activeError,
+		detail: registry.activeError
+			? `pi.getActiveTools failed: ${registry.activeError}`
+			: `${registry.activeToolNames.size} tool(s) active`,
+		action: "Restart Pi or run /reload, then retry /ralph-init.",
+	});
+
+	for (const dependency of REQUIRED_RUNTIME_PACKAGES) {
+		const installCommand = piInstallCommand(packageJson, dependency.name, dependency.version);
+		for (const toolName of dependency.tools) {
+			const registered = registry.allToolNames.has(toolName);
+			const active = registry.activeToolNames.has(toolName);
+			if (!registered) installCommands.push(installCommand);
+
+			checks.push({
+				label: `Required tool ${toolName}`,
+				ok: registered && active,
+				detail: registered
+					? active
+						? `registered and active from ${registry.allToolDetails.get(toolName) ?? dependency.name}`
+						: `registered but inactive; expected provider package ${dependency.name}`
+					: `not registered; expected provider package ${dependency.name}`,
+				action: registered
+					? `Enable ${toolName} in the active tool set, then run /ralph-init again.`
+					: `Install and load provider package: ${installCommand}`,
+			});
+		}
+	}
+
+	return { section: { title: "Required tools", checks }, installCommands };
+}
+
+function bootstrapAgentNames(names: string[]): string {
+	return names.length > 0 ? names.join(", ") : "none";
+}
+
+function formatBootstrapSummary(result: RalphAgentBootstrapResult): string {
+	if (result.sourceIsTarget) return "package .pi/agents is already the project discovery directory; no copy needed";
+	return [
+		`copied ${result.copied.length}`,
+		`updated ${result.updated.length}`,
+		`adopted ${result.adopted.length}`,
+		`unchanged ${result.unchanged.length}`,
+		`conflicts ${result.conflicts.length}`,
+		`errors ${result.errors.length}`,
+	].join(", ");
+}
+
+function validateRalphAgents(cwd: string, bootstrapResult?: RalphAgentBootstrapResult): CheckSection {
+	const checks: Check[] = [];
+	const agentsDir = projectRalphAgentsDir(cwd);
+	const discovered = safeReadRalphAgentNames(agentsDir);
+	const discoveredSet = new Set(discovered.names);
+	const missingAgents = EXPECTED_RALPH_AGENTS.filter((name) => !discoveredSet.has(name));
+
+	if (bootstrapResult) {
+		checks.push({
+			label: "Ralph subagent bootstrap source",
+			ok: bootstrapResult.errors.length === 0 && bootstrapResult.missingSource.length === 0,
+			detail: bootstrapResult.missingSource.length > 0
+				? `missing bundled agent file(s): ${bootstrapAgentNames(bootstrapResult.missingSource)}`
+				: `${formatPath(bootstrapResult.sourceDir)} contains bundled Ralph agent resources`,
+			action: "Reinstall the Smart Ralph package so bundled .pi/agents/ralph-*.md resources are present.",
+		});
+		checks.push({
+			label: "Project-local Ralph subagent bootstrap",
+			ok: bootstrapResult.errors.length === 0 && bootstrapResult.conflicts.length === 0 && bootstrapResult.missingSource.length === 0,
+			detail: `${formatBootstrapSummary(bootstrapResult)} into ${formatProjectPath(bootstrapResult.targetDir, cwd)}`,
+			action: `Resolve conflicts or run /ralph-init --refresh-agents to replace existing ralph-*.md files in ${formatProjectPath(bootstrapResult.targetDir, cwd)}.`,
+		});
+		checks.push({
+			label: "User-owned Ralph subagent conflicts",
+			ok: bootstrapResult.conflicts.length === 0,
+			detail: bootstrapResult.conflicts.length === 0
+				? "none"
+				: bootstrapResult.conflicts.map((conflict) => `${conflict.name} (${conflict.reason})`).join(", "),
+			action: "Move conflicting files aside or re-run /ralph-init --refresh-agents to overwrite them explicitly.",
+		});
+	}
+
+	checks.push({
+		label: "@tintinweb/pi-subagents project discovery directory",
+		ok: pathCheck(agentsDir, "directory"),
+		detail: `${formatProjectPath(agentsDir, cwd)} is scanned as <cwd>/.pi/agents`,
+		action: "Run /ralph-init in this project to bootstrap Ralph subagent definitions.",
+	});
+	checks.push({
+		label: "Ralph subagent discovery pattern",
+		ok: !discovered.error && missingAgents.length === 0,
+		detail: discovered.error
+			? `${formatProjectPath(agentsDir, cwd)}/ralph-*.md could not be read: ${discovered.error}`
+			: `found ${discovered.names.length} file(s): ${discovered.names.join(", ") || "none"}`,
+		action: `Run /ralph-init to copy expected files into ${formatProjectPath(agentsDir, cwd)}: ${EXPECTED_RALPH_AGENTS.join(", ")}`,
+	});
+
+	for (const agentName of EXPECTED_RALPH_AGENTS) {
+		const agentPath = projectRalphAgentPath(cwd, agentName);
+		const exists = pathCheck(agentPath, "file");
+		let fields: Set<string> | null = null;
+		let readError: string | undefined;
+
+		if (exists) {
+			try {
+				fields = frontmatterFields(readFileSync(agentPath, "utf8"));
+			} catch (error) {
+				readError = formatError(error);
+			}
+		}
+
+		const missingFields = fields
+			? REQUIRED_AGENT_FRONTMATTER_FIELDS.filter((field) => !fields.has(field))
+			: [...REQUIRED_AGENT_FRONTMATTER_FIELDS];
+		const ok = exists && !readError && fields !== null && missingFields.length === 0;
+
+		checks.push({
+			label: `Subagent ${agentName.replace(/\.md$/, "")}`,
+			ok,
+			detail: !exists
+				? `${formatProjectPath(agentPath, cwd)} is missing`
+				: readError
+					? `${formatProjectPath(agentPath, cwd)} could not be read: ${readError}`
+					: fields === null
+						? `${formatProjectPath(agentPath, cwd)} has no YAML frontmatter`
+						: missingFields.length === 0
+							? `${formatProjectPath(agentPath, cwd)} has required pi-subagents frontmatter`
+							: `${formatProjectPath(agentPath, cwd)} missing frontmatter field(s): ${missingFields.join(", ")}`,
+			action: `Run /ralph-init to restore ${formatProjectPath(agentPath, cwd)} with pi-subagents frontmatter fields: ${REQUIRED_AGENT_FRONTMATTER_FIELDS.join(", ")}.`,
+		});
+	}
+
+	return { title: "Ralph subagents", checks };
+}
+
+function unique(values: string[]): string[] {
+	return [...new Set(values)];
+}
+
+function validateRalphEnvironment(pi: ExtensionAPI, cwd: string, bootstrapResult?: RalphAgentBootstrapResult): ValidationReport {
+	const packageJson = readPackageJson();
+	const packageResources = validatePackageResources(packageJson);
+	const registry = getToolRegistryState(pi);
+	const runtimePackages = validateRuntimePackages(packageJson, registry);
+	const tools = validateTools(pi, packageJson);
+	const agents = validateRalphAgents(cwd, bootstrapResult);
+	const sections = [packageResources, runtimePackages.section, tools.section, agents];
+
+	return {
+		ready: sections.every((section) => section.checks.every((check) => check.ok)),
+		sections,
+		installCommands: unique([...runtimePackages.installCommands, ...tools.installCommands]),
+	};
+}
+
+function formatCheck(check: Check): string {
+	const lines = [`${check.ok ? "PASS" : "FAIL"} ${check.label}: ${check.detail}`];
+	if (!check.ok && check.action) {
+		lines.push(`  action: ${check.action}`);
+	}
+	return lines.join("\n");
+}
+
+function formatDiagnostics(title: string, pi: ExtensionAPI, cwd = process.cwd(), bootstrapResult?: RalphAgentBootstrapResult): string {
+	const validation = validateRalphEnvironment(pi, cwd, bootstrapResult);
+	const lines = [
+		title,
+		"",
+		`Package root: ${PACKAGE_ROOT}`,
+		`Project root: ${resolve(cwd)}`,
+		`Overall: ${validation.ready ? "PASS" : "FAIL"}`,
+	];
+
+	for (const section of validation.sections) {
+		lines.push("", `${section.title}:`, ...section.checks.map(formatCheck));
+	}
+
+	if (validation.installCommands.length > 0) {
+		lines.push("", "Install missing Pi packages:", ...validation.installCommands.map((command) => `  ${command}`));
+	}
+
+	if (!validation.ready) {
+		lines.push(
+			"",
+			"Ralph workflows remain disabled until every FAIL item is resolved.",
+			"After installing packages or restoring resources, run /reload or restart Pi, then re-run /ralph-init.",
+			"If project-local ralph-*.md files conflict, re-run /ralph-init --refresh-agents to overwrite them explicitly.",
+		);
+	} else {
+		lines.push("", "Smart Ralph bootstrap validation passed. No workflow has been started.");
+	}
+
+	return lines.join("\n");
+}
+
+type InitArguments = {
+	refreshAgents: boolean;
+	error?: string;
+};
+
+function parseInitArgs(args: string): InitArguments {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	let refreshAgents = false;
+	for (const token of tokens) {
+		if (token === "--refresh-agents" || token === "--refresh") {
+			refreshAgents = true;
+			continue;
+		}
+		return { refreshAgents, error: `Unknown option: ${token}. Usage: /ralph-init [--refresh-agents]` };
+	}
+	return { refreshAgents };
+}
+
+async function notify(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info") {
+	if (ctx.hasUI) {
+		ctx.ui.notify(message, type);
+		return;
+	}
+
+	console.log(message);
+}
+
+function setRalphStatus(ctx: ExtensionCommandContext, message?: string): void {
+	if (ctx.hasUI) ctx.ui.setStatus("ralph", message);
+}
+
+function printJsonOutput(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info"): void {
+	console.log(message);
+	if (ctx.hasUI) ctx.ui.notify("Ralph epic status JSON printed to stdout.", type);
+}
+
+const SPEC_ARTIFACTS = ["research", "requirements", "design", "tasks"] as const;
+const ARTIFACT_REVIEWER_AGENT = "ralph-spec-reviewer";
+const ARTIFACT_REVIEW_MAX_ITERATIONS = 3;
+
+type TaskCounts = {
+	completed: number;
+	pending: number;
+	total: number;
+};
+
+const NATIVE_TASK_TOOLS = ["TaskCreate", "TaskUpdate"] as const;
+const WEB_RESEARCH_TOOLS = ["web_search", "fetch_content", "get_search_content"] as const;
+const WEB_FETCH_TOOLS = ["fetch_content", "get_search_content"] as const;
+const MCP_PROXY_TOOL = "mcp";
+const NATIVE_TASK_LOCK_RETRY_MS = 50;
+const NATIVE_TASK_LOCK_MAX_RETRIES = 100;
+const NATIVE_TASK_WIDGET_LIMIT = 10;
+
+type NativeTaskStatus = "pending" | "in_progress" | "completed";
+
+type NativeTaskCard = {
+	id: string;
+	subject: string;
+	description: string;
+	status: NativeTaskStatus;
+	activeForm?: string;
+	owner?: string;
+	metadata: Record<string, unknown>;
+	blocks: string[];
+	blockedBy: string[];
+	createdAt: number;
+	updatedAt: number;
+};
+
+type NativeTaskStoreData = {
+	nextId: number;
+	tasks: NativeTaskCard[];
+};
+
+type ParsedNativeTask = {
+	index: number;
+	checkboxKey: string;
+	stableKey: string;
+	taskNumber?: string;
+	phase: string;
+	rawTitle: string;
+	subject: string;
+	description: string;
+	activeForm: string;
+	status: NativeTaskStatus;
+	isParallel: boolean;
+	isVerify: boolean;
+	agentType: string;
+	fields: Record<string, string>;
+	blockedByIndices: number[];
+	startLine: number;
+	endLine: number;
+	block: string;
+};
+
+type NativeTaskMirrorResult = {
+	created: number;
+	updated: number;
+	deleted: number;
+	total: number;
+	storePath: string;
+	nativeTaskMap: Record<string, string>;
+};
+
+type SafeStateRead = {
+	path: string;
+	state: RalphState | null;
+	error?: string;
+};
+
+type CancelArguments = {
+	reference: string | null;
+	deleteSpec: boolean;
+	error?: string;
+};
+
+type EpicNextArguments = {
+	reference: string | null;
+	switchSpec: boolean;
+	startSpec: boolean;
+	peek: boolean;
+	error?: string;
+};
+
+type EpicCancelArguments = {
+	reference: string | null;
+	deleteChildSpecs: boolean;
+	error?: string;
+};
+
+type EpicStatusArguments = {
+	reference: string | null;
+	json: boolean;
+	repair: boolean;
+	error?: string;
+};
+
+type EpicRepairResult = {
+	changes: string[];
+	warnings: string[];
+	validationWarnings: string[];
+	stateChanged: boolean;
+	childFilesChanged: boolean;
+};
+
+type StartPhase = "research" | "requirements" | "design" | "tasks" | "execution";
+
+type StartArguments = {
+	reference: string | null;
+	goal: string;
+	fresh: boolean;
+	quickMode: boolean;
+	autonomousMode: boolean;
+	skipResearch: boolean;
+	nextEpicSpec: boolean;
+	commitSpec?: boolean;
+	specsDir?: string;
+	tasksSize?: "fine" | "coarse";
+	warnings: string[];
+	error?: string;
+};
+
+type StartTarget = {
+	spec: SpecEntry;
+	isNew: boolean;
+};
+
+type EpicStartContext = {
+	epic: CurrentEpic;
+	state: EpicState;
+	child: EpicChildSpec;
+	dependencyStatus: EpicSpecDependencyStatus | null;
+	selectedByNextFlag: boolean;
+};
+
+type ActiveEpicRead = {
+	currentName: string | null;
+	epic?: CurrentEpic;
+	stateRead?: SafeEpicStateRead;
+	summary?: ReturnType<typeof computeEpicDependencyStatus>;
+	warnings: string[];
+	error?: string;
+};
+
+type EpicStartSelection =
+	| { kind: "none" }
+	| { kind: "selected"; context: EpicStartContext; warnings: string[] }
+	| { kind: "message"; message: string; type: "info" | "warning" }
+	| { kind: "error"; message: string };
+
+type EpicCompletionNotification = {
+	lines: string[];
+	type: "info" | "warning";
+};
+
+function pathOptions(ctx: ExtensionCommandContext): RalphPathOptions {
+	return { cwd: ctx.cwd };
+}
+
+function formatRootLabel(root: SpecRoot): string {
+	const details: string[] = [];
+	if (root.source === "default") details.push("default");
+	if (!root.exists) details.push("missing");
+	return details.length > 0 ? `${root.path} (${details.join(", ")})` : root.path;
+}
+
+function isSpecInConfiguredRoot(spec: SpecEntry, options: RalphPathOptions): boolean {
+	return getSpecRoots({ ...options, allowMissingConfiguredRoots: true }).some(
+		(root) => root.exists && root.absolutePath === spec.rootAbsolutePath,
+	);
+}
+
+function specDeleteSafetyError(spec: SpecEntry, options: RalphPathOptions): string | null {
+	if (!spec.exists) return `Spec directory does not exist: ${spec.path}`;
+	if (spec.name.startsWith(".")) return `Refusing to delete hidden directory: ${spec.path}`;
+	if (!isSpecInConfiguredRoot(spec, options)) {
+		return `Refusing to delete ${spec.path}; it is not under a configured specs root.`;
+	}
+	if (spec.absolutePath === spec.rootAbsolutePath) {
+		return `Refusing to delete specs root itself: ${spec.path}`;
+	}
+	return null;
+}
+
+type RalphCompletionItem = {
+	value: string;
+	label: string;
+	description?: string;
+};
+
+function argumentTail(argumentText: string): { head: string; token: string } {
+	const match = argumentText.match(/^([\s\S]*?)([^\s]*)$/);
+	return { head: match?.[1] ?? "", token: match?.[2] ?? argumentText };
+}
+
+function completionMatches(item: RalphCompletionItem, token: string): boolean {
+	if (!token) return true;
+	const normalized = token.toLowerCase();
+	return item.value.toLowerCase().startsWith(normalized)
+		|| item.label.toLowerCase().includes(normalized)
+		|| (item.description?.toLowerCase().includes(normalized) ?? false);
+}
+
+function uniqueCompletionItems(items: RalphCompletionItem[]): RalphCompletionItem[] {
+	const seen = new Set<string>();
+	const uniqueItems: RalphCompletionItem[] = [];
+	for (const item of items) {
+		if (seen.has(item.value)) continue;
+		seen.add(item.value);
+		uniqueItems.push(item);
+	}
+	return uniqueItems;
+}
+
+function completeArgumentToken(argumentText: string, candidates: RalphCompletionItem[]): RalphCompletionItem[] | null {
+	const { head, token } = argumentTail(argumentText);
+	const filtered = uniqueCompletionItems(candidates).filter((item) => completionMatches(item, token));
+	if (filtered.length === 0) return null;
+	return filtered.map((item) => ({ ...item, value: `${head}${item.value}` }));
+}
+
+function previousArgumentToken(argumentText: string): string | null {
+	const tokenized = tokenizeCommandArgs(argumentText);
+	if (tokenized.error || tokenized.tokens.length === 0) return null;
+	if (/\s$/.test(argumentText)) return tokenized.tokens[tokenized.tokens.length - 1] ?? null;
+	return tokenized.tokens[tokenized.tokens.length - 2] ?? null;
+}
+
+function completeOptionValues(argumentText: string, optionName: string, values: RalphCompletionItem[]): RalphCompletionItem[] | null {
+	const { head, token } = argumentTail(argumentText);
+	if (token.startsWith(`${optionName}=`)) {
+		const valuePrefix = token.slice(optionName.length + 1);
+		const filtered = values.filter((item) => completionMatches(item, valuePrefix));
+		return filtered.length > 0
+			? filtered.map((item) => ({ ...item, value: `${head}${optionName}=${item.value}` }))
+			: null;
+	}
+
+	if (previousArgumentToken(argumentText) !== optionName) return null;
+	const filtered = values.filter((item) => completionMatches(item, token));
+	return filtered.length > 0 ? filtered.map((item) => ({ ...item, value: `${head}${item.value}` })) : null;
+}
+
+function flagItem(value: string, description: string): RalphCompletionItem {
+	return { value: `${value} `, label: value, description };
+}
+
+function specCompletionCandidates(options: RalphPathOptions = {}): RalphCompletionItem[] {
+	const items = listSpecs({ ...options, allowMissingConfiguredRoots: true }).flatMap((spec) => {
+		const values = spec.path === `./specs/${spec.name}` ? [spec.name] : [spec.name, spec.path];
+		return values.map((value) => ({ value, label: value, description: spec.path }));
+	});
+
+	for (const epic of listEpics({ ...options, allowMissingConfiguredRoots: true })) {
+		const read = safeReadEpicState(epic, options);
+		const specs = read.state && Array.isArray(read.state.specs) ? read.state.specs : [];
+		for (const spec of specs) {
+			if (!isValidSpecName(spec.name)) continue;
+			items.push({
+				value: spec.name,
+				label: spec.name,
+				description: `child of epic ${epic.name} (${spec.status ?? "unknown"})`,
+			});
+		}
+	}
+
+	return uniqueCompletionItems(items);
+}
+
+function specArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, specCompletionCandidates());
+	} catch {
+		return null;
+	}
+}
+
+function startArgumentCompletions(prefix: string) {
+	try {
+		return completeOptionValues(prefix, "--tasks-size", [
+			{ value: "fine", label: "fine", description: "40-60+ smaller tasks with verification checkpoints" },
+			{ value: "coarse", label: "coarse", description: "10-20 larger tasks" },
+		]) ?? completeArgumentToken(prefix, [
+			flagItem("--fresh", "Reinitialize the target spec before starting"),
+			flagItem("--quick", "Generate artifacts and implement without approval prompts"),
+			flagItem("--autonomous", "Alias for autonomous quick flow"),
+			flagItem("--skip-research", "Start a new spec at requirements"),
+			flagItem("--next-epic-spec", "Select the active epic's next unblocked child spec"),
+			flagItem("--tasks-size", "Set generated task granularity"),
+			...specCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function phaseArgumentCompletions(prefix: string, includeTasksSize = false) {
+	try {
+		const taskSizeCompletions = includeTasksSize
+			? completeOptionValues(prefix, "--tasks-size", [
+				{ value: "fine", label: "fine", description: "40-60+ smaller tasks with verification checkpoints" },
+				{ value: "coarse", label: "coarse", description: "10-20 larger tasks" },
+			])
+			: null;
+		return taskSizeCompletions ?? completeArgumentToken(prefix, [
+			flagItem("--quick", "Skip approval prompts for this artifact"),
+			flagItem("--autonomous", "Alias for quick artifact flow"),
+			...(includeTasksSize ? [flagItem("--tasks-size", "Set generated task granularity")] : []),
+			...specCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function cancelArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, [flagItem("--delete", "Also request spec directory deletion after confirmation"), ...specCompletionCandidates()]);
+	} catch {
+		return null;
+	}
+}
+
+function safeReadSpecState(spec: SpecEntry, options: RalphPathOptions): SafeStateRead {
+	const statePath = getRalphStatePath(spec, options);
+	try {
+		return { path: statePath, state: readRalphState(spec, options) };
+	} catch (error) {
+		return { path: statePath, state: null, error: formatError(error) };
+	}
+}
+
+function stringField(state: RalphState | null, key: string): string | undefined {
+	const value = state?.[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+function numberField(state: RalphState | null, key: string): number | undefined {
+	const value = state?.[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(state: RalphState | null, key: string): boolean | undefined {
+	const value = state?.[key];
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function artifactPath(spec: SpecEntry, artifact: (typeof SPEC_ARTIFACTS)[number]): string {
+	return join(spec.absolutePath, `${artifact}.md`);
+}
+
+function artifactExists(spec: SpecEntry, artifact: (typeof SPEC_ARTIFACTS)[number]): boolean {
+	return existsSync(artifactPath(spec, artifact));
+}
+
+function formatArtifactIndicators(spec: SpecEntry): string {
+	return SPEC_ARTIFACTS.map((artifact) => `[${artifactExists(spec, artifact) ? "x" : " "}] ${artifact}`).join(" ");
+}
+
+function countTasks(spec: SpecEntry): TaskCounts {
+	const tasksPath = artifactPath(spec, "tasks");
+	if (!existsSync(tasksPath)) {
+		return { completed: 0, pending: 0, total: 0 };
+	}
+
+	const content = readFileSync(tasksPath, "utf8");
+	const completed = content.match(/^\s*-\s*\[[xX]\]/gm)?.length ?? 0;
+	const pending = content.match(/^\s*-\s*\[ \]/gm)?.length ?? 0;
+	return { completed, pending, total: completed + pending };
+}
+
+function normalizeWhitespace(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseTaskBodyFields(bodyLines: string[]): Record<string, string> {
+	const fields: Record<string, string> = {};
+	let currentField: string | undefined;
+
+	for (const line of bodyLines) {
+		const fieldMatch = line.match(/^\s*-\s*\*\*([^*]+)\*\*:\s*(.*)$/);
+		if (fieldMatch) {
+			currentField = fieldMatch[1].trim().toLowerCase();
+			fields[currentField] = fieldMatch[2].trim();
+			continue;
+		}
+
+		if (currentField && line.trim()) {
+			fields[currentField] = `${fields[currentField]}\n${line.trim()}`.trim();
+		}
+	}
+
+	return fields;
+}
+
+function cleanTaskDescription(bodyLines: string[], fallback: string): string {
+	const description = bodyLines
+		.map((line) => line.replace(/^\s{0,4}/, "").trimEnd())
+		.join("\n")
+		.trim();
+	return description || fallback;
+}
+
+function taskStableFallback(index: number, title: string): string {
+	const slug = title
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48);
+	return `index-${index}${slug ? `-${slug}` : ""}`;
+}
+
+function taskAgentType(isVerify: boolean, phase: string): string {
+	if (isVerify) return "ralph-qa-engineer";
+	if (/refactor/i.test(phase)) return "ralph-refactor-specialist";
+	return "ralph-spec-executor";
+}
+
+function parseNativeTaskTitle(rawTitle: string, index: number, phase: string) {
+	const isVerify = /\[VERIFY\]/i.test(rawTitle);
+	const isParallel = /\[P\]/i.test(rawTitle);
+	const strippedTitle = normalizeWhitespace(rawTitle.replace(/\[(?:VERIFY|P)\]/gi, " "));
+	const numberMatch = strippedTitle.match(/^(\d+(?:\.\d+)*\.?)\s+(.+)$/);
+	const taskNumber = numberMatch?.[1].replace(/\.$/, "");
+	const titleWithoutNumber = numberMatch ? numberMatch[2].trim() : strippedTitle;
+	const coreTitle = normalizeWhitespace(taskNumber ? `${taskNumber} ${titleWithoutNumber}` : titleWithoutNumber);
+	const subject = isVerify ? `[VERIFY] ${coreTitle}` : isParallel ? `[P] ${coreTitle}` : coreTitle;
+	const activeForm = isVerify ? `Verifying ${coreTitle}` : isParallel ? `Executing [P] ${coreTitle}` : `Executing ${coreTitle}`;
+	const stableKey = taskNumber ?? taskStableFallback(index, titleWithoutNumber || rawTitle);
+
+	return {
+		isVerify,
+		isParallel,
+		taskNumber,
+		subject,
+		activeForm,
+		stableKey,
+		agentType: taskAgentType(isVerify, phase),
+	};
+}
+
+function parseTasksForNativeCards(content: string): ParsedNativeTask[] {
+	const lines = content.split(/\r?\n/);
+	const parsedTasks: ParsedNativeTask[] = [];
+	let phase = "";
+
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const headingMatch = lines[lineIndex].match(/^##\s+(.+?)\s*$/);
+		if (headingMatch) {
+			phase = headingMatch[1].trim();
+			continue;
+		}
+
+		const taskMatch = lines[lineIndex].match(/^\s*-\s*\[([ xX])\]\s+(.+?)\s*$/);
+		if (!taskMatch) continue;
+
+		const bodyLines: string[] = [];
+		let nextLineIndex = lineIndex + 1;
+		for (; nextLineIndex < lines.length; nextLineIndex += 1) {
+			if (/^\s*-\s*\[[ xX]\]\s+\S+/.test(lines[nextLineIndex]) || /^##\s+/.test(lines[nextLineIndex])) {
+				break;
+			}
+			bodyLines.push(lines[nextLineIndex]);
+		}
+
+		const index = parsedTasks.length;
+		const rawTitle = taskMatch[2].trim();
+		const title = parseNativeTaskTitle(rawTitle, index, phase);
+		const fields = parseTaskBodyFields(bodyLines);
+		parsedTasks.push({
+			index,
+			checkboxKey: String(index),
+			stableKey: title.stableKey,
+			taskNumber: title.taskNumber,
+			phase,
+			rawTitle,
+			subject: title.subject,
+			description: cleanTaskDescription(bodyLines, title.subject),
+			activeForm: title.activeForm,
+			status: /x/i.test(taskMatch[1]) ? "completed" : "pending",
+			isParallel: title.isParallel,
+			isVerify: title.isVerify,
+			agentType: title.agentType,
+			fields,
+			blockedByIndices: [],
+			startLine: lineIndex,
+			endLine: nextLineIndex,
+			block: [lines[lineIndex], ...bodyLines].join("\n").trimEnd(),
+		});
+
+		lineIndex = nextLineIndex - 1;
+	}
+
+	assignNativeTaskDependencies(parsedTasks);
+	return parsedTasks;
+}
+
+function assignNativeTaskDependencies(tasks: ParsedNativeTask[]): void {
+	let barrier: number[] = [];
+	let parallelGroup: number[] = [];
+
+	for (const task of tasks) {
+		if (task.isParallel) {
+			task.blockedByIndices = [...barrier];
+			parallelGroup.push(task.index);
+			continue;
+		}
+
+		if (parallelGroup.length > 0) {
+			barrier = [...parallelGroup];
+			parallelGroup = [];
+		}
+
+		task.blockedByIndices = [...barrier];
+		barrier = [task.index];
+	}
+}
+
+function nativeTaskMapFromState(state: RalphState | null): Record<string, string> {
+	const value = state?.nativeTaskMap;
+	if (!isRecordValue(value)) return {};
+
+	const map: Record<string, string> = {};
+	for (const [key, taskId] of Object.entries(value)) {
+		if (typeof taskId === "string" && taskId.trim()) {
+			map[key] = taskId.trim();
+		}
+	}
+	return map;
+}
+
+function activeToolDependencyError(pi: ExtensionAPI, tools: readonly string[], commandName: string, packageHint: string): string | null {
+	const registry = getToolRegistryState(pi);
+	if (registry.allError) {
+		return `Cannot inspect Pi tool registry: ${registry.allError}. Run /ralph-init for diagnostics.`;
+	}
+	if (registry.activeError) {
+		return `Cannot inspect active Pi tools: ${registry.activeError}. Run /ralph-init for diagnostics.`;
+	}
+
+	const missing = tools.filter((toolName) => !registry.allToolNames.has(toolName));
+	const inactive = tools.filter((toolName) => registry.allToolNames.has(toolName) && !registry.activeToolNames.has(toolName));
+	if (missing.length === 0 && inactive.length === 0) return null;
+
+	const lines = [`Missing required Pi tool(s) for ${commandName}: ${[...missing, ...inactive].join(", ")}.`];
+	if (missing.length > 0) lines.push(`Not registered: ${missing.join(", ")}. Install and load ${packageHint}.`);
+	if (inactive.length > 0) lines.push(`Registered but inactive: ${inactive.join(", ")}. Enable these tools or remove --exclude-tools filters.`);
+	lines.push("Run /ralph-init for exact diagnostics and install commands, then run /reload or restart Pi.");
+	return lines.join("\n");
+}
+
+function ralphAgentDefinitionError(cwd: string, agentNames: readonly string[], bootstrapResult?: RalphAgentBootstrapResult): string | null {
+	const expectedFiles = new Set(agentNames.map(agentFileName));
+	if (bootstrapResult) {
+		const missingSource = bootstrapResult.missingSource.filter((name) => expectedFiles.has(name));
+		const conflicts = bootstrapResult.conflicts.filter((conflict) => expectedFiles.has(conflict.name));
+		if (bootstrapResult.errors.length > 0 || missingSource.length > 0 || conflicts.length > 0) {
+			const lines = ["Ralph subagent bootstrap did not complete for required agent definition(s)."];
+			if (missingSource.length > 0) lines.push(`Missing bundled source file(s): ${bootstrapAgentNames(missingSource)}.`);
+			if (conflicts.length > 0) {
+				lines.push("Project-local conflict(s):", ...conflicts.map((conflict) => `- ${formatProjectPath(conflict.path, cwd)}: ${conflict.reason}`));
+			}
+			if (bootstrapResult.errors.length > 0) lines.push("Bootstrap error(s):", ...bootstrapResult.errors.map((error) => `- ${error}`));
+			lines.push("Run /ralph-init for diagnostics, or /ralph-init --refresh-agents to overwrite conflicting ralph-*.md files explicitly.");
+			return lines.join("\n");
+		}
+	}
+
+	for (const agentName of agentNames) {
+		const agentPath = projectRalphAgentPath(cwd, agentName);
+		if (!pathCheck(agentPath, "file")) {
+			return `Missing Ralph subagent definition: ${formatProjectPath(agentPath, cwd)}. Run /ralph-init for diagnostics.`;
+		}
+
+		let fields: Set<string> | null;
+		try {
+			fields = frontmatterFields(readFileSync(agentPath, "utf8"));
+		} catch (error) {
+			return `Cannot read Ralph subagent definition ${formatProjectPath(agentPath, cwd)}: ${formatError(error)}. Run /ralph-init for diagnostics.`;
+		}
+		if (!fields) return `Ralph subagent definition ${formatProjectPath(agentPath, cwd)} has no YAML frontmatter. Run /ralph-init --refresh-agents to restore it.`;
+		const missingFields = REQUIRED_AGENT_FRONTMATTER_FIELDS.filter((field) => !fields.has(field));
+		if (missingFields.length > 0) {
+			return `Ralph subagent definition ${formatProjectPath(agentPath, cwd)} is missing frontmatter field(s): ${missingFields.join(", ")}. Run /ralph-init --refresh-agents to restore it.`;
+		}
+	}
+
+	return null;
+}
+
+function nativeTaskMirrorDependencyError(pi: ExtensionAPI): string | null {
+	return activeToolDependencyError(pi, NATIVE_TASK_TOOLS, "ralph-tasks native card mirroring", "@tintinweb/pi-tasks");
+}
+
+function readPiTasksScope(cwd: string): "memory" | "session" | "project" {
+	const configPath = join(cwd, ".pi", "tasks-config.json");
+	if (!existsSync(configPath)) return "session";
+
+	try {
+		const parsed = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+		if (!isRecordValue(parsed)) return "session";
+		return parsed.taskScope === "memory" || parsed.taskScope === "project" || parsed.taskScope === "session"
+			? parsed.taskScope
+			: "session";
+	} catch {
+		return "session";
+	}
+}
+
+function resolveNativeTaskStorePath(ctx: ExtensionCommandContext): { path?: string; error?: string } {
+	const piTasks = process.env.PI_TASKS;
+	if (piTasks === "off") {
+		return { error: "PI_TASKS=off disables @tintinweb/pi-tasks storage. Unset PI_TASKS or configure a file-backed pi-tasks store." };
+	}
+	if (piTasks) {
+		if (isAbsolute(piTasks)) return { path: piTasks };
+		if (piTasks.startsWith(".")) return { path: resolve(ctx.cwd, piTasks) };
+		return { path: join(homedir(), ".pi", "tasks", `${piTasks}.json`) };
+	}
+
+	const scope = readPiTasksScope(ctx.cwd);
+	if (scope === "memory") {
+		return {
+			error: "@tintinweb/pi-tasks is configured with taskScope=memory, which cannot be mirrored from /ralph-tasks. Set .pi/tasks-config.json taskScope to \"session\" or \"project\".",
+		};
+	}
+	if (scope === "project") return { path: join(ctx.cwd, ".pi", "tasks", "tasks.json") };
+
+	const sessionId = ctx.sessionManager.getSessionId();
+	if (!sessionId) return { error: "Pi session id is unavailable; cannot resolve the session-scoped pi-tasks store." };
+	return { path: join(ctx.cwd, ".pi", "tasks", `tasks-${sessionId}.json`) };
+}
+
+function normalizeNativeTaskStatus(value: unknown): NativeTaskStatus {
+	return value === "in_progress" || value === "completed" ? value : "pending";
+}
+
+function normalizeNativeTask(raw: unknown): NativeTaskCard | null {
+	if (!isRecordValue(raw) || typeof raw.id !== "string" || typeof raw.subject !== "string") return null;
+	return {
+		id: raw.id,
+		subject: raw.subject,
+		description: typeof raw.description === "string" ? raw.description : raw.subject,
+		status: normalizeNativeTaskStatus(raw.status),
+		activeForm: typeof raw.activeForm === "string" ? raw.activeForm : undefined,
+		owner: typeof raw.owner === "string" ? raw.owner : undefined,
+		metadata: isRecordValue(raw.metadata) ? { ...raw.metadata } : {},
+		blocks: Array.isArray(raw.blocks) ? raw.blocks.filter((value): value is string => typeof value === "string") : [],
+		blockedBy: Array.isArray(raw.blockedBy) ? raw.blockedBy.filter((value): value is string => typeof value === "string") : [],
+		createdAt: typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+		updatedAt: typeof raw.updatedAt === "number" && Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now(),
+	};
+}
+
+function readNativeTaskStore(storePath: string): NativeTaskStoreData {
+	if (!existsSync(storePath)) return { nextId: 1, tasks: [] };
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(storePath, "utf8")) as unknown;
+	} catch (error) {
+		throw new Error(`Unable to read pi-tasks store ${storePath}: ${formatError(error)}`);
+	}
+	if (!isRecordValue(parsed)) throw new Error(`Invalid pi-tasks store ${storePath}: expected a JSON object.`);
+
+	const tasks = Array.isArray(parsed.tasks) ? parsed.tasks.map(normalizeNativeTask).filter((task): task is NativeTaskCard => task !== null) : [];
+	const maxId = tasks.reduce((max, task) => Math.max(max, Number(task.id) || 0), 0);
+	const nextId = typeof parsed.nextId === "number" && Number.isFinite(parsed.nextId) ? Math.max(Math.floor(parsed.nextId), maxId + 1, 1) : maxId + 1;
+	return { nextId, tasks };
+}
+
+function writeNativeTaskStore(storePath: string, data: NativeTaskStoreData): void {
+	mkdirSync(dirname(storePath), { recursive: true });
+	const tempPath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
+	writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+	renameSync(tempPath, storePath);
+}
+
+function waitForNativeTaskLockRetry(): void {
+	const start = Date.now();
+	while (Date.now() - start < NATIVE_TASK_LOCK_RETRY_MS) {
+		// Match pi-tasks' simple synchronous file-locking approach.
+	}
+}
+
+function acquireNativeTaskLock(lockPath: string): void {
+	mkdirSync(dirname(lockPath), { recursive: true });
+	for (let attempt = 0; attempt < NATIVE_TASK_LOCK_MAX_RETRIES; attempt += 1) {
+		try {
+			writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+			return;
+		} catch (error) {
+			const code = isRecordValue(error) && typeof error.code === "string" ? error.code : undefined;
+			if (code !== "EEXIST") throw error;
+
+			try {
+				const pid = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+				if (pid && !Number.isNaN(pid)) {
+					try {
+						process.kill(pid, 0);
+					} catch {
+						unlinkSync(lockPath);
+						continue;
+					}
+				}
+			} catch {
+				// Ignore unreadable locks and retry until timeout.
+			}
+			waitForNativeTaskLockRetry();
+		}
+	}
+	throw new Error(`Failed to acquire pi-tasks lock: ${lockPath}`);
+}
+
+function withNativeTaskStore<T>(storePath: string, fn: (data: NativeTaskStoreData) => T): T {
+	const lockPath = `${storePath}.lock`;
+	acquireNativeTaskLock(lockPath);
+	try {
+		const data = readNativeTaskStore(storePath);
+		const result = fn(data);
+		writeNativeTaskStore(storePath, data);
+		return result;
+	} finally {
+		try {
+			unlinkSync(lockPath);
+		} catch {
+			// Ignore lock cleanup failures; pi-tasks treats stale locks defensively.
+		}
+	}
+}
+
+function nativeTaskMetadataString(task: NativeTaskCard, key: string): string | undefined {
+	const value = task.metadata[key];
+	return typeof value === "string" ? value : undefined;
+}
+
+function nativeTaskMetadataNumber(task: NativeTaskCard, key: string): number | undefined {
+	const value = task.metadata[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isNativeTaskOwnedBySpec(task: NativeTaskCard, spec: SpecEntry): boolean {
+	return nativeTaskMetadataString(task, "ralphMirroredBy") === "ralph-specum"
+		&& (nativeTaskMetadataString(task, "ralphSpecAbsolutePath") === spec.absolutePath || nativeTaskMetadataString(task, "ralphSpecPath") === spec.path);
+}
+
+function uniqueNativeTaskIds(ids: string[]): string[] {
+	return [...new Set(ids)].sort((a, b) => (Number(a) || 0) - (Number(b) || 0) || a.localeCompare(b));
+}
+
+function nativeTaskSnapshot(task: NativeTaskCard): string {
+	return JSON.stringify({
+		subject: task.subject,
+		description: task.description,
+		status: task.status,
+		activeForm: task.activeForm,
+		owner: task.owner,
+		metadata: task.metadata,
+		blocks: task.blocks,
+		blockedBy: task.blockedBy,
+	});
+}
+
+function findExistingNativeTask(
+	parsed: ParsedNativeTask,
+	previousMap: Record<string, string>,
+	tasksById: Map<string, NativeTaskCard>,
+	specOwnedTasks: NativeTaskCard[],
+	usedTaskIds: Set<string>,
+	spec: SpecEntry,
+): NativeTaskCard | undefined {
+	const mappedTask = tasksById.get(previousMap[parsed.checkboxKey] ?? "");
+	if (mappedTask && !usedTaskIds.has(mappedTask.id)) return mappedTask;
+
+	const matchingStableKey = specOwnedTasks.filter((task) => nativeTaskMetadataString(task, "ralphTaskKey") === parsed.stableKey && !usedTaskIds.has(task.id));
+	if (matchingStableKey.length === 1) return matchingStableKey[0];
+
+	const matchingIndex = specOwnedTasks.find((task) => nativeTaskMetadataNumber(task, "ralphTaskIndex") === parsed.index && !usedTaskIds.has(task.id));
+	if (matchingIndex) return matchingIndex;
+
+	return specOwnedTasks.find((task) => isNativeTaskOwnedBySpec(task, spec) && !usedTaskIds.has(task.id) && task.subject === parsed.subject);
+}
+
+function createNativeTask(data: NativeTaskStoreData, parsed: ParsedNativeTask): NativeTaskCard {
+	const now = Date.now();
+	const task: NativeTaskCard = {
+		id: String(data.nextId),
+		subject: parsed.subject,
+		description: parsed.description,
+		status: parsed.status,
+		activeForm: parsed.activeForm,
+		owner: undefined,
+		metadata: {},
+		blocks: [],
+		blockedBy: [],
+		createdAt: now,
+		updatedAt: now,
+	};
+	data.nextId += 1;
+	data.tasks.push(task);
+	return task;
+}
+
+function nativeTaskMetadata(parsed: ParsedNativeTask, spec: SpecEntry, tasksPath: string, mirroredAt: string): Record<string, unknown> {
+	const metadata: Record<string, unknown> = {
+		agentType: parsed.agentType,
+		ralphMirroredBy: "ralph-specum",
+		ralphNativeTaskSchemaVersion: 1,
+		ralphSpecName: spec.name,
+		ralphSpecPath: spec.path,
+		ralphSpecAbsolutePath: spec.absolutePath,
+		ralphTasksPath: tasksPath,
+		ralphTaskIndex: parsed.index,
+		ralphTaskKey: parsed.stableKey,
+		ralphTaskRawTitle: parsed.rawTitle,
+		ralphTaskPhase: parsed.phase,
+		ralphTaskParallel: parsed.isParallel,
+		ralphTaskVerify: parsed.isVerify,
+		ralphTaskFields: parsed.fields,
+		ralphMirroredAt: mirroredAt,
+	};
+	if (parsed.taskNumber) metadata.ralphTaskNumber = parsed.taskNumber;
+	return metadata;
+}
+
+function applyNativeTaskMirror(
+	data: NativeTaskStoreData,
+	parsedTasks: ParsedNativeTask[],
+	previousMap: Record<string, string>,
+	spec: SpecEntry,
+	tasksPath: string,
+): NativeTaskMirrorResult & { cards: NativeTaskCard[] } {
+	const mirroredAt = new Date().toISOString();
+	const tasksById = new Map(data.tasks.map((task) => [task.id, task]));
+	const specOwnedTasks = data.tasks.filter((task) => isNativeTaskOwnedBySpec(task, spec));
+	const beforeSnapshots = new Map(data.tasks.map((task) => [task.id, nativeTaskSnapshot(task)]));
+	const usedTaskIds = new Set<string>();
+	const createdTaskIds = new Set<string>();
+	const assignments = new Map<number, NativeTaskCard>();
+	const nativeTaskMap: Record<string, string> = {};
+
+	for (const parsed of parsedTasks) {
+		let task = findExistingNativeTask(parsed, previousMap, tasksById, specOwnedTasks, usedTaskIds, spec);
+		if (!task) {
+			task = createNativeTask(data, parsed);
+			tasksById.set(task.id, task);
+			createdTaskIds.add(task.id);
+		}
+
+		usedTaskIds.add(task.id);
+		assignments.set(parsed.index, task);
+		nativeTaskMap[parsed.checkboxKey] = task.id;
+		task.subject = parsed.subject;
+		task.description = parsed.description;
+		task.status = parsed.status;
+		task.activeForm = parsed.activeForm;
+		task.owner = undefined;
+		task.metadata = { ...task.metadata, ...nativeTaskMetadata(parsed, spec, tasksPath, mirroredAt) };
+		task.blocks = [];
+		task.blockedBy = [];
+	}
+
+	for (const parsed of parsedTasks) {
+		const task = assignments.get(parsed.index);
+		if (!task) continue;
+		task.blockedBy = uniqueNativeTaskIds(
+			parsed.blockedByIndices
+				.map((dependencyIndex) => nativeTaskMap[String(dependencyIndex)])
+				.filter((taskId): taskId is string => typeof taskId === "string" && taskId !== task.id),
+		);
+		for (const blockerId of task.blockedBy) {
+			const blocker = tasksById.get(blockerId);
+			if (blocker) blocker.blocks = uniqueNativeTaskIds([...blocker.blocks, task.id]);
+		}
+	}
+
+	const currentTaskIds = new Set(Object.values(nativeTaskMap));
+	const staleTaskIds = new Set([...Object.values(previousMap), ...specOwnedTasks.map((task) => task.id)]);
+	let deleted = 0;
+	data.tasks = data.tasks.filter((task) => {
+		if (!staleTaskIds.has(task.id) || currentTaskIds.has(task.id) || !isNativeTaskOwnedBySpec(task, spec)) return true;
+		deleted += 1;
+		return false;
+	});
+
+	const validTaskIds = new Set(data.tasks.map((task) => task.id));
+	for (const task of data.tasks) {
+		task.blocks = task.blocks.filter((taskId) => validTaskIds.has(taskId));
+		task.blockedBy = task.blockedBy.filter((taskId) => validTaskIds.has(taskId));
+	}
+
+	let updated = 0;
+	for (const task of assignments.values()) {
+		if (createdTaskIds.has(task.id)) continue;
+		if (beforeSnapshots.get(task.id) !== nativeTaskSnapshot(task)) updated += 1;
+	}
+
+	const now = Date.now();
+	for (const task of assignments.values()) {
+		if (createdTaskIds.has(task.id) || beforeSnapshots.get(task.id) !== nativeTaskSnapshot(task)) {
+			task.updatedAt = now;
+		}
+	}
+
+	const maxId = data.tasks.reduce((max, task) => Math.max(max, Number(task.id) || 0), 0);
+	data.nextId = Math.max(data.nextId, maxId + 1, 1);
+
+	return {
+		created: createdTaskIds.size,
+		updated,
+		deleted,
+		total: parsedTasks.length,
+		storePath: "",
+		nativeTaskMap,
+		cards: parsedTasks.map((task) => assignments.get(task.index)).filter((task): task is NativeTaskCard => Boolean(task)),
+	};
+}
+
+function statusIcon(status: NativeTaskStatus): string {
+	return status === "completed" ? "✔" : status === "in_progress" ? "◼" : "◻";
+}
+
+function showMirroredNativeTaskWidget(ctx: ExtensionCommandContext, cards: NativeTaskCard[]): void {
+	if (!ctx.hasUI || cards.length === 0) return;
+
+	const completed = cards.filter((task) => task.status === "completed").length;
+	const inProgress = cards.filter((task) => task.status === "in_progress").length;
+	const pending = cards.filter((task) => task.status === "pending").length;
+	const parts: string[] = [];
+	if (completed > 0) parts.push(`${completed} done`);
+	if (inProgress > 0) parts.push(`${inProgress} in progress`);
+	if (pending > 0) parts.push(`${pending} open`);
+
+	const visibleCards = cards.slice(0, NATIVE_TASK_WIDGET_LIMIT);
+	const lines = [`● ${cards.length} tasks (${parts.join(", ") || "0 open"})`];
+	for (const task of visibleCards) {
+		const blockers = task.blockedBy.length > 0 ? ` › blocked by ${task.blockedBy.map((id) => `#${id}`).join(", ")}` : "";
+		const label = task.status === "in_progress" ? `${task.activeForm ?? task.subject}…` : task.subject;
+		lines.push(`  ${statusIcon(task.status)} #${task.id} ${label}${blockers}`);
+	}
+	if (cards.length > visibleCards.length) lines.push(`    … and ${cards.length - visibleCards.length} more`);
+	ctx.ui.setWidget("tasks", lines, { placement: "aboveEditor" });
+}
+
+function mirrorTasksToNativeTaskCards(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	options: RalphPathOptions,
+): NativeTaskMirrorResult {
+	const dependencyError = nativeTaskMirrorDependencyError(pi);
+	if (dependencyError) throw new Error(dependencyError);
+
+	const storePath = resolveNativeTaskStorePath(ctx);
+	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
+
+	const tasksPath = artifactPath(spec, "tasks");
+	const parsedTasks = parseTasksForNativeCards(readFileSync(tasksPath, "utf8"));
+	if (parsedTasks.length === 0) throw new Error("Cannot mirror tasks.md because no checkbox tasks were parsed.");
+
+	const previousMap = nativeTaskMapFromState(readRalphState(spec, options));
+	const result = withNativeTaskStore(storePath.path, (data) => applyNativeTaskMirror(data, parsedTasks, previousMap, spec, tasksPath));
+	result.storePath = storePath.path;
+	showMirroredNativeTaskWidget(ctx, result.cards);
+	return result;
+}
+
+function nativeTaskMirrorStatePatch(result: NativeTaskMirrorResult): Record<string, unknown> {
+	return {
+		nativeTaskMap: result.nativeTaskMap,
+		nativeSyncEnabled: true,
+		nativeSyncFailureCount: 0,
+		nativeTaskStorePath: formatPath(result.storePath),
+		nativeTaskMirroredAt: new Date().toISOString(),
+		nativeTaskMirror: {
+			created: result.created,
+			updated: result.updated,
+			deleted: result.deleted,
+			total: result.total,
+		},
+	};
+}
+
+function nativeTaskMirrorFailurePatch(state: RalphState | null, error: unknown): Record<string, unknown> {
+	const failureCount = (numberField(state, "nativeSyncFailureCount") ?? 0) + 1;
+	return {
+		nativeSyncEnabled: failureCount < 3,
+		nativeSyncFailureCount: failureCount,
+		validationError: `Native pi-tasks mirroring failed: ${formatError(error)}`,
+	};
+}
+
+function formatNativeTaskMirrorSummary(result: NativeTaskMirrorResult): string[] {
+	return [
+		"Pi task cards:",
+		`- Mirrored ${result.total} tasks to ${formatPath(result.storePath)}.`,
+		`- Created ${result.created}, updated ${result.updated}, deleted ${result.deleted}.`,
+		"- Stored checkbox mappings in .ralph-state.json nativeTaskMap.",
+	];
+}
+
+function formatPhase(spec: SpecEntry, state: RalphState | null): string {
+	const phase = stringField(state, "phase");
+	if (phase) {
+		return phase === "execution" ? "Executing" : phase.charAt(0).toUpperCase() + phase.slice(1);
+	}
+
+	if (artifactExists(spec, "tasks")) return "Tasks";
+	if (artifactExists(spec, "design")) return "Design";
+	if (artifactExists(spec, "requirements")) return "Requirements";
+	if (artifactExists(spec, "research")) return "Research";
+	return "Not started";
+}
+
+function formatProgress(state: RalphState | null, taskCounts: TaskCounts): string {
+	const taskIndex = numberField(state, "taskIndex");
+	const totalTasks = numberField(state, "totalTasks");
+	const parts: string[] = [];
+
+	if (taskIndex !== undefined || totalTasks !== undefined) {
+		parts.push(`${taskIndex ?? 0}/${totalTasks ?? taskCounts.total} state tasks`);
+	}
+	if (taskCounts.total > 0) {
+		parts.push(`${taskCounts.completed}/${taskCounts.total} tasks.md checked`);
+	}
+
+	return parts.length > 0 ? parts.join("; ") : "0/0 tasks";
+}
+
+function formatRelatedSpecs(state: RalphState | null): string {
+	const related = state?.relatedSpecs;
+	if (!Array.isArray(related) || related.length === 0) return "<none>";
+
+	return related
+		.slice(0, 5)
+		.map((entry) => {
+			if (!entry || typeof entry !== "object") return "<invalid>";
+			const item = entry as Record<string, unknown>;
+			const name = typeof item.name === "string" ? item.name : "<unnamed>";
+			const relevance = typeof item.relevance === "string" ? item.relevance.toUpperCase() : "RELATED";
+			const marker = item.mayNeedUpdate === true ? "*" : "";
+			return `${name} (${relevance}${marker})`;
+		})
+		.join(", ");
+}
+
+function formatSpecStatusBlock(spec: SpecEntry, activeSpecPath: string | null, options: RalphPathOptions): string[] {
+	const stateRead = safeReadSpecState(spec, options);
+	const taskCounts = countTasks(spec);
+	const activeSuffix = spec.absolutePath === activeSpecPath ? " [ACTIVE]" : "";
+	const lines = [
+		`#### ${spec.name}${activeSuffix}`,
+		`Location: ${spec.path}`,
+		`Phase: ${formatPhase(spec, stateRead.state)}`,
+		`Progress: ${formatProgress(stateRead.state, taskCounts)}`,
+		`Files: ${formatArtifactIndicators(spec)}`,
+		`Related: ${formatRelatedSpecs(stateRead.state)}`,
+	];
+
+	if (stateRead.error) {
+		lines.push(`State: invalid (${stateRead.error})`);
+	} else if (!stateRead.state) {
+		lines.push("State: none");
+	}
+
+	return lines;
+}
+
+function formatAvailableSpecs(specs: SpecEntry[], options: RalphPathOptions, activeSpecPath: string | null): string {
+	const roots = getSpecRoots({ ...options, allowMissingConfiguredRoots: true });
+	const lines = ["Available specs:"];
+
+	for (const root of roots) {
+		const rootSpecs = specs.filter((spec) => spec.rootAbsolutePath === root.absolutePath);
+		lines.push("", `${formatRootLabel(root)}:`);
+		if (!root.exists) {
+			lines.push("  (root missing)");
+			continue;
+		}
+		if (rootSpecs.length === 0) {
+			lines.push("  (none)");
+			continue;
+		}
+		rootSpecs.forEach((spec, index) => {
+			const active = spec.absolutePath === activeSpecPath ? " [ACTIVE]" : "";
+			lines.push(`  ${index + 1}. ${spec.name}${active} - ${spec.path}`);
+		});
+	}
+
+	return lines.join("\n");
+}
+
+function currentSpecPath(options: RalphPathOptions): string | null {
+	try {
+		return resolveCurrentSpec(options)?.absolutePath ?? null;
+	} catch {
+		return null;
+	}
+}
+
+function resolveExistingSpec(reference: string, options: RalphPathOptions): { spec?: SpecEntry; error?: string } {
+	try {
+		const spec = findSpec(reference, options);
+		if (!isSpecInConfiguredRoot(spec, options)) {
+			return { error: `Spec '${reference}' is not under a configured specs root.` };
+		}
+		return { spec };
+	} catch (error) {
+		return { error: formatSpecResolutionError(reference, error, options) };
+	}
+}
+
+function formatSpecResolutionError(reference: string, error: unknown, options: RalphPathOptions): string {
+	if (error instanceof SpecResolutionError && error.code === "ambiguous") {
+		return [
+			`Multiple specs named '${reference}' found:`,
+			...error.matches.map((spec, index) => `${index + 1}. ${spec.path}`),
+			"Specify the full spec path with /ralph-switch or /ralph-cancel.",
+		].join("\n");
+	}
+
+	const roots = getSpecRoots({ ...options, allowMissingConfiguredRoots: true });
+	const message = error instanceof Error ? error.message : `Spec '${reference}' could not be resolved.`;
+	return [message, "", "Searched roots:", ...roots.map((root) => `- ${formatRootLabel(root)}`)].join("\n");
+}
+
+function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): { message: string; type: "info" | "warning" } {
+	const options = pathOptions(ctx);
+	const validation = validateRalphEnvironment(pi, ctx.cwd);
+	const roots = getSpecRoots({ ...options, allowMissingConfiguredRoots: true });
+	const specs = listSpecs({ ...options, allowMissingConfiguredRoots: true });
+	const currentValue = readCurrentSpecValue(options);
+	const activeSpec = currentValue ? resolveCurrentSpec(options) : null;
+	const activeSpecPath = activeSpec?.absolutePath ?? null;
+	const lines = [
+		"# Ralph Specum Status",
+		"",
+		`Bootstrap validation: Overall: ${validation.ready ? "PASS" : "FAIL"} (run /ralph-init for details)`,
+		`Active spec: ${formatActiveSpec(currentValue, activeSpec)}`,
+		"",
+		"## Spec roots",
+		...roots.map((root) => `- ${formatRootLabel(root)}`),
+		"",
+		"## Specs",
+	];
+
+	if (specs.length === 0) {
+		lines.push("No specs found in configured roots.");
+	} else {
+		for (const root of roots) {
+			const rootSpecs = specs.filter((spec) => spec.rootAbsolutePath === root.absolutePath);
+			lines.push("", `### ${formatRootLabel(root)}`);
+			if (!root.exists) {
+				lines.push("Root missing.");
+				continue;
+			}
+			if (rootSpecs.length === 0) {
+				lines.push("No specs found.");
+				continue;
+			}
+			for (const spec of rootSpecs) {
+				lines.push("", ...formatSpecStatusBlock(spec, activeSpecPath, options));
+			}
+		}
+	}
+
+	lines.push(
+		"",
+		"Commands:",
+		"- /ralph-triage [--output spec-files|github-issues|both] [--yes] <epic> <goal>  Create/resume an epic and requested outputs",
+		"- /ralph-epic-status [--json|--repair] [epic]  Show or repair epic child spec readiness",
+		"- /ralph-epic-switch <epic>          Switch active epic marker",
+		"- /ralph-epic-next [--switch|--start] [epic] Select next unblocked child spec",
+		"- /ralph-epic-cancel [epic]          Cancel active epic execution state safely",
+		"- /ralph-start [--next-epic-spec] [--quick|--autonomous] [spec-name] [goal]  Create/resume a spec; quick mode reviews artifacts and implements",
+		"- /ralph-research [spec]              Generate research.md",
+		"- /ralph-requirements [spec]          Generate requirements.md",
+		"- /ralph-design [spec]                Generate design.md",
+		"- /ralph-tasks [spec]                 Generate canonical tasks.md",
+		"- /ralph-implement [spec]             Execute tasks.md through Ralph subagents",
+		"- /ralph-switch <spec-name-or-path>  Switch active spec",
+		"- /ralph-cancel [spec-name-or-path]   Clear execution state for a spec",
+		"- /ralph-init [--refresh-agents]      Bootstrap/check package tools and project Ralph subagents",
+	);
+
+	return { message: lines.join("\n"), type: validation.ready ? "info" : "warning" };
+}
+
+function formatActiveSpec(currentValue: string | null, activeSpec: SpecEntry | null): string {
+	if (!currentValue) return "none";
+	if (!activeSpec) return `${currentValue} (unresolved)`;
+	return activeSpec.exists ? `${activeSpec.name} (${activeSpec.path})` : `${currentValue} (missing at ${activeSpec.path})`;
+}
+
+async function selectSpec(ctx: ExtensionCommandContext, specs: SpecEntry[], activeSpecPath: string | null): Promise<SpecEntry | null> {
+	if (!ctx.hasUI) return null;
+
+	const labels = specs.map((spec, index) => {
+		const active = spec.absolutePath === activeSpecPath ? " [ACTIVE]" : "";
+		return `${index + 1}. ${spec.name}${active} - ${spec.path}`;
+	});
+	const selected = await ctx.ui.select("Switch to spec", labels);
+	if (!selected) return null;
+
+	const selectedIndex = labels.indexOf(selected);
+	return selectedIndex >= 0 ? specs[selectedIndex] : null;
+}
+
+function formatSwitchSummary(spec: SpecEntry, pointerValue: string, options: RalphPathOptions): string {
+	const stateRead = safeReadSpecState(spec, options);
+	const taskCounts = countTasks(spec);
+	const lines = [
+		`Switched to spec: ${spec.name}`,
+		"",
+		`Location: ${spec.path}`,
+		`Current marker: ${pointerValue}`,
+		`Current phase: ${formatPhase(spec, stateRead.state)}`,
+		`Progress: ${formatProgress(stateRead.state, taskCounts)}`,
+		"",
+		"Files present:",
+		...SPEC_ARTIFACTS.map((artifact) => `- [${artifactExists(spec, artifact) ? "x" : " "}] ${artifact}.md`),
+	];
+
+	if (stateRead.error) {
+		lines.push("", `Warning: ${stateRead.error}`);
+	}
+
+	lines.push("", "Next: run the appropriate /ralph-* phase command.");
+	return lines.join("\n");
+}
+
+function tokenizeCommandArgs(args: string): { tokens: string[]; error?: string } {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: "'" | '"' | null = null;
+	let escaping = false;
+
+	for (const char of args) {
+		if (escaping) {
+			current += char;
+			escaping = false;
+			continue;
+		}
+		if (char === "\\" && quote !== "'") {
+			escaping = true;
+			continue;
+		}
+		if (quote) {
+			if (char === quote) {
+				quote = null;
+			} else {
+				current += char;
+			}
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			quote = char;
+			continue;
+		}
+		if (/\s/.test(char)) {
+			if (current) {
+				tokens.push(current);
+				current = "";
+			}
+			continue;
+		}
+		current += char;
+	}
+
+	if (escaping) current += "\\";
+	if (quote) return { tokens: [], error: `Unclosed ${quote} quote in arguments.` };
+	if (current) tokens.push(current);
+	return { tokens };
+}
+
+function parseStartArgs(args: string): StartArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) {
+		return emptyStartArguments(tokenized.error);
+	}
+
+	const positionals: string[] = [];
+	const warnings: string[] = [];
+	let fresh = false;
+	let quickMode = false;
+	let autonomousMode = false;
+	let skipResearch = false;
+	let nextEpicSpec = false;
+	let commitSpec: boolean | undefined;
+	let specsDir: string | undefined;
+	let tasksSize: StartArguments["tasksSize"];
+
+	for (let index = 0; index < tokenized.tokens.length; index += 1) {
+		const token = tokenized.tokens[index];
+		if (token === "--fresh") {
+			fresh = true;
+			continue;
+		}
+		if (token === "--quick") {
+			quickMode = true;
+			continue;
+		}
+		if (token === "--autonomous" || token === "--auto") {
+			autonomousMode = true;
+			continue;
+		}
+		if (token === "--skip-research") {
+			skipResearch = true;
+			continue;
+		}
+		if (token === "--next-epic-spec" || token === "--epic-next") {
+			nextEpicSpec = true;
+			continue;
+		}
+		if (token === "--commit-spec") {
+			commitSpec = true;
+			continue;
+		}
+		if (token === "--no-commit-spec") {
+			commitSpec = false;
+			continue;
+		}
+		if (token === "--specs-dir" || token.startsWith("--specs-dir=")) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			if (!value || value.startsWith("--")) return emptyStartArguments("--specs-dir requires a path value.");
+			specsDir = value;
+			continue;
+		}
+		if (token === "--tasks-size" || token.startsWith("--tasks-size=")) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			if (!value || value.startsWith("--")) return emptyStartArguments("--tasks-size requires fine or coarse.");
+			if (value === "fine" || value === "coarse") {
+				tasksSize = value;
+			} else {
+				tasksSize = "fine";
+				warnings.push(`Invalid --tasks-size value "${value}"; defaulting to fine.`);
+			}
+			continue;
+		}
+		if (token.startsWith("--")) {
+			return emptyStartArguments(`Unknown option: ${token}`);
+		}
+		positionals.push(token);
+	}
+
+	let reference: string | null = null;
+	let goal = "";
+	if (positionals.length > 0) {
+		const first = positionals[0];
+		if (isPathReference(first) || isValidSpecName(first)) {
+			reference = first;
+			goal = positionals.slice(1).join(" ").trim();
+		} else {
+			goal = positionals.join(" ").trim();
+		}
+	}
+
+	if (!reference && goal && (quickMode || autonomousMode)) {
+		reference = inferSpecNameFromGoal(goal);
+		warnings.push(`Inferred spec name '${reference}' from goal.`);
+	}
+
+	return {
+		reference,
+		goal,
+		fresh,
+		quickMode,
+		autonomousMode,
+		skipResearch,
+		nextEpicSpec,
+		commitSpec,
+		specsDir,
+		tasksSize,
+		warnings,
+	};
+}
+
+function emptyStartArguments(error: string): StartArguments {
+	return {
+		reference: null,
+		goal: "",
+		fresh: false,
+		quickMode: false,
+		autonomousMode: false,
+		skipResearch: false,
+		nextEpicSpec: false,
+		warnings: [],
+		error,
+	};
+}
+
+function isValidSpecName(name: string): boolean {
+	return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name);
+}
+
+function inferSpecNameFromGoal(goal: string): string {
+	const slug = goal
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.split("-")
+		.filter(Boolean)
+		.slice(0, 6)
+		.join("-");
+	return slug || "new-spec";
+}
+
+function startPhaseCommand(phase: StartPhase): string {
+	return phase === "execution" ? "/ralph-implement" : `/ralph-${phase}`;
+}
+
+function phaseRank(phase: StartPhase): number {
+	return ["research", "requirements", "design", "tasks", "execution"].indexOf(phase);
+}
+
+function parseStatePhase(state: RalphState | null): StartPhase | null {
+	const phase = stringField(state, "phase");
+	return phase === "research" || phase === "requirements" || phase === "design" || phase === "tasks" || phase === "execution"
+		? phase
+		: null;
+}
+
+function inferArtifactNextPhase(spec: SpecEntry): StartPhase {
+	if (!artifactExists(spec, "research")) return "research";
+	if (!artifactExists(spec, "requirements")) return "requirements";
+	if (!artifactExists(spec, "design")) return "design";
+	if (!artifactExists(spec, "tasks")) return "tasks";
+	return "execution";
+}
+
+function determineStartPhase(spec: SpecEntry, state: RalphState | null, parsed: StartArguments, isNew: boolean): StartPhase {
+	if (isNew) return parsed.skipResearch ? "requirements" : "research";
+
+	const artifactPhase = inferArtifactNextPhase(spec);
+	const statePhase = parseStatePhase(state);
+	if (!statePhase) return artifactPhase;
+	return phaseRank(statePhase) > phaseRank(artifactPhase) ? statePhase : artifactPhase;
+}
+
+function configuredRootForSpecsDir(specsDir: string, options: RalphPathOptions): { root?: SpecRoot; error?: string } {
+	const cwd = options.cwd ?? process.cwd();
+	const absolutePath = resolve(isAbsolute(specsDir) ? specsDir : join(cwd, specsDir));
+	const roots = getSpecRoots({ ...options, allowMissingConfiguredRoots: true });
+	const root = roots.find((entry) => entry.absolutePath === absolutePath);
+	if (root) return { root };
+
+	return {
+		error: [
+			`Invalid --specs-dir: '${specsDir}' is not in configured specs_dirs.`,
+			"Configured roots:",
+			...roots.map((entry) => `- ${formatRootLabel(entry)}`),
+		].join("\n"),
+	};
+}
+
+function isSpecUnderConfiguredRoot(spec: SpecEntry, options: RalphPathOptions): boolean {
+	return getSpecRoots({ ...options, allowMissingConfiguredRoots: true }).some((root) => {
+		const relativePath = relative(root.absolutePath, spec.absolutePath);
+		return relativePath !== "" && relativePath !== ".." && !relativePath.startsWith("../") && !isAbsolute(relativePath);
+	});
+}
+
+function resolveStartTarget(parsed: StartArguments, options: RalphPathOptions): { target?: StartTarget; error?: string } {
+	if (!parsed.reference) {
+		if (parsed.goal) {
+			return { error: "Spec name is required when a goal is provided. Usage: /ralph-start <spec-name> [goal]" };
+		}
+
+		const currentValue = readCurrentSpecValue(options);
+		if (!currentValue) {
+			return { error: "Spec name is required. Usage: /ralph-start <spec-name> [goal]" };
+		}
+
+		const spec = resolveCurrentSpec(options);
+		if (!spec || !spec.exists) {
+			return { error: `Active spec '${currentValue}' points to a missing directory. Pass a spec name to create one.` };
+		}
+		return { target: { spec, isNew: false } };
+	}
+
+	if (parsed.specsDir && isPathReference(parsed.reference)) {
+		return { error: "Use either an explicit spec path or --specs-dir, not both." };
+	}
+
+	if (parsed.specsDir) {
+		if (!isValidSpecName(parsed.reference)) {
+			return { error: `Invalid spec name '${parsed.reference}'. Use kebab-case like 'user-auth'.` };
+		}
+		const rootResult = configuredRootForSpecsDir(parsed.specsDir, options);
+		if (!rootResult.root) return { error: rootResult.error };
+		const spec = specEntryFromAbsolutePath(join(rootResult.root.absolutePath, parsed.reference), {
+			...options,
+			allowMissingConfiguredRoots: true,
+		});
+		return validateStartTargetSpec(spec, parsed, options);
+	}
+
+	if (isPathReference(parsed.reference)) {
+		const cwd = options.cwd ?? process.cwd();
+		const spec = specEntryFromAbsolutePath(resolve(isAbsolute(parsed.reference) ? parsed.reference : join(cwd, parsed.reference)), {
+			...options,
+			allowMissingConfiguredRoots: true,
+		});
+		if (!isValidSpecName(spec.name)) {
+			return { error: `Invalid spec directory name '${spec.name}'. Use kebab-case like 'user-auth'.` };
+		}
+		if (!isSpecUnderConfiguredRoot(spec, options)) {
+			return { error: `Refusing to create or resume ${spec.path}; it is not under a configured specs root.` };
+		}
+		return validateStartTargetSpec(spec, parsed, options);
+	}
+
+	if (!isValidSpecName(parsed.reference)) {
+		return { error: `Invalid spec name '${parsed.reference}'. Use kebab-case like 'user-auth'.` };
+	}
+
+	try {
+		const spec = findSpec(parsed.reference, options);
+		return validateStartTargetSpec(spec, parsed, options);
+	} catch (error) {
+		if (error instanceof SpecResolutionError && error.code === "not_found") {
+			const root = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
+			const spec = specEntryFromAbsolutePath(join(root.absolutePath, parsed.reference), {
+				...options,
+				allowMissingConfiguredRoots: true,
+			});
+			return validateStartTargetSpec(spec, parsed, options);
+		}
+		return { error: formatSpecResolutionError(parsed.reference, error, options) };
+	}
+}
+
+function validateStartTargetSpec(
+	spec: SpecEntry,
+	parsed: StartArguments,
+	options: RalphPathOptions,
+): { target?: StartTarget; error?: string } {
+	if (spec.exists && !statSync(spec.absolutePath).isDirectory()) {
+		return { error: `Spec path exists but is not a directory: ${spec.path}` };
+	}
+	if (parsed.fresh && spec.exists) {
+		return {
+			error: [
+				`Spec '${spec.name}' already exists at ${spec.path}.`,
+				"Ralph Pi does not overwrite existing specs during /ralph-start --fresh.",
+				"Choose a new spec name, or use /ralph-cancel --delete after confirmation if you want to remove it.",
+			].join("\n"),
+		};
+	}
+	if (!isSpecUnderConfiguredRoot(spec, options)) {
+		return { error: `Refusing to create or resume ${spec.path}; it is not under a configured specs root.` };
+	}
+	return { target: { spec, isNew: !spec.exists } };
+}
+
+function startStatePatch(
+	spec: SpecEntry,
+	parsed: StartArguments,
+	phase: StartPhase,
+	existingState: RalphState | null,
+): Record<string, unknown> {
+	const autonomous = parsed.quickMode || parsed.autonomousMode;
+	const patch: Record<string, unknown> = {
+		source: existingState?.source ?? "spec",
+		name: spec.name,
+		basePath: spec.path,
+		phase,
+		taskIndex: numberField(existingState, "taskIndex") ?? 0,
+		totalTasks: numberField(existingState, "totalTasks") ?? 0,
+		taskIteration: numberField(existingState, "taskIteration") ?? 1,
+		maxTaskIterations: numberField(existingState, "maxTaskIterations") ?? 5,
+		globalIteration: numberField(existingState, "globalIteration") ?? 1,
+		maxGlobalIterations: numberField(existingState, "maxGlobalIterations") ?? 100,
+		commitSpec: parsed.commitSpec ?? booleanField(existingState, "commitSpec") ?? true,
+		quickMode: autonomous || booleanField(existingState, "quickMode") === true,
+		awaitingApproval: !autonomous,
+		discoveredSkills: Array.isArray(existingState?.discoveredSkills) ? existingState.discoveredSkills : [],
+		relatedSpecs: Array.isArray(existingState?.relatedSpecs) ? existingState.relatedSpecs : [],
+	};
+
+	if (parsed.tasksSize) patch.granularity = parsed.tasksSize;
+	if (parsed.autonomousMode) patch.autonomousMode = true;
+	return patch;
+}
+
+function buildInitialProgress(spec: SpecEntry, goal: string, phase: StartPhase, quickOrAutonomous: boolean): string {
+	const updated = new Date().toISOString();
+	const currentTask = phase === "execution" ? "Ready for implementation" : `Starting ${phase} phase`;
+	const next = quickOrAutonomous
+		? `Continue autonomous flow from ${startPhaseCommand(phase)} when phase orchestration is available.`
+		: `Run ${startPhaseCommand(phase)} to continue.`;
+	const originalGoal = goal.trim() || "_No goal captured yet_";
+
+	return [
+		"---",
+		`spec: ${spec.name}`,
+		`basePath: ${spec.path}`,
+		`phase: ${phase}`,
+		"task: 0/0",
+		`updated: ${updated}`,
+		"---",
+		"",
+		`# Progress: ${spec.name}`,
+		"",
+		"## Original Goal",
+		"",
+		originalGoal,
+		"",
+		"## Completed Tasks",
+		"",
+		"_No tasks completed yet_",
+		"",
+		"## Current Task",
+		"",
+		currentTask,
+		"",
+		"## Learnings",
+		"",
+		"_Discoveries and insights will be captured here_",
+		"",
+		"## Blockers",
+		"",
+		"- None currently",
+		"",
+		"## Next",
+		"",
+		next,
+		"",
+	].join("\n");
+}
+
+function maybeWriteInitialProgress(spec: SpecEntry, goal: string, phase: StartPhase, quickOrAutonomous: boolean, options: RalphPathOptions): string {
+	const existingProgress = readProgress(spec, options);
+	if (!existingProgress.trim()) {
+		return writeProgress(spec, buildInitialProgress(spec, goal, phase, quickOrAutonomous), options);
+	}
+	return getProgressPath(spec, options);
+}
+
+function formatStartSummary(
+	spec: SpecEntry,
+	isNew: boolean,
+	phase: StartPhase,
+	state: RalphState,
+	pointerValue: string,
+	progressPath: string,
+	warnings: string[],
+): string {
+	const quickMode = booleanField(state, "quickMode") === true;
+	const autonomousMode = booleanField(state, "autonomousMode") === true;
+	const mode = quickMode ? (autonomousMode ? "quick/autonomous" : "quick") : autonomousMode ? "autonomous" : "normal";
+	const lines = [
+		`${isNew ? "Created" : "Resuming"} spec: ${spec.name}`,
+		"",
+		`Location: ${spec.path}`,
+		`Current marker: ${pointerValue}`,
+		`State: ${getRalphStatePath(spec)}`,
+		`Progress: ${progressPath}`,
+		`Mode: ${mode}`,
+		`Next phase: ${phase}`,
+		`Next command: ${startPhaseCommand(phase)}${quickMode ? " --quick" : ""}`,
+		`Files: ${formatArtifactIndicators(spec)}`,
+	];
+
+	if (warnings.length > 0) {
+		lines.push("", "Warnings:", ...warnings.map((warning) => `- ${warning}`));
+	}
+
+	if (quickMode || autonomousMode) {
+		lines.push(
+			"",
+			"Quick/autonomous setup requested; state was initialized with awaitingApproval=false.",
+			"Ralph will generate/review artifacts, mirror Pi task cards, then enter implementation without approval prompts.",
+		);
+	} else {
+		lines.push("", "Stopped after setup. Run the next command only when you are ready to continue.");
+	}
+
+	return lines.join("\n");
+}
+
+function readActiveEpicForStart(options: RalphPathOptions): ActiveEpicRead {
+	const currentName = readCurrentEpicName(options);
+	if (!currentName) return { currentName: null, warnings: [] };
+	if (!isValidSpecName(currentName)) {
+		return { currentName, warnings: [], error: `Invalid active epic name '${currentName}' in .current-epic.` };
+	}
+
+	const epic = resolveEpicDirectory(currentName, options);
+	if (!epic.exists) {
+		return { currentName, epic, warnings: [], error: `Active epic '${currentName}' points to a missing directory: ${epic.path}` };
+	}
+
+	const stateRead = safeReadEpicState(epic, options);
+	if (!stateRead.state) {
+		return {
+			currentName,
+			epic,
+			stateRead,
+			warnings: stateRead.warnings,
+			error: [`Active epic '${currentName}' has no readable state.`, ...stateRead.warnings.map((warning) => `- ${warning}`)].join("\n"),
+		};
+	}
+
+	const summary = computeEpicDependencyStatus(stateRead.state);
+	const warnings = unique([...(stateRead.warnings ?? []), ...epicValidationWarnings(stateRead.state), ...summary.validation.warnings]);
+	return { currentName, epic, stateRead, summary, warnings };
+}
+
+function epicStatusForChild(summary: ReturnType<typeof computeEpicDependencyStatus>, specName: string): EpicSpecDependencyStatus | null {
+	return summary.specs.find((entry) => entry.name === specName) ?? null;
+}
+
+function preferredEpicStartStatus(state: EpicState, summary: ReturnType<typeof computeEpicDependencyStatus>): EpicSpecDependencyStatus | null {
+	const activeName = typeof state.activeSpec === "string" ? state.activeSpec : null;
+	const active = activeName ? summary.specs.find((entry) => entry.name === activeName && entry.status === "in_progress") : undefined;
+	if (active) return active;
+	const inProgress = summary.specs.find((entry) => entry.status === "in_progress");
+	if (inProgress) return inProgress;
+	return summary.nextSpec ? epicStatusForChild(summary, summary.nextSpec.name) : null;
+}
+
+function formatActiveEpicStartSuggestion(active: ActiveEpicRead): string {
+	const lines = ["Active Ralph epic detected.", "", `Current epic: ${active.currentName ?? "none"}`];
+	if (active.epic) lines.push(`Location: ${active.epic.path}`);
+
+	if (!active.stateRead?.state || !active.summary) {
+		lines.push("", active.error ?? "Epic state is unavailable.");
+		return lines.join("\n");
+	}
+
+	const state = active.stateRead.state;
+	const selected = preferredEpicStartStatus(state, active.summary);
+	lines.push(
+		`Epic status: ${state.status}`,
+		`Progress: ${epicProgressText(state, active.summary.completedSpecs.length)}`,
+		`Active child spec: ${state.activeSpec ?? "none"}`,
+	);
+
+	if (selected) {
+		const label = selected.status === "in_progress" ? "Active child spec" : "Next unblocked child spec";
+		lines.push(
+			"",
+			`${label}: ${selected.name}`,
+			`Goal: ${selected.spec.goal ?? ""}`,
+			`Dependencies: ${selected.dependencies.length > 0 ? selected.dependencies.join(", ") : "none"}`,
+			"",
+			"Run /ralph-start --next-epic-spec to select this child spec, or pass an explicit spec name to work outside the epic.",
+		);
+	} else if (state.status === "completed") {
+		lines.push("", "Epic is complete. Run /ralph-epic-status for details or pass an explicit spec name.");
+	} else if (state.status === "cancelled") {
+		lines.push("", "Epic is cancelled. Run /ralph-epic-status for details or pass an explicit spec name.");
+	} else {
+		lines.push("", "No unblocked child spec is ready.");
+		const blocked = active.summary.specs.filter((entry) => entry.isDependencyBlocked || entry.isExplicitlyBlocked);
+		if (blocked.length > 0) lines.push("", "Blocked specs:", ...blocked.map((entry) => `- ${entry.name}: ${formatEpicDependencyReason(entry)}`));
+	}
+
+	lines.push("", "Epic commands:", "- /ralph-epic-status", "- /ralph-epic-next --switch", "- /ralph-epic-next --start");
+	if (active.warnings.length > 0) lines.push("", "Warnings:", ...active.warnings.map((warning) => `- ${warning}`));
+	return lines.join("\n");
+}
+
+async function selectActiveEpicStart(parsed: StartArguments, ctx: ExtensionCommandContext, options: RalphPathOptions): Promise<EpicStartSelection> {
+	if (parsed.reference) return { kind: "none" };
+
+	const active = readActiveEpicForStart(options);
+	if (!active.currentName) {
+		return parsed.nextEpicSpec ? { kind: "error", message: "No active epic is set. Run /ralph-triage or /ralph-epic-switch first." } : { kind: "none" };
+	}
+	if (!active.epic || !active.stateRead?.state || !active.summary) {
+		return parsed.nextEpicSpec
+			? { kind: "error", message: active.error ?? "Active epic state is unavailable." }
+			: { kind: "message", message: formatActiveEpicStartSuggestion(active), type: "warning" };
+	}
+
+	const state = active.stateRead.state;
+	if (state.status === "completed" || state.status === "cancelled") {
+		const message = formatActiveEpicStartSuggestion(active);
+		return parsed.nextEpicSpec ? { kind: "error", message } : { kind: "message", message, type: "warning" };
+	}
+
+	const selected = preferredEpicStartStatus(state, active.summary);
+	if (!selected) {
+		const message = formatActiveEpicStartSuggestion(active);
+		return parsed.nextEpicSpec ? { kind: "error", message } : { kind: "message", message, type: "warning" };
+	}
+
+	const context: EpicStartContext = {
+		epic: active.epic,
+		state,
+		child: selected.spec,
+		dependencyStatus: selected,
+		selectedByNextFlag: parsed.nextEpicSpec,
+	};
+
+	if (parsed.nextEpicSpec) {
+		return { kind: "selected", context, warnings: active.warnings };
+	}
+
+	if (ctx.hasUI && !parsed.goal && !parsed.quickMode && !parsed.autonomousMode) {
+		const confirmed = await ctx.ui.confirm(
+			"Start next epic child spec?",
+			[
+				`Active epic '${active.epic.name}' has ${selected.status === "in_progress" ? "an active" : "a ready"} child spec '${selected.name}'.`,
+				"",
+				`Goal: ${selected.spec.goal ?? ""}`,
+				`Dependencies: ${selected.dependencies.length > 0 ? selected.dependencies.join(", ") : "none"}`,
+				"",
+				"Choose OK to start/resume this child spec, or Cancel to enter another spec name.",
+			].join("\n"),
+		);
+		if (confirmed) return { kind: "selected", context, warnings: active.warnings };
+		return { kind: "none" };
+	}
+
+	return { kind: "message", message: formatActiveEpicStartSuggestion(active), type: active.warnings.length > 0 ? "warning" : "info" };
+}
+
+async function epicStartContextForSpec(spec: SpecEntry, ctx: ExtensionCommandContext, options: RalphPathOptions): Promise<{ context?: EpicStartContext; warnings: string[]; error?: string }> {
+	const active = readActiveEpicForStart(options);
+	if (!active.currentName || !active.epic || !active.stateRead?.state || !active.summary) return { warnings: [] };
+
+	const entry = epicStatusForChild(active.summary, spec.name);
+	if (!entry) return { warnings: active.warnings };
+
+	if (active.stateRead.state.status === "completed" || active.stateRead.state.status === "cancelled") {
+		return { warnings: active.warnings, error: `Cannot start child spec '${spec.name}' because epic '${active.epic.name}' is ${active.stateRead.state.status}.` };
+	}
+
+	if (entry.isDependencyBlocked || entry.isExplicitlyBlocked) {
+		const reason = formatEpicDependencyReason(entry);
+		if (!ctx.hasUI) {
+			return { warnings: active.warnings, error: `Cannot start epic child spec '${spec.name}': ${reason}. Complete dependencies or update the epic state first.` };
+		}
+		const confirmed = await ctx.ui.confirm(
+			"Start blocked epic child spec?",
+			[
+				`Child spec '${spec.name}' belongs to active epic '${active.epic.name}' but is blocked: ${reason}.`,
+				"",
+				"Starting out of dependency order can break interface contracts. Continue anyway?",
+			].join("\n"),
+		);
+		if (!confirmed) return { warnings: active.warnings, error: `Ralph start aborted for blocked epic child spec '${spec.name}'.` };
+		active.warnings.push(`Started blocked epic child spec '${spec.name}' after UI confirmation: ${reason}.`);
+	}
+
+	return {
+		context: {
+			epic: active.epic,
+			state: active.stateRead.state,
+			child: entry.spec,
+			dependencyStatus: entry,
+			selectedByNextFlag: false,
+		},
+		warnings: active.warnings,
+	};
+}
+
+function activateEpicChildForStart(context: EpicStartContext, options: RalphPathOptions): EpicStartContext {
+	const status = context.dependencyStatus?.status;
+	if (status === "completed" || status === "cancelled") return context;
+	const updatedState = startEpicChildSpec(context.epic, context.child.name, options);
+	const summary = computeEpicDependencyStatus(updatedState);
+	const updatedEntry = epicStatusForChild(summary, context.child.name);
+	return {
+		...context,
+		state: updatedState,
+		child: updatedEntry?.spec ?? context.child,
+		dependencyStatus: updatedEntry ?? context.dependencyStatus,
+	};
+}
+
+function epicStartStatePatch(context: EpicStartContext, spec: SpecEntry, phase: StartPhase, existingState: RalphState | null, options: RalphPathOptions): Record<string, unknown> {
+	return {
+		...childSpecStatePatch(context.epic, context.state, context.child, spec, existingState),
+		source: existingState?.source ?? "epic",
+		phase,
+		epicStatePath: getEpicStatePath(context.epic, options),
+		epicStartedVia: context.selectedByNextFlag ? "--next-epic-spec" : "active-epic",
+		epicLastSyncedAt: new Date().toISOString(),
+	};
+}
+
+function ensureEpicChildPlanForStart(context: EpicStartContext, spec: SpecEntry, parsed: StartArguments): string | null {
+	const planPath = join(spec.absolutePath, "plan.md");
+	if (existsSync(planPath) && !parsed.fresh) return null;
+	const epicMarkdown = readFileIfExists(epicMarkdownPath(context.epic));
+	atomicWriteCoordinatorText(planPath, buildChildPlan(context.epic, context.state, context.child, epicMarkdown));
+	return planPath;
+}
+
+function ensureEpicProgressContext(spec: SpecEntry, context: EpicStartContext, options: RalphPathOptions): string {
+	const progress = readProgress(spec, options);
+	if (progress.includes("## Epic Context") && progress.includes(`- Epic: ${context.state.name}`)) {
+		return getProgressPath(spec, options);
+	}
+
+	const dependencies = context.child.dependencies && context.child.dependencies.length > 0 ? context.child.dependencies : [];
+	const dependencyLines = dependencies.length > 0
+		? dependencies.map((dependency) => {
+			const child = childSpecEntry(dependency, options);
+			return `- ${dependency} (progress: ${getProgressPath(child, options)})`;
+		})
+		: ["- None"];
+	const contractLines = formatContractsForPlan(relevantContractsForSpec(context.state, context.child));
+	appendProgress(
+		spec,
+		[
+			"",
+			"## Epic Context",
+			`- Epic: ${context.state.name}`,
+			`- Epic file: ${epicDisplayPath(context.epic, "epic.md")}`,
+			`- Epic state: ${getEpicStatePath(context.epic, options)}`,
+			`- Child spec: ${context.child.name}`,
+			"",
+			"### Dependencies",
+			...dependencyLines,
+			"",
+			"### Interface Contracts",
+			...contractLines,
+			"",
+		].join("\n"),
+		options,
+	);
+	return getProgressPath(spec, options);
+}
+
+async function runStartCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const options = pathOptions(ctx);
+	const parsed = parseStartArgs(args);
+	if (parsed.error) {
+		await notify(ctx, parsed.error, "warning");
+		return;
+	}
+	if (parsed.nextEpicSpec && parsed.reference) {
+		await notify(ctx, "Use --next-epic-spec without an explicit spec name; pass a spec name without the flag to start a specific spec.", "warning");
+		return;
+	}
+
+	const quickOrAutonomous = parsed.quickMode || parsed.autonomousMode;
+	let epicStartContext: EpicStartContext | null = null;
+	const selection = await selectActiveEpicStart(parsed, ctx, options);
+	if (selection.kind === "error") {
+		await notify(ctx, selection.message, "warning");
+		return;
+	}
+	if (selection.kind === "message") {
+		await notify(ctx, selection.message, selection.type);
+		return;
+	}
+	if (selection.kind === "selected") {
+		epicStartContext = selection.context;
+		parsed.reference = selection.context.child.name;
+		if (!parsed.goal) parsed.goal = selection.context.child.goal ?? "";
+		parsed.warnings.push(...selection.warnings, `Selected epic child spec '${selection.context.child.name}' from active epic '${selection.context.epic.name}'.`);
+	}
+
+	const hasCurrentSpec = Boolean(readCurrentSpecValue(options));
+	if (!parsed.reference && ctx.hasUI && !quickOrAutonomous && (parsed.goal || !hasCurrentSpec)) {
+		const name = await ctx.ui.input("Spec name", "kebab-case, e.g. user-auth");
+		if (!name?.trim()) {
+			await notify(ctx, "Ralph start aborted: no spec name provided.", "warning");
+			return;
+		}
+		parsed.reference = name.trim();
+	}
+
+	const resolved = resolveStartTarget(parsed, options);
+	if (!resolved.target) {
+		await notify(ctx, resolved.error ?? "Unable to resolve Ralph spec target.", "warning");
+		return;
+	}
+
+	if (resolved.target.isNew && !parsed.goal && quickOrAutonomous) {
+		await notify(ctx, "Quick/autonomous mode requires a spec goal for new specs; pass it in the /ralph-start arguments.", "warning");
+		return;
+	}
+
+	if (resolved.target.isNew && !parsed.goal && ctx.hasUI) {
+		const goal = await ctx.ui.input("Spec goal", "Describe what you want to build or achieve");
+		parsed.goal = goal?.trim() ?? "";
+	}
+
+	try {
+		mkdirSync(resolved.target.spec.absolutePath, { recursive: true });
+	} catch (error) {
+		await notify(ctx, `Failed to create spec directory: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	const spec = specEntryFromAbsolutePath(resolved.target.spec.absolutePath, {
+		...options,
+		allowMissingConfiguredRoots: true,
+	});
+	const stateRead = safeReadSpecState(spec, options);
+	if (stateRead.error) {
+		await notify(ctx, `Cannot start spec with invalid state: ${stateRead.error}`, "warning");
+		return;
+	}
+
+	if (!epicStartContext) {
+		const explicitEpicContext = await epicStartContextForSpec(spec, ctx, options);
+		if (explicitEpicContext.error) {
+			await notify(ctx, explicitEpicContext.error, "warning");
+			return;
+		}
+		if (explicitEpicContext.context) {
+			epicStartContext = explicitEpicContext.context;
+			if (!parsed.goal) parsed.goal = explicitEpicContext.context.child.goal ?? "";
+			parsed.warnings.push(...explicitEpicContext.warnings, `Spec '${spec.name}' is a child of active epic '${explicitEpicContext.context.epic.name}'.`);
+		}
+	}
+
+	if (epicStartContext) {
+		try {
+			epicStartContext = activateEpicChildForStart(epicStartContext, options);
+			const planPath = ensureEpicChildPlanForStart(epicStartContext, spec, parsed);
+			if (planPath) parsed.warnings.push(`Wrote epic child plan: ${planPath}`);
+		} catch (error) {
+			await notify(ctx, `Failed to update active epic before starting child spec: ${formatError(error)}`, "warning");
+			return;
+		}
+	}
+
+	const phase = determineStartPhase(spec, stateRead.state, parsed, resolved.target.isNew);
+	let statePatch = startStatePatch(spec, parsed, phase, stateRead.state);
+	if (epicStartContext) {
+		statePatch = {
+			...statePatch,
+			...epicStartStatePatch(epicStartContext, spec, phase, stateRead.state, options),
+			phase,
+			taskIndex: statePatch.taskIndex,
+			totalTasks: statePatch.totalTasks,
+			taskIteration: statePatch.taskIteration,
+			maxTaskIterations: statePatch.maxTaskIterations,
+			globalIteration: statePatch.globalIteration,
+			maxGlobalIterations: statePatch.maxGlobalIterations,
+			quickMode: statePatch.quickMode,
+			autonomousMode: statePatch.autonomousMode,
+			awaitingApproval: statePatch.awaitingApproval,
+		};
+	}
+
+	let state: RalphState;
+	try {
+		state = mergeRalphState(spec, statePatch, options);
+	} catch (error) {
+		await notify(ctx, `Failed to write Ralph state: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	let progressPath: string;
+	try {
+		progressPath = maybeWriteInitialProgress(
+			spec,
+			parsed.goal,
+			phase,
+			parsed.quickMode || parsed.autonomousMode,
+			options,
+		);
+		if (epicStartContext) progressPath = ensureEpicProgressContext(spec, epicStartContext, options);
+	} catch (error) {
+		await notify(ctx, `Failed to write Ralph progress: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	try {
+		const currentSpecRoot = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
+		mkdirSync(currentSpecRoot.absolutePath, { recursive: true });
+	} catch (error) {
+		await notify(ctx, `Failed to prepare current-spec root: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	const pointer = writeCurrentSpec(spec, options);
+	await notify(ctx, formatStartSummary(pointer.spec, resolved.target.isNew, phase, state, pointer.value, progressPath, parsed.warnings));
+	if (quickOrAutonomous) {
+		await runQuickFlow(pi, ctx, pointer.spec, parsed, options);
+	}
+}
+
+function parseCancelArgs(args: string): CancelArguments {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	const references: string[] = [];
+	let deleteSpec = false;
+
+	for (const token of tokens) {
+		if (token === "--delete" || token === "--delete-spec") {
+			deleteSpec = true;
+			continue;
+		}
+		if (token.startsWith("--")) {
+			return { reference: null, deleteSpec, error: `Unknown option: ${token}` };
+		}
+		references.push(token);
+	}
+
+	if (references.length > 1) {
+		return { reference: null, deleteSpec, error: `Expected at most one spec reference, got: ${references.join(" ")}` };
+	}
+	return { reference: references[0] ?? null, deleteSpec };
+}
+
+function resolveCancelTarget(reference: string | null, options: RalphPathOptions): { spec?: SpecEntry; error?: string } {
+	if (reference) return resolveExistingSpec(reference, options);
+
+	const currentValue = readCurrentSpecValue(options);
+	if (!currentValue) {
+		return { error: "No active spec is set. Pass a spec name/path to cancel a specific spec." };
+	}
+
+	const spec = resolveCurrentSpec(options);
+	if (!spec) {
+		return { error: `Unable to resolve active spec '${currentValue}'.` };
+	}
+	if (!spec.exists) {
+		return { error: `Active spec '${currentValue}' points to a missing directory: ${spec.path}` };
+	}
+	return { spec };
+}
+
+function unlinkIfExists(filePath: string): boolean {
+	if (!existsSync(filePath)) return false;
+	unlinkSync(filePath);
+	return true;
+}
+
+function clearCurrentSpecIfMatches(spec: SpecEntry, options: RalphPathOptions): boolean {
+	if (currentSpecPath(options) !== spec.absolutePath) return false;
+	return unlinkIfExists(getCurrentSpecFilePath(options));
+}
+
+function formatCancelConfirmation(spec: SpecEntry, stateRead: SafeStateRead, willDeleteSpec: boolean, options: RalphPathOptions): string {
+	const currentMarker = currentSpecPath(options) === spec.absolutePath ? "yes" : "no";
+	return [
+		`Spec: ${spec.name}`,
+		`Location: ${spec.path}`,
+		`State file: ${stateRead.path}`,
+		`Active marker points here: ${currentMarker}`,
+		"",
+		...formatStateBeforeCancel(stateRead),
+		"",
+		"This cancels Ralph execution state only: it removes .ralph-state.json if present and clears .current-spec if it points to this spec.",
+		willDeleteSpec ? "You also requested permanent deletion of the spec directory after an additional confirmation." : "Spec files will be kept.",
+		"Choose OK only if you want to stop this spec's current Ralph run.",
+	].join("\n");
+}
+
+function formatStateBeforeCancel(stateRead: SafeStateRead): string[] {
+	if (stateRead.error) return [`State before cancellation: invalid (${stateRead.error})`];
+	if (!stateRead.state) return ["State before cancellation: none"];
+
+	return [
+		"State before cancellation:",
+		`- Phase: ${stringField(stateRead.state, "phase") ?? "unknown"}`,
+		`- Progress: ${numberField(stateRead.state, "taskIndex") ?? 0}/${numberField(stateRead.state, "totalTasks") ?? 0} tasks`,
+		`- Task iteration: ${numberField(stateRead.state, "taskIteration") ?? "unknown"}`,
+		`- Global iteration: ${numberField(stateRead.state, "globalIteration") ?? "unknown"}`,
+	];
+}
+
+async function maybeDeleteSpecDirectory(
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	options: RalphPathOptions,
+): Promise<string> {
+	const safetyError = specDeleteSafetyError(spec, options);
+	if (safetyError) return `Skipped spec directory delete: ${safetyError}`;
+	if (!ctx.hasUI) return "Skipped spec directory delete: Pi UI confirmation is required.";
+
+	const confirmed = await ctx.ui.confirm(
+		"Delete spec directory?",
+		[`Permanently delete ${spec.path}?`, "", "This removes all spec files and cannot be undone."].join("\n"),
+	);
+	if (!confirmed) return "Skipped spec directory delete: user cancelled.";
+
+	rmSync(spec.absolutePath, { recursive: true, force: true });
+	return `Deleted spec directory: ${spec.path}`;
+}
+
+type ArtifactPhase = (typeof SPEC_ARTIFACTS)[number];
+
+type PhaseApprovalDecision = "approved" | "changes_requested" | "not_requested" | "skipped_non_normal";
+
+type PhaseReviewContext = {
+	iteration: number;
+	priorFindings: string[];
+};
+
+type ArtifactReviewResult = {
+	passed: boolean;
+	output: string;
+	signal?: "REVIEW_PASS" | "REVIEW_FAIL";
+	error?: string;
+};
+
+type ReviewedPhaseResult = {
+	state: RalphState;
+	summary: string;
+	iterations: number;
+};
+
+type PhaseArguments = {
+	reference: string | null;
+	quickMode: boolean;
+	autonomousMode: boolean;
+	tasksSize?: "fine" | "coarse";
+	warnings: string[];
+	error?: string;
+};
+
+type PhaseDefinition = {
+	phase: ArtifactPhase;
+	commandName: string;
+	agentName: string;
+	description: string;
+	requiredArtifacts: ArtifactPhase[];
+	nextCommand: string;
+	maxTurns: number;
+};
+
+type PhaseTarget = {
+	spec: SpecEntry;
+	state: RalphState | null;
+};
+
+type RpcReply<T> = {
+	success?: boolean;
+	data?: T;
+	error?: string;
+};
+
+type SubagentCompletion = {
+	id: string;
+	type?: string;
+	description?: string;
+	result?: string;
+	error?: string;
+	status?: string;
+};
+
+type SubagentRunDefinition = {
+	agentName: string;
+	description: string;
+	maxTurns: number;
+};
+
+const PHASE_DEFINITIONS: Record<ArtifactPhase, PhaseDefinition> = {
+	research: {
+		phase: "research",
+		commandName: "ralph-research",
+		agentName: "ralph-research-analyst",
+		description: "Generate research.md",
+		requiredArtifacts: [],
+		nextCommand: "/ralph-requirements",
+		maxTurns: 60,
+	},
+	requirements: {
+		phase: "requirements",
+		commandName: "ralph-requirements",
+		agentName: "ralph-product-manager",
+		description: "Generate requirements.md",
+		requiredArtifacts: [],
+		nextCommand: "/ralph-design",
+		maxTurns: 50,
+	},
+	design: {
+		phase: "design",
+		commandName: "ralph-design",
+		agentName: "ralph-architect-reviewer",
+		description: "Generate design.md",
+		requiredArtifacts: ["requirements"],
+		nextCommand: "/ralph-tasks",
+		maxTurns: 60,
+	},
+	tasks: {
+		phase: "tasks",
+		commandName: "ralph-tasks",
+		agentName: "ralph-task-planner",
+		description: "Generate tasks.md",
+		requiredArtifacts: ["requirements", "design"],
+		nextCommand: "/ralph-implement",
+		maxTurns: 80,
+	},
+};
+
+function phaseTitle(phase: ArtifactPhase): string {
+	return phase.charAt(0).toUpperCase() + phase.slice(1);
+}
+
+function parsePhaseArgs(args: string, phase: ArtifactPhase): PhaseArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) {
+		return emptyPhaseArguments(tokenized.error);
+	}
+
+	const positionals: string[] = [];
+	const warnings: string[] = [];
+	let quickMode = false;
+	let autonomousMode = false;
+	let tasksSize: PhaseArguments["tasksSize"];
+
+	for (let index = 0; index < tokenized.tokens.length; index += 1) {
+		const token = tokenized.tokens[index];
+		if (token === "--quick") {
+			quickMode = true;
+			continue;
+		}
+		if (token === "--autonomous" || token === "--auto") {
+			autonomousMode = true;
+			continue;
+		}
+		if (phase === "tasks" && (token === "--tasks-size" || token.startsWith("--tasks-size="))) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			if (!value || value.startsWith("--")) return emptyPhaseArguments("--tasks-size requires fine or coarse.");
+			if (value === "fine" || value === "coarse") {
+				tasksSize = value;
+			} else {
+				tasksSize = "fine";
+				warnings.push(`Invalid --tasks-size value "${value}"; defaulting to fine.`);
+			}
+			continue;
+		}
+		if (token.startsWith("--")) {
+			return emptyPhaseArguments(`Unknown option: ${token}`);
+		}
+		positionals.push(token);
+	}
+
+	if (positionals.length > 1) {
+		return emptyPhaseArguments(`Expected at most one spec reference, got: ${positionals.join(" ")}`);
+	}
+
+	return {
+		reference: positionals[0] ?? null,
+		quickMode,
+		autonomousMode,
+		tasksSize,
+		warnings,
+	};
+}
+
+function emptyPhaseArguments(error: string): PhaseArguments {
+	return {
+		reference: null,
+		quickMode: false,
+		autonomousMode: false,
+		warnings: [],
+		error,
+	};
+}
+
+function resolvePhaseTarget(parsed: PhaseArguments, options: RalphPathOptions): { target?: PhaseTarget; error?: string } {
+	let spec: SpecEntry | undefined;
+	if (parsed.reference) {
+		const resolved = resolveExistingSpec(parsed.reference, options);
+		if (!resolved.spec) return { error: resolved.error ?? `Unable to resolve spec '${parsed.reference}'.` };
+		spec = resolved.spec;
+	} else {
+		const currentValue = readCurrentSpecValue(options);
+		if (!currentValue) {
+			return { error: "No active spec is set. Run /ralph-start <spec-name> first or pass a spec name/path." };
+		}
+		spec = resolveCurrentSpec(options) ?? undefined;
+		if (!spec) return { error: `Unable to resolve active spec '${currentValue}'.` };
+	}
+
+	if (!spec.exists) return { error: `Spec directory does not exist: ${spec.path}` };
+	const stateRead = safeReadSpecState(spec, options);
+	if (stateRead.error) return { error: `Cannot run phase with invalid state: ${stateRead.error}` };
+	return { target: { spec, state: stateRead.state } };
+}
+
+function validatePhasePrerequisites(definition: PhaseDefinition, spec: SpecEntry): string | null {
+	for (const artifact of definition.requiredArtifacts) {
+		if (!artifactExists(spec, artifact)) {
+			return `${phaseTitle(artifact)} not found. Run /ralph-${artifact} first.`;
+		}
+	}
+	return null;
+}
+
+function phaseDependencyError(pi: ExtensionAPI, definition: PhaseDefinition, cwd: string, bootstrapResult?: RalphAgentBootstrapResult): string | null {
+	const requiredTools = definition.phase === "research"
+		? ["Agent", ...WEB_RESEARCH_TOOLS, MCP_PROXY_TOOL]
+		: definition.phase === "tasks"
+			? ["Agent", ...NATIVE_TASK_TOOLS, ...WEB_FETCH_TOOLS, MCP_PROXY_TOOL]
+			: ["Agent"];
+	const packageHint = definition.phase === "research"
+		? "@tintinweb/pi-subagents, pi-web-access, and pi-mcp-adapter"
+		: definition.phase === "tasks"
+			? "@tintinweb/pi-subagents, @tintinweb/pi-tasks, pi-web-access, and pi-mcp-adapter"
+			: "@tintinweb/pi-subagents";
+	const toolError = activeToolDependencyError(pi, requiredTools, definition.commandName, packageHint);
+	if (toolError) return toolError;
+
+	return ralphAgentDefinitionError(cwd, [definition.agentName], bootstrapResult);
+}
+
+function reviewerDependencyError(pi: ExtensionAPI, cwd: string, bootstrapResult?: RalphAgentBootstrapResult): string | null {
+	const toolError = activeToolDependencyError(pi, ["Agent"], "Ralph artifact review", "@tintinweb/pi-subagents");
+	if (toolError) return toolError;
+
+	return ralphAgentDefinitionError(cwd, [ARTIFACT_REVIEWER_AGENT], bootstrapResult);
+}
+
+function quickFlowDependencyError(pi: ExtensionAPI, cwd: string, bootstrapResult?: RalphAgentBootstrapResult): string | null {
+	const errors = [
+		...SPEC_ARTIFACTS.map((phase) => phaseDependencyError(pi, PHASE_DEFINITIONS[phase], cwd, bootstrapResult)),
+		reviewerDependencyError(pi, cwd, bootstrapResult),
+		implementationDependencyError(pi, cwd, bootstrapResult),
+	].filter((error): error is string => Boolean(error));
+	return errors.length > 0 ? unique(errors).join("\n\n") : null;
+}
+
+function readFileIfExists(filePath: string): string {
+	return existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+}
+
+function truncateForPrompt(content: string, maxChars = 24000): string {
+	if (content.length <= maxChars) return content;
+	const edge = Math.floor((maxChars - 120) / 2);
+	return `${content.slice(0, edge)}\n\n[... truncated ${content.length - edge * 2} characters ...]\n\n${content.slice(-edge)}`;
+}
+
+function promptFileSection(title: string, filePath: string, content: string): string {
+	if (!content.trim()) {
+		return `## ${title}\nPath: ${filePath}\n\n_Not present._`;
+	}
+
+	return [`## ${title}`, `Path: ${filePath}`, "", "~~~markdown", truncateForPrompt(content), "~~~"].join("\n");
+}
+
+function buildResearchVerificationContext(spec: SpecEntry): string {
+	const researchPath = artifactPath(spec, "research");
+	const research = readFileIfExists(researchPath);
+	if (!research.trim()) return "";
+
+	const sections = ["Quality Commands", "Verification Tooling", "MCP E2E Candidates"];
+	const extracted = sections
+		.map((heading) => {
+			const body = extractSection(research, heading);
+			return body ? `## ${heading}\n${body}` : "";
+		})
+		.filter(Boolean);
+	return extracted.join("\n\n");
+}
+
+function phaseSpecificInstructions(definition: PhaseDefinition, state: RalphState | null, parsed: PhaseArguments): string[] {
+	if (definition.phase === "research") {
+		return [
+			"Research-specific requirements:",
+			"- You MUST use pi-web-access tools: call web_search with 2-4 varied queries for current external research before writing conclusions.",
+			"- Use fetch_content for official docs, authoritative pages, and GitHub repositories; use get_search_content when returned content is truncated or stored by responseId.",
+			"- Use the bundled librarian skill for open-source library internals/history and cite GitHub permalinks with commit SHAs for code claims.",
+			"- Every nontrivial external claim must include a source URL; every codebase claim must include a file path. Do not fabricate findings.",
+			"- Use the mcp proxy lazily for MCP-backed services only when needed: focused mcp({ search: \"...\", includeSchemas: false }), describe only selected tools, call only chosen tools, and avoid broad server lists/eager connects.",
+			"- Produce the exact research.md structure from your Ralph Research Analyst instructions.",
+		];
+	}
+
+	if (definition.phase === "tasks") {
+		const stateGranularity = stringField(state, "granularity");
+		const granularity = parsed.tasksSize ?? (stateGranularity === "fine" || stateGranularity === "coarse" ? stateGranularity : "fine");
+		return [
+			"Tasks-specific requirements:",
+			`- Granularity: ${granularity}.`,
+			"- Produce canonical tasks.md only: each task must use '- [ ]' checkboxes and include Do, Files, Done when, Verify, Commit, Requirements, and Design fields.",
+			"- Verify lines must be automated commands or exact MCP proxy calls. Do not use manual, manually, visually, or ask user in Verify lines.",
+			"- Use research.md Quality Commands and Verification Tooling rows. VE tasks must name the discovered command/tool source they rely on; never hardcode npm/playwright/curl/server commands that research did not discover.",
+			"- For browser/devtools/database MCP E2E, keep MCP lazy and low-token: reference focused mcp search/describe results from research, then call only the selected proxy tool with exact args.",
+		];
+	}
+
+	return [
+		`${phaseTitle(definition.phase)}-specific requirements:`,
+		`- Produce the exact ${definition.phase}.md structure from your Ralph ${definition.agentName} instructions.`,
+		"- Keep unresolved questions explicit instead of guessing.",
+	];
+}
+
+function phaseReviewInstructions(reviewContext?: PhaseReviewContext): string[] {
+	if (!reviewContext) return [];
+
+	return [
+		"",
+		"Artifact review loop:",
+		`- Reviewer iteration: ${reviewContext.iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS}.`,
+		"- If prior reviewer or coordinator findings are present, revise the artifact in place to address them before completing.",
+		"- Do not ask the user for approval; either fix the artifact or report a blocker.",
+		"Prior findings:",
+		reviewContext.priorFindings.length > 0 ? "~~~text" : "_None yet._",
+		...(reviewContext.priorFindings.length > 0 ? [truncateForPrompt(reviewContext.priorFindings.join("\n\n---\n\n"), 12000), "~~~"] : []),
+	];
+}
+
+function buildPhasePrompt(
+	definition: PhaseDefinition,
+	spec: SpecEntry,
+	state: RalphState | null,
+	parsed: PhaseArguments,
+	options: RalphPathOptions,
+	reviewContext?: PhaseReviewContext,
+): string {
+	const progressPath = getProgressPath(spec, options);
+	const statePath = getRalphStatePath(spec, options);
+	const sections = [
+		promptFileSection("Progress", progressPath, readProgress(spec, options)),
+		promptFileSection("Research", artifactPath(spec, "research"), readFileIfExists(artifactPath(spec, "research"))),
+		promptFileSection("Requirements", artifactPath(spec, "requirements"), readFileIfExists(artifactPath(spec, "requirements"))),
+		promptFileSection("Design", artifactPath(spec, "design"), readFileIfExists(artifactPath(spec, "design"))),
+		promptFileSection("Existing Tasks", artifactPath(spec, "tasks"), readFileIfExists(artifactPath(spec, "tasks"))),
+	];
+
+	return [
+		`You are running the Smart Ralph ${phaseTitle(definition.phase)} phase as a delegated Pi subagent.`,
+		"",
+		"Coordinator contract:",
+		`- specName: ${spec.name}`,
+		`- basePath: ${spec.absolutePath}`,
+		`- statePath: ${statePath}`,
+		`- required artifact: ${artifactPath(spec, definition.phase)}`,
+		`- command: /${definition.commandName}`,
+		"- Write only files inside basePath unless inspecting the codebase.",
+		"- Do not edit legacy Claude/Codex plugin files.",
+		"- Do not proceed to the next Ralph phase.",
+		"- The coordinator will validate the artifact, ask for normal-mode approval, and set final awaitingApproval state.",
+		"",
+		...phaseSpecificInstructions(definition, state, parsed),
+		...phaseReviewInstructions(reviewContext),
+		"",
+		"Current Ralph state:",
+		"~~~json",
+		JSON.stringify(state ?? {}, null, 2),
+		"~~~",
+		"",
+		"Context files:",
+		...sections,
+		"",
+		"Completion response:",
+		`- Briefly summarize what you wrote to ${definition.phase}.md.`,
+		"- Mention any unresolved questions or blockers.",
+	].join("\n");
+}
+
+function eventOn(events: unknown, channel: string, handler: (data: unknown) => void): () => void {
+	const bus = events as { on?: (name: string, handler: (data: unknown) => void) => unknown; off?: (name: string, handler: (data: unknown) => void) => void; removeListener?: (name: string, handler: (data: unknown) => void) => void };
+	const result = bus.on?.(channel, handler);
+	if (typeof result === "function") return result as () => void;
+	return () => {
+		if (typeof bus.off === "function") bus.off(channel, handler);
+		else if (typeof bus.removeListener === "function") bus.removeListener(channel, handler);
+	};
+}
+
+function rpcCall<T>(pi: ExtensionAPI, channel: string, payload: Record<string, unknown>, timeoutMs: number): Promise<T> {
+	return new Promise<T>((resolvePromise, reject) => {
+		const requestId = randomUUID();
+		const replyChannel = `${channel}:reply:${requestId}`;
+		let settled = false;
+		let unsubscribe = () => {};
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new Error(`Timed out waiting for ${channel} reply.`));
+		}, timeoutMs);
+
+		function cleanup() {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			unsubscribe();
+		}
+
+		unsubscribe = eventOn(pi.events, replyChannel, (raw) => {
+			const reply = raw as RpcReply<T>;
+			cleanup();
+			if (reply?.success === true) {
+				resolvePromise(reply.data as T);
+			} else {
+				reject(new Error(reply?.error ?? `Invalid ${channel} reply.`));
+			}
+		});
+
+		try {
+			pi.events.emit(channel, { ...payload, requestId });
+		} catch (error) {
+			cleanup();
+			reject(error instanceof Error ? error : new Error(String(error)));
+		}
+	});
+}
+
+function waitForSubagentCompletion(pi: ExtensionAPI, agentId: string, timeoutMs: number): Promise<SubagentCompletion> {
+	return new Promise<SubagentCompletion>((resolvePromise, reject) => {
+		let settled = false;
+		let unsubscribeCompleted = () => {};
+		let unsubscribeFailed = () => {};
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new Error(`Timed out waiting for subagent ${agentId} to finish.`));
+		}, timeoutMs);
+
+		function cleanup() {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			unsubscribeCompleted();
+			unsubscribeFailed();
+		}
+
+		unsubscribeCompleted = eventOn(pi.events, "subagents:completed", (raw) => {
+			const event = raw as SubagentCompletion;
+			if (event?.id !== agentId) return;
+			cleanup();
+			resolvePromise(event);
+		});
+		unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => {
+			const event = raw as SubagentCompletion;
+			if (event?.id !== agentId) return;
+			cleanup();
+			reject(new Error(event.error ?? `Subagent ${agentId} failed with status ${event.status ?? "unknown"}.`));
+		});
+	});
+}
+
+async function runRalphSubagent(pi: ExtensionAPI, definition: SubagentRunDefinition, prompt: string): Promise<SubagentCompletion> {
+	await rpcCall<{ version: number }>(pi, "subagents:rpc:ping", {}, 5000);
+	const spawned = await rpcCall<{ id: string }>(
+		pi,
+		"subagents:rpc:spawn",
+		{
+			type: definition.agentName,
+			prompt,
+			options: {
+				description: definition.description,
+				isBackground: false,
+				maxTurns: definition.maxTurns,
+			},
+		},
+		10000,
+	);
+	if (!spawned?.id) throw new Error("pi-subagents spawn returned no agent id.");
+	return waitForSubagentCompletion(pi, spawned.id, 45 * 60 * 1000);
+}
+
+function buildArtifactReviewPrompt(
+	definition: PhaseDefinition,
+	spec: SpecEntry,
+	state: RalphState | null,
+	iteration: number,
+	priorFindings: string[],
+	options: RalphPathOptions,
+): string {
+	const phaseIndex = SPEC_ARTIFACTS.indexOf(definition.phase);
+	const upstreamSections = SPEC_ARTIFACTS
+		.slice(0, Math.max(0, phaseIndex))
+		.map((artifact) => promptFileSection(phaseTitle(artifact), artifactPath(spec, artifact), readFileIfExists(artifactPath(spec, artifact))));
+
+	return [
+		"You are validating one Smart Ralph artifact as the read-only ralph-spec-reviewer.",
+		"",
+		"Coordinator contract:",
+		`- artifactType: ${definition.phase}`,
+		`- iteration: ${iteration}`,
+		`- maxIterations: ${ARTIFACT_REVIEW_MAX_ITERATIONS}`,
+		`- specName: ${spec.name}`,
+		`- basePath: ${spec.absolutePath}`,
+		`- artifactPath: ${artifactPath(spec, definition.phase)}`,
+		"- Never edit files. Return REVIEW_PASS or REVIEW_FAIL as the final line.",
+		"",
+		"Current Ralph state:",
+		"~~~json",
+		JSON.stringify(state ?? {}, null, 2),
+		"~~~",
+		"",
+		"Prior findings:",
+		priorFindings.length > 0 ? "~~~text" : "_None._",
+		...(priorFindings.length > 0 ? [truncateForPrompt(priorFindings.join("\n\n---\n\n"), 12000), "~~~"] : []),
+		"",
+		"Artifact under review:",
+		promptFileSection(phaseTitle(definition.phase), artifactPath(spec, definition.phase), readFileIfExists(artifactPath(spec, definition.phase))),
+		"",
+		"Upstream artifacts:",
+		...(upstreamSections.length > 0 ? upstreamSections : ["_None._"]),
+	].join("\n");
+}
+
+function artifactReviewCompletionOutput(completion: SubagentCompletion): string {
+	if (typeof completion.result === "string" && completion.result.trim()) return completion.result;
+	return [completion.description, completion.error]
+		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		.join("\n");
+}
+
+function validateArtifactReviewCompletion(completion: SubagentCompletion): ArtifactReviewResult {
+	const output = artifactReviewCompletionOutput(completion);
+	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	const finalLine = lines[lines.length - 1];
+	if (finalLine === "REVIEW_PASS") return { passed: true, output, signal: "REVIEW_PASS" };
+	if (finalLine === "REVIEW_FAIL") return { passed: false, output, signal: "REVIEW_FAIL", error: "Reviewer reported REVIEW_FAIL." };
+	return {
+		passed: false,
+		output,
+		error: "Reviewer output did not end with REVIEW_PASS or REVIEW_FAIL.",
+	};
+}
+
+async function runArtifactReview(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	definition: PhaseDefinition,
+	spec: SpecEntry,
+	state: RalphState | null,
+	iteration: number,
+	priorFindings: string[],
+	options: RalphPathOptions,
+): Promise<ArtifactReviewResult> {
+	const prompt = buildArtifactReviewPrompt(definition, spec, state, iteration, priorFindings, options);
+	if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph review: ${definition.phase} iteration ${iteration}`);
+	try {
+		await notify(ctx, `Reviewing ${definition.phase}.md with ${ARTIFACT_REVIEWER_AGENT} (${iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})...`);
+		const completion = await runRalphSubagent(
+			pi,
+			{
+				agentName: ARTIFACT_REVIEWER_AGENT,
+				description: `Review ${definition.phase}.md`,
+				maxTurns: 40,
+			},
+			prompt,
+		);
+		return validateArtifactReviewCompletion(completion);
+	} catch (error) {
+		return { passed: false, output: "", error: `Reviewer failed: ${formatError(error)}` };
+	}
+}
+
+function containsMarkdownHeading(content: string, heading: string): boolean {
+	return new RegExp(`^#{1,3}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "im").test(content);
+}
+
+function validatePhaseOutput(definition: PhaseDefinition, spec: SpecEntry): string[] {
+	const outputPath = artifactPath(spec, definition.phase);
+	if (!existsSync(outputPath)) return [`Expected artifact was not created: ${outputPath}`];
+
+	const content = readFileSync(outputPath, "utf8");
+	const errors: string[] = [];
+	if (!content.trim()) errors.push(`${definition.phase}.md is empty.`);
+	if (!containsMarkdownHeading(content, phaseTitle(definition.phase))) {
+		errors.push(`${definition.phase}.md must contain a '${phaseTitle(definition.phase)}' heading.`);
+	}
+
+	if (definition.phase === "research") {
+		for (const section of ["External Research", "Codebase Analysis", "Sources"]) {
+			if (!containsMarkdownHeading(content, section)) errors.push(`research.md missing required section: ${section}.`);
+		}
+	}
+	if (definition.phase === "requirements") {
+		for (const section of ["User Stories", "Functional Requirements"]) {
+			if (!containsMarkdownHeading(content, section)) errors.push(`requirements.md missing required section: ${section}.`);
+		}
+	}
+	if (definition.phase === "design") {
+		for (const section of ["Overview", "File Structure", "Test Strategy"]) {
+			if (!containsMarkdownHeading(content, section)) errors.push(`design.md missing required section: ${section}.`);
+		}
+	}
+	if (definition.phase === "tasks") {
+		errors.push(...validateCanonicalTasks(content));
+	}
+
+	return errors;
+}
+
+function validateCanonicalTasks(content: string): string[] {
+	const errors: string[] = [];
+	const taskLines = content.match(/^\s*-\s*\[[ xX]\]\s+\S+/gm) ?? [];
+	if (taskLines.length === 0) errors.push("tasks.md must contain at least one '- [ ]' task.");
+
+	for (const field of ["**Do**", "**Files**", "**Done when**", "**Verify**", "**Commit**"]) {
+		if (!content.toLowerCase().includes(field.toLowerCase())) errors.push(`tasks.md missing canonical field: ${field}.`);
+	}
+
+	const verifyLines = content.split(/\r?\n/).filter((line) => /\*\*Verify\*\*/i.test(line));
+	if (verifyLines.length === 0) errors.push("tasks.md must include automated Verify commands.");
+	const manualLine = verifyLines.find((line) => /manual|manually|visually|ask user/i.test(line));
+	if (manualLine) errors.push(`tasks.md Verify line must be automated, found manual wording: ${manualLine.trim()}`);
+
+	return errors;
+}
+
+function extractSection(content: string, heading: string): string {
+	const lines = content.split(/\r?\n/);
+	const start = lines.findIndex((line) => new RegExp(`^##\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(line));
+	if (start < 0) return "";
+	const collected: string[] = [];
+	for (let index = start + 1; index < lines.length; index += 1) {
+		if (/^##\s+/.test(lines[index])) break;
+		collected.push(lines[index]);
+	}
+	return collected.join("\n").trim();
+}
+
+function firstNonEmptyLines(content: string, maxLines: number): string[] {
+	return content
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.slice(0, maxLines);
+}
+
+function buildPhaseSummary(definition: PhaseDefinition, spec: SpecEntry): string {
+	const content = readFileSync(artifactPath(spec, definition.phase), "utf8");
+	const lines = [
+		`${phaseTitle(definition.phase)} complete for '${spec.name}'.`,
+		`Output: ${artifactPath(spec, definition.phase)}`,
+		"",
+	];
+
+	if (definition.phase === "research") {
+		lines.push("## What I Found", ...firstNonEmptyLines(extractSection(content, "Executive Summary"), 3));
+		const recommendations = firstNonEmptyLines(extractSection(content, "Recommendations for Requirements"), 3);
+		if (recommendations.length > 0) lines.push("", "Key recommendations:", ...recommendations);
+	} else if (definition.phase === "requirements") {
+		const storyCount = content.match(/^###\s+US-/gim)?.length ?? 0;
+		const frCount = new Set(content.match(/\bFR-\d+\b/g) ?? []).size;
+		const nfrCount = new Set(content.match(/\bNFR-\d+\b/g) ?? []).size;
+		lines.push("## What I Created", `User stories: ${storyCount}`, `Functional requirements: ${frCount}`, `Non-functional requirements: ${nfrCount}`);
+	} else if (definition.phase === "design") {
+		lines.push("## What I Designed", ...firstNonEmptyLines(extractSection(content, "Overview"), 3));
+		const fileRows = extractSection(content, "File Structure").split(/\r?\n/).filter((line) => /^\|/.test(line) && !/^-?\|?\s*-/.test(line));
+		if (fileRows.length > 0) lines.push("", `File entries: ${Math.max(0, fileRows.length - 1)}`);
+	} else {
+		const taskCounts = countTasks(spec);
+		const phaseCount = content.match(/^##\s+Phase\s+/gim)?.length ?? 0;
+		lines.push("## What I Planned", `Total tasks: ${taskCounts.total}`, `Phase count: ${phaseCount}`);
+	}
+
+	return lines.join("\n");
+}
+
+function parseRelatedSpecsFromResearch(spec: SpecEntry): unknown[] {
+	const researchPath = artifactPath(spec, "research");
+	if (!existsSync(researchPath)) return [];
+	const table = extractSection(readFileSync(researchPath, "utf8"), "Related Specs");
+	const rows = table.split(/\r?\n/).filter((line) => /^\|/.test(line));
+	const related: unknown[] = [];
+	for (const row of rows.slice(1)) {
+		if (/^\|\s*-/.test(row)) continue;
+		const cells = row.split("|").slice(1, -1).map((cell) => cell.trim());
+		if (cells.length < 3 || !cells[0]) continue;
+		related.push({
+			name: cells[0],
+			relevance: cells[1] || "Related",
+			mayNeedUpdate: /^(true|yes|y|x)$/i.test(cells[2] || ""),
+			evidence: cells[3] || "",
+		});
+	}
+	return related;
+}
+
+function isNormalPhaseMode(state: RalphState | null, parsed: PhaseArguments): boolean {
+	return !parsed.quickMode && !parsed.autonomousMode && booleanField(state, "quickMode") !== true && booleanField(state, "autonomousMode") !== true;
+}
+
+async function requestPhaseApproval(
+	ctx: ExtensionCommandContext,
+	definition: PhaseDefinition,
+	summary: string,
+	normalMode: boolean,
+): Promise<PhaseApprovalDecision> {
+	if (!normalMode) return "skipped_non_normal";
+	if (!ctx.hasUI) return "not_requested";
+
+	const approved = await ctx.ui.confirm(
+		`Approve ${definition.phase}.md?`,
+		[
+			summary,
+			"",
+			"Approve this artifact and stop here?",
+			`Next boundary: ${definition.nextCommand}`,
+		].join("\n"),
+	);
+	return approved ? "approved" : "changes_requested";
+}
+
+function finalPhasePatch(
+	definition: PhaseDefinition,
+	spec: SpecEntry,
+	decision: PhaseApprovalDecision,
+	parsed: PhaseArguments,
+	state?: RalphState | null,
+): Record<string, unknown> {
+	const nonNormalMode = decision === "skipped_non_normal"
+		|| parsed.quickMode
+		|| parsed.autonomousMode
+		|| booleanField(state ?? null, "quickMode") === true
+		|| booleanField(state ?? null, "autonomousMode") === true;
+	const patch: Record<string, unknown> = {
+		source: "spec",
+		name: spec.name,
+		basePath: spec.path,
+		phase: definition.phase,
+		awaitingApproval: !nonNormalMode,
+		lastApprovalDecision: decision,
+		updatedAt: new Date().toISOString(),
+		validationError: null,
+	};
+
+	if (parsed.quickMode || booleanField(state ?? null, "quickMode") === true) patch.quickMode = true;
+	if (parsed.autonomousMode || booleanField(state ?? null, "autonomousMode") === true) patch.autonomousMode = true;
+	if (definition.phase === "tasks") {
+		const taskCounts = countTasks(spec);
+		patch.totalTasks = taskCounts.total;
+		if (parsed.tasksSize) patch.granularity = parsed.tasksSize;
+	}
+	if (definition.phase === "research") {
+		patch.relatedSpecs = parseRelatedSpecsFromResearch(spec);
+	}
+	return patch;
+}
+
+function appendPhaseProgressEntry(
+	spec: SpecEntry,
+	definition: PhaseDefinition,
+	decision: PhaseApprovalDecision,
+	options: RalphPathOptions,
+): void {
+	const nextLine = decision === "skipped_non_normal"
+		? `- Quick/autonomous mode: continuing to ${definition.nextCommand} without an approval prompt.`
+		: `- Awaiting approval boundary. Next command: ${definition.nextCommand}.`;
+	appendProgress(
+		spec,
+		[
+			"",
+			`### ${phaseTitle(definition.phase)} phase (${new Date().toISOString()})`,
+			`- Generated ${definition.phase}.md and validated coordinator output.`,
+			`- Approval decision: ${decision}.`,
+			nextLine,
+			"",
+		].join("\n"),
+		options,
+	);
+}
+
+async function runPhaseCommand(pi: ExtensionAPI, definition: PhaseDefinition, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const options = pathOptions(ctx);
+	const parsed = parsePhaseArgs(args, definition.phase);
+	if (parsed.error) {
+		await notify(ctx, parsed.error, "warning");
+		return;
+	}
+
+	const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
+	const dependencyError = phaseDependencyError(pi, definition, ctx.cwd, agentBootstrap);
+	if (dependencyError) {
+		await notify(ctx, dependencyError, "warning");
+		return;
+	}
+
+	const resolved = resolvePhaseTarget(parsed, options);
+	if (!resolved.target) {
+		await notify(ctx, resolved.error ?? "Unable to resolve Ralph spec.", "warning");
+		return;
+	}
+
+	const spec = resolved.target.spec;
+	const prerequisiteError = validatePhasePrerequisites(definition, spec);
+	if (prerequisiteError) {
+		await notify(ctx, prerequisiteError, "warning");
+		return;
+	}
+
+	writeCurrentSpec(spec, options);
+
+	let state: RalphState;
+	try {
+		state = await generatePhaseArtifact(pi, ctx, definition, spec, resolved.target.state, parsed, options);
+	} catch (error) {
+		await notify(ctx, `Ralph ${definition.phase} failed: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	const validationErrors = validatePhaseOutput(definition, spec);
+	if (validationErrors.length > 0) {
+		try {
+			mergeRalphState(spec, { phase: definition.phase, awaitingApproval: false, validationError: validationErrors.join("\n") }, options);
+		} catch {
+			// Validation failure is the primary message.
+		}
+		await notify(
+			ctx,
+			[`Generated ${definition.phase}.md did not pass coordinator validation:`, ...validationErrors.map((error) => `- ${error}`)].join("\n"),
+			"warning",
+		);
+		return;
+	}
+
+	let nativeTaskMirror: NativeTaskMirrorResult | null = null;
+	if (definition.phase === "tasks") {
+		try {
+			nativeTaskMirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
+			state = mergeRalphState(spec, nativeTaskMirrorStatePatch(nativeTaskMirror), options);
+		} catch (error) {
+			try {
+				mergeRalphState(spec, nativeTaskMirrorFailurePatch(state, error), options);
+			} catch {
+				// Preserve native task mirror error; state write failure is secondary here.
+			}
+			await notify(ctx, `Generated tasks.md is valid, but native pi-tasks mirroring failed:\n${formatError(error)}`, "warning");
+			return;
+		}
+	}
+
+	const summary = [
+		buildPhaseSummary(definition, spec),
+		...(nativeTaskMirror ? ["", ...formatNativeTaskMirrorSummary(nativeTaskMirror)] : []),
+	].join("\n");
+	const decision = await requestPhaseApproval(ctx, definition, summary, isNormalPhaseMode(state, parsed));
+
+	try {
+		state = mergeRalphState(spec, finalPhasePatch(definition, spec, decision, parsed, state), options);
+	} catch (error) {
+		await notify(ctx, `Failed to finalize Ralph state: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	try {
+		appendPhaseProgressEntry(spec, definition, decision, options);
+	} catch (error) {
+		await notify(ctx, `Warning: failed to append progress: ${formatError(error)}`, "warning");
+	}
+
+	const warnings = parsed.warnings.length > 0 ? ["", "Warnings:", ...parsed.warnings.map((warning) => `- ${warning}`)] : [];
+	const approvalLine = decision === "approved"
+		? "Approved in Pi UI."
+		: decision === "changes_requested"
+			? "Pi UI approval was not granted. Edit the artifact or rerun this phase with changes."
+			: decision === "not_requested"
+				? "No Pi UI was available; state is awaiting approval."
+				: "Non-normal mode flag detected; no approval prompt was shown.";
+
+	await notify(
+		ctx,
+		[
+			summary,
+			"",
+			approvalLine,
+			`State: ${getRalphStatePath(spec, options)}`,
+			`awaitingApproval: ${booleanField(state, "awaitingApproval") === true}`,
+			`-> Next: ${definition.nextCommand}`,
+			...warnings,
+		].join("\n"),
+	);
+}
+
+async function generatePhaseArtifact(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	definition: PhaseDefinition,
+	spec: SpecEntry,
+	state: RalphState | null,
+	parsed: PhaseArguments,
+	options: RalphPathOptions,
+	reviewContext?: PhaseReviewContext,
+): Promise<RalphState> {
+	let updatedState: RalphState;
+	try {
+		const startPatch: Record<string, unknown> = {
+			source: state?.source ?? "spec",
+			name: spec.name,
+			basePath: spec.path,
+			phase: definition.phase,
+			awaitingApproval: false,
+			lastApprovalDecision: null,
+			validationError: null,
+		};
+		if (parsed.tasksSize) startPatch.granularity = parsed.tasksSize;
+		if (parsed.quickMode) startPatch.quickMode = true;
+		if (parsed.autonomousMode) startPatch.autonomousMode = true;
+		if (reviewContext) {
+			startPatch.artifactReview = {
+				phase: definition.phase,
+				iteration: reviewContext.iteration,
+				maxIterations: ARTIFACT_REVIEW_MAX_ITERATIONS,
+			};
+		}
+		updatedState = mergeRalphState(spec, startPatch, options);
+	} catch (error) {
+		throw new Error(`Failed to update Ralph state before ${definition.phase}: ${formatError(error)}`);
+	}
+
+	const prompt = buildPhasePrompt(definition, spec, updatedState, parsed, options, reviewContext);
+	if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph ${definition.phase}: running ${definition.agentName}`);
+	try {
+		const iterationSuffix = reviewContext ? ` (${reviewContext.iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})` : "";
+		await notify(ctx, `Running ${definition.agentName} for ${spec.name}${iterationSuffix}...`);
+		await runRalphSubagent(pi, definition, prompt);
+	} catch (error) {
+		try {
+			mergeRalphState(spec, { phase: definition.phase, awaitingApproval: false, validationError: formatError(error) }, options);
+		} catch {
+			// Preserve original subagent error; state write failure is secondary here.
+		}
+		throw error;
+	} finally {
+		if (ctx.hasUI) ctx.ui.setStatus("ralph", undefined);
+	}
+
+	return readRalphState(spec, options) ?? updatedState;
+}
+
+function phaseArgumentsForQuickFlow(parsed: StartArguments): PhaseArguments {
+	return {
+		reference: null,
+		quickMode: parsed.quickMode || parsed.autonomousMode,
+		autonomousMode: parsed.autonomousMode,
+		tasksSize: parsed.tasksSize,
+		warnings: parsed.warnings,
+	};
+}
+
+function coordinatorValidationFinding(definition: PhaseDefinition, errors: string[]): string {
+	return [`Coordinator validation failed for ${definition.phase}.md:`, ...errors.map((error) => `- ${error}`)].join("\n");
+}
+
+function reviewFailureFinding(result: ArtifactReviewResult): string {
+	return [result.error, result.output].filter((value): value is string => Boolean(value?.trim())).join("\n\n") || "Reviewer failed without output.";
+}
+
+function appendArtifactReviewProgress(
+	spec: SpecEntry,
+	definition: PhaseDefinition,
+	iteration: number,
+	result: ArtifactReviewResult,
+	options: RalphPathOptions,
+): void {
+	appendProgress(
+		spec,
+		[
+			"",
+			`### ${phaseTitle(definition.phase)} review iteration ${iteration} (${new Date().toISOString()})`,
+			`- Result: ${result.passed ? "REVIEW_PASS" : "REVIEW_FAIL"}`,
+			...(result.error ? [`- Error: ${result.error}`] : []),
+			...(result.output.trim() ? ["- Reviewer output:", "~~~text", truncateForPrompt(result.output, 4000), "~~~"] : []),
+			"",
+		].join("\n"),
+		options,
+	);
+}
+
+function artifactReviewStatePatch(definition: PhaseDefinition, iteration: number, result: ArtifactReviewResult): Record<string, unknown> {
+	return {
+		artifactReviews: {
+			[definition.phase]: {
+				iteration,
+				maxIterations: ARTIFACT_REVIEW_MAX_ITERATIONS,
+				passed: result.passed,
+				signal: result.signal ?? null,
+				error: result.error ?? null,
+				output: truncateForPrompt(result.output, 6000),
+				reviewedAt: new Date().toISOString(),
+			},
+		},
+		validationError: result.passed ? null : reviewFailureFinding(result),
+	};
+}
+
+async function runReviewedPhase(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	definition: PhaseDefinition,
+	spec: SpecEntry,
+	parsed: PhaseArguments,
+	options: RalphPathOptions,
+): Promise<ReviewedPhaseResult> {
+	let state = readRalphState(spec, options);
+	let priorFindings: string[] = [];
+	let shouldGenerate = !artifactExists(spec, definition.phase);
+
+	for (let iteration = 1; iteration <= ARTIFACT_REVIEW_MAX_ITERATIONS; iteration += 1) {
+		if (shouldGenerate) {
+			state = await generatePhaseArtifact(pi, ctx, definition, spec, state, parsed, options, { iteration, priorFindings });
+		} else {
+			state = mergeRalphState(
+				spec,
+				{
+					phase: definition.phase,
+					awaitingApproval: false,
+					validationError: null,
+					quickMode: true,
+					...(parsed.autonomousMode ? { autonomousMode: true } : {}),
+				},
+				options,
+			);
+		}
+
+		const validationErrors = validatePhaseOutput(definition, spec);
+		if (validationErrors.length > 0) {
+			const finding = coordinatorValidationFinding(definition, validationErrors);
+			priorFindings.push(finding);
+			state = mergeRalphState(
+				spec,
+				{
+					phase: definition.phase,
+					awaitingApproval: false,
+					validationError: finding,
+					artifactReviews: {
+						[definition.phase]: {
+							iteration,
+							maxIterations: ARTIFACT_REVIEW_MAX_ITERATIONS,
+							passed: false,
+							error: finding,
+							reviewedAt: new Date().toISOString(),
+						},
+					},
+				},
+				options,
+			);
+			if (iteration === ARTIFACT_REVIEW_MAX_ITERATIONS) throw new Error(finding);
+			shouldGenerate = true;
+			continue;
+		}
+
+		const review = await runArtifactReview(pi, ctx, definition, spec, state, iteration, priorFindings, options);
+		appendArtifactReviewProgress(spec, definition, iteration, review, options);
+		state = mergeRalphState(spec, artifactReviewStatePatch(definition, iteration, review), options);
+
+		if (review.passed) {
+			let nativeTaskMirror: NativeTaskMirrorResult | null = null;
+			if (definition.phase === "tasks") {
+				try {
+					nativeTaskMirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
+					state = mergeRalphState(spec, nativeTaskMirrorStatePatch(nativeTaskMirror), options);
+				} catch (error) {
+					mergeRalphState(spec, nativeTaskMirrorFailurePatch(state, error), options);
+					throw new Error(`Native pi-tasks mirroring failed after reviewed tasks.md: ${formatError(error)}`);
+				}
+			}
+
+			state = mergeRalphState(spec, finalPhasePatch(definition, spec, "skipped_non_normal", parsed, state), options);
+			appendPhaseProgressEntry(spec, definition, "skipped_non_normal", options);
+			const summary = [
+				buildPhaseSummary(definition, spec),
+				`Review: REVIEW_PASS after ${iteration} iteration(s).`,
+				...(nativeTaskMirror ? ["", ...formatNativeTaskMirrorSummary(nativeTaskMirror)] : []),
+			].join("\n");
+			return { state, summary, iterations: iteration };
+		}
+
+		priorFindings.push(reviewFailureFinding(review));
+		if (iteration === ARTIFACT_REVIEW_MAX_ITERATIONS) {
+			throw new Error(`Reviewer did not approve ${definition.phase}.md after ${ARTIFACT_REVIEW_MAX_ITERATIONS} iterations.\n${reviewFailureFinding(review)}`);
+		}
+		shouldGenerate = true;
+	}
+
+	throw new Error(`Reviewer did not approve ${definition.phase}.md after ${ARTIFACT_REVIEW_MAX_ITERATIONS} iterations.`);
+}
+
+async function runQuickFlow(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	parsed: StartArguments,
+	options: RalphPathOptions,
+): Promise<void> {
+	const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
+	const dependencyError = quickFlowDependencyError(pi, ctx.cwd, agentBootstrap);
+	if (dependencyError) {
+		await notify(ctx, dependencyError, "warning");
+		return;
+	}
+
+	const phaseArgs = phaseArgumentsForQuickFlow(parsed);
+	const summaries: string[] = [];
+	try {
+		await notify(ctx, `Quick mode: generating/reviewing artifacts for ${spec.name} without approval prompts...`);
+		for (const artifact of SPEC_ARTIFACTS) {
+			const definition = PHASE_DEFINITIONS[artifact];
+			const prerequisiteError = validatePhasePrerequisites(definition, spec);
+			if (prerequisiteError) throw new Error(prerequisiteError);
+			const result = await runReviewedPhase(pi, ctx, definition, spec, phaseArgs, options);
+			summaries.push(`- ${artifact}.md passed review after ${result.iterations} iteration(s).`);
+		}
+
+		writeCurrentSpec(spec, options);
+		await notify(
+			ctx,
+			[
+				`Quick artifact flow complete for spec: ${spec.name}`,
+				"",
+				...summaries,
+				"",
+				"Starting implementation...",
+			].join("\n"),
+		);
+		await runImplementCommand(pi, "", ctx);
+	} catch (error) {
+		try {
+			appendProgress(
+				spec,
+				[
+					"",
+					`### Quick mode blocked (${new Date().toISOString()})`,
+					`- Reason: ${formatError(error)}`,
+					"",
+				].join("\n"),
+				options,
+			);
+			mergeRalphState(
+				spec,
+				{
+					awaitingApproval: false,
+					blocked: true,
+					validationError: formatError(error),
+					blockedAt: new Date().toISOString(),
+				},
+				options,
+			);
+		} catch {
+			// Surface the original quick-flow failure.
+		}
+		await notify(ctx, `Quick mode blocked for ${spec.name}: ${formatError(error)}`, "warning");
+	} finally {
+		if (ctx.hasUI) ctx.ui.setStatus("ralph", undefined);
+	}
+}
+
+type CompletionSignal = "TASK_COMPLETE" | "VERIFICATION_PASS" | "REFACTOR_COMPLETE";
+
+type ImplementArguments = {
+	reference: string | null;
+	maxTaskIterations: number;
+	maxGlobalIterations: number;
+	recoveryMode: boolean;
+	error?: string;
+};
+
+type ImplementTarget = {
+	spec: SpecEntry;
+	state: RalphState | null;
+};
+
+type ImplementationSubagentDefinition = SubagentRunDefinition & {
+	completionSignal: CompletionSignal;
+};
+
+type CompletionValidation = {
+	ok: boolean;
+	signal: CompletionSignal;
+	evidence?: string;
+	error?: string;
+	output: string;
+};
+
+type NextTaskResult =
+	| { kind: "complete" }
+	| { kind: "runnable"; task: ParsedNativeTask }
+	| { kind: "blocked"; task: ParsedNativeTask; blockers: number[] };
+
+type NativeExecutionUpdate = {
+	taskId: string;
+	storePath: string;
+};
+
+type CoordinatorProgressCommitResult = {
+	committed: boolean;
+	hash?: string;
+	error?: string;
+};
+
+type GitCommandResult = {
+	ok: boolean;
+	status: number | null;
+	stdout: string;
+	stderr: string;
+};
+
+const IMPLEMENT_AGENTS = ["ralph-spec-executor", "ralph-qa-engineer", "ralph-refactor-specialist"] as const;
+const IMPLEMENT_DEFAULT_MAX_TASK_ITERATIONS = 5;
+const IMPLEMENT_DEFAULT_MAX_GLOBAL_ITERATIONS = 100;
+
+function parseImplementArgs(args: string): ImplementArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) return emptyImplementArguments(tokenized.error);
+
+	const positionals: string[] = [];
+	let maxTaskIterations = IMPLEMENT_DEFAULT_MAX_TASK_ITERATIONS;
+	let maxGlobalIterations = IMPLEMENT_DEFAULT_MAX_GLOBAL_ITERATIONS;
+	let recoveryMode = false;
+
+	for (let index = 0; index < tokenized.tokens.length; index += 1) {
+		const token = tokenized.tokens[index];
+		if (token === "--recovery-mode") {
+			recoveryMode = true;
+			continue;
+		}
+		if (token === "--max-task-iterations" || token.startsWith("--max-task-iterations=")) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			const parsed = parsePositiveIntegerOption("--max-task-iterations", value);
+			if (parsed.error) return emptyImplementArguments(parsed.error);
+			maxTaskIterations = parsed.value;
+			continue;
+		}
+		if (token === "--max-global-iterations" || token.startsWith("--max-global-iterations=")) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			const parsed = parsePositiveIntegerOption("--max-global-iterations", value);
+			if (parsed.error) return emptyImplementArguments(parsed.error);
+			maxGlobalIterations = parsed.value;
+			continue;
+		}
+		if (token.startsWith("--")) return emptyImplementArguments(`Unknown option: ${token}`);
+		positionals.push(token);
+	}
+
+	if (positionals.length > 1) {
+		return emptyImplementArguments(`Expected at most one spec reference, got: ${positionals.join(" ")}`);
+	}
+
+	return {
+		reference: positionals[0] ?? null,
+		maxTaskIterations,
+		maxGlobalIterations,
+		recoveryMode,
+	};
+}
+
+function parsePositiveIntegerOption(name: string, value: string | undefined): { value: number; error?: string } {
+	if (!value || value.startsWith("--")) return { value: 0, error: `${name} requires a positive integer.` };
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isFinite(parsed) || parsed < 1 || String(parsed) !== value.trim()) {
+		return { value: 0, error: `${name} requires a positive integer, got '${value}'.` };
+	}
+	return { value: parsed };
+}
+
+function emptyImplementArguments(error: string): ImplementArguments {
+	return {
+		reference: null,
+		maxTaskIterations: IMPLEMENT_DEFAULT_MAX_TASK_ITERATIONS,
+		maxGlobalIterations: IMPLEMENT_DEFAULT_MAX_GLOBAL_ITERATIONS,
+		recoveryMode: false,
+		error,
+	};
+}
+
+function resolveImplementTarget(parsed: ImplementArguments, options: RalphPathOptions): { target?: ImplementTarget; error?: string } {
+	if (parsed.reference) {
+		const resolved = resolveExistingSpec(parsed.reference, options);
+		if (!resolved.spec) return { error: resolved.error ?? `Unable to resolve spec '${parsed.reference}'.` };
+		const stateRead = safeReadSpecState(resolved.spec, options);
+		if (stateRead.error) return { error: `Cannot implement spec with invalid state: ${stateRead.error}` };
+		return { target: { spec: resolved.spec, state: stateRead.state } };
+	}
+
+	const currentValue = readCurrentSpecValue(options);
+	if (!currentValue) return { error: "No active spec is set. Run /ralph-start <spec-name> first or pass a spec name/path." };
+	const spec = resolveCurrentSpec(options);
+	if (!spec) return { error: `Unable to resolve active spec '${currentValue}'.` };
+	if (!spec.exists) return { error: `Active spec '${currentValue}' points to a missing directory: ${spec.path}` };
+	const stateRead = safeReadSpecState(spec, options);
+	if (stateRead.error) return { error: `Cannot implement spec with invalid state: ${stateRead.error}` };
+	return { target: { spec, state: stateRead.state } };
+}
+
+function implementationDependencyError(pi: ExtensionAPI, cwd: string, bootstrapResult?: RalphAgentBootstrapResult): string | null {
+	const toolError = activeToolDependencyError(
+		pi,
+		["Agent", ...NATIVE_TASK_TOOLS, ...WEB_RESEARCH_TOOLS, MCP_PROXY_TOOL],
+		"ralph-implement",
+		"@tintinweb/pi-subagents, @tintinweb/pi-tasks, pi-web-access, and pi-mcp-adapter",
+	);
+	if (toolError) return toolError;
+
+	return ralphAgentDefinitionError(cwd, IMPLEMENT_AGENTS, bootstrapResult);
+}
+
+function readImplementationTasks(spec: SpecEntry): { tasksPath: string; content: string; tasks: ParsedNativeTask[] } {
+	const tasksPath = artifactPath(spec, "tasks");
+	if (!existsSync(tasksPath)) throw new Error(`Tasks not found at ${tasksPath}. Run /ralph-tasks first.`);
+	const content = readFileSync(tasksPath, "utf8");
+	const tasks = parseTasksForNativeCards(content);
+	if (tasks.length === 0) throw new Error("tasks.md does not contain any canonical checkbox tasks.");
+	return { tasksPath, content, tasks };
+}
+
+function dependenciesCompleted(task: ParsedNativeTask, tasks: ParsedNativeTask[]): boolean {
+	return task.blockedByIndices.every((dependencyIndex) => tasks[dependencyIndex]?.status === "completed");
+}
+
+function nextImplementationTask(tasks: ParsedNativeTask[]): NextTaskResult {
+	const incomplete = tasks.filter((task) => task.status !== "completed");
+	if (incomplete.length === 0) return { kind: "complete" };
+
+	const runnable = incomplete.find((task) => dependenciesCompleted(task, tasks));
+	if (runnable) return { kind: "runnable", task: runnable };
+
+	const blocked = incomplete[0];
+	const blockers = blocked.blockedByIndices.filter((dependencyIndex) => tasks[dependencyIndex]?.status !== "completed");
+	return { kind: "blocked", task: blocked, blockers };
+}
+
+function stateRecordField(state: RalphState | null, key: string): Record<string, unknown> {
+	const value = state?.[key];
+	return isRecordValue(value) ? value : {};
+}
+
+function verifiedTaskEvidence(state: RalphState | null, task: ParsedNativeTask): Record<string, unknown> | null {
+	const evidence = stateRecordField(state, "verifiedTaskEvidence")[task.checkboxKey];
+	return isRecordValue(evidence) ? evidence : null;
+}
+
+function activePendingEvidenceIndex(state: RalphState | null): number | null {
+	const pending = stateRecordField(state, "activeTaskPendingEvidence");
+	const index = pending.index;
+	return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+function atomicWriteCoordinatorText(filePath: string, content: string): void {
+	mkdirSync(dirname(filePath), { recursive: true });
+	const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+	writeFileSync(tempPath, content, "utf8");
+	renameSync(tempPath, filePath);
+}
+
+function setTaskCheckboxStatus(spec: SpecEntry, taskIndex: number, completed: boolean): boolean {
+	const tasksPath = artifactPath(spec, "tasks");
+	const content = readFileSync(tasksPath, "utf8").replace(/\r\n/g, "\n");
+	const lines = content.split("\n");
+	let seen = -1;
+
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		if (!/^\s*-\s*\[[ xX]\]\s+\S+/.test(lines[lineIndex])) continue;
+		seen += 1;
+		if (seen !== taskIndex) continue;
+
+		const currentlyCompleted = /^\s*-\s*\[[xX]\]/.test(lines[lineIndex]);
+		if (currentlyCompleted === completed) return false;
+		lines[lineIndex] = lines[lineIndex].replace(/^(\s*-\s*)\[[ xX]\]/, `$1[${completed ? "x" : " "}]`);
+		atomicWriteCoordinatorText(tasksPath, lines.join("\n"));
+		return true;
+	}
+
+	throw new Error(`Unable to locate task index ${taskIndex} in ${tasksPath}.`);
+}
+
+function restoreUnverifiedActiveTaskIfNeeded(
+	spec: SpecEntry,
+	state: RalphState | null,
+	tasks: ParsedNativeTask[],
+	options: RalphPathOptions,
+): ParsedNativeTask[] {
+	const activeIndex = activePendingEvidenceIndex(state);
+	if (activeIndex === null) return tasks;
+	const activeTask = tasks[activeIndex];
+	if (!activeTask || activeTask.status !== "completed" || verifiedTaskEvidence(state, activeTask)) return tasks;
+
+	setTaskCheckboxStatus(spec, activeIndex, false);
+	appendProgress(
+		spec,
+		[
+			"",
+			`### Implementation resume repair (${new Date().toISOString()})`,
+			`- Reverted unverified completion mark for task ${activeIndex + 1}: ${activeTask.subject}.`,
+			"- Reason: prior run stopped before coordinator recorded completion signal plus verification evidence.",
+			"",
+		].join("\n"),
+		options,
+	);
+	return readImplementationTasks(spec).tasks;
+}
+
+function nativeTaskRepairReason(
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	state: RalphState | null,
+	tasks: ParsedNativeTask[],
+): string | null {
+	const map = nativeTaskMapFromState(state);
+	if (tasks.some((task) => !map[task.checkboxKey])) return "missing native task mapping";
+
+	const storePath = resolveNativeTaskStorePath(ctx);
+	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
+	const store = readNativeTaskStore(storePath.path);
+	const tasksById = new Map(store.tasks.map((task) => [task.id, task]));
+
+	for (const task of tasks) {
+		const card = tasksById.get(map[task.checkboxKey]);
+		if (!card) return `stale native task id for task ${task.index + 1}`;
+		if (!isNativeTaskOwnedBySpec(card, spec)) return `native task #${card.id} is not owned by spec ${spec.name}`;
+	}
+	return null;
+}
+
+function syncNativeCardsFromTasks(ctx: ExtensionCommandContext, state: RalphState | null, tasks: ParsedNativeTask[]): void {
+	const map = nativeTaskMapFromState(state);
+	if (Object.keys(map).length === 0) return;
+	const storePath = resolveNativeTaskStorePath(ctx);
+	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
+
+	withNativeTaskStore(storePath.path, (data) => {
+		const tasksById = new Map(data.tasks.map((task) => [task.id, task]));
+		const now = Date.now();
+		for (const parsed of tasks) {
+			const card = tasksById.get(map[parsed.checkboxKey]);
+			if (!card) continue;
+			const desiredStatus: NativeTaskStatus = parsed.status === "completed" ? "completed" : card.status === "completed" ? "pending" : card.status;
+			if (card.status !== desiredStatus) {
+				card.status = desiredStatus;
+				card.updatedAt = now;
+			}
+		}
+	});
+}
+
+function ensureNativeTaskCardsForImplementation(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	options: RalphPathOptions,
+	state: RalphState | null,
+	tasks: ParsedNativeTask[],
+): RalphState {
+	if (booleanField(state, "nativeSyncEnabled") === false) {
+		throw new Error("Native pi-tasks sync is disabled in .ralph-state.json. Re-run /ralph-tasks to repair task cards before implementing.");
+	}
+
+	const repairReason = nativeTaskRepairReason(ctx, spec, state, tasks);
+	if (repairReason) {
+		const mirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
+		return mergeRalphState(spec, { ...nativeTaskMirrorStatePatch(mirror), nativeTaskRepairReason: repairReason }, options);
+	}
+
+	syncNativeCardsFromTasks(ctx, state, tasks);
+	return state ?? {};
+}
+
+function setNativeTaskExecutionStatus(
+	ctx: ExtensionCommandContext,
+	state: RalphState | null,
+	task: ParsedNativeTask,
+	status: NativeTaskStatus,
+	metadata: Record<string, unknown>,
+): NativeExecutionUpdate {
+	const map = nativeTaskMapFromState(state);
+	const taskId = map[task.checkboxKey];
+	if (!taskId) throw new Error(`No native pi-task mapping found for task ${task.index + 1}. Run /ralph-tasks to mirror tasks.md.`);
+
+	const storePath = resolveNativeTaskStorePath(ctx);
+	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
+
+	withNativeTaskStore(storePath.path, (data) => {
+		const card = data.tasks.find((candidate) => candidate.id === taskId);
+		if (!card) throw new Error(`Native pi-task #${taskId} was not found in ${storePath.path}. Run /ralph-tasks to repair mappings.`);
+		card.status = status;
+		card.activeForm = task.activeForm;
+		card.owner = status === "in_progress" ? "ralph-specum" : undefined;
+		card.metadata = {
+			...card.metadata,
+			...metadata,
+			ralphExecutionStatus: status,
+			ralphExecutionUpdatedAt: new Date().toISOString(),
+		};
+		card.updatedAt = Date.now();
+	});
+
+	return { taskId, storePath: storePath.path };
+}
+
+function implementationSubagentDefinition(task: ParsedNativeTask): ImplementationSubagentDefinition {
+	if (task.isVerify || task.agentType === "ralph-qa-engineer") {
+		return {
+			agentName: "ralph-qa-engineer",
+			description: `Verify Ralph task ${task.taskNumber ?? task.index + 1}`,
+			maxTurns: 60,
+			completionSignal: "VERIFICATION_PASS",
+		};
+	}
+	if (task.agentType === "ralph-refactor-specialist") {
+		return {
+			agentName: "ralph-refactor-specialist",
+			description: `Refactor Ralph task ${task.taskNumber ?? task.index + 1}`,
+			maxTurns: 50,
+			completionSignal: "REFACTOR_COMPLETE",
+		};
+	}
+	return {
+		agentName: "ralph-spec-executor",
+		description: `Execute Ralph task ${task.taskNumber ?? task.index + 1}`,
+		maxTurns: 90,
+		completionSignal: "TASK_COMPLETE",
+	};
+}
+
+function agentSpecificImplementationInstructions(definition: ImplementationSubagentDefinition): string[] {
+	if (definition.completionSignal === "VERIFICATION_PASS") {
+		return [
+			"Verification-task instructions:",
+			"- Execute the task's automated Verify checks and capture real command/API/browser/database evidence.",
+			"- If Verify is an mcp({ ... }) proxy call, use the mcp tool rather than shelling out; keep it lazy with focused search/describe only when the task does not already name the discovered tool.",
+			"- For browser/devtools MCP checks, prove page state with selected navigation/screenshot/DOM/network evidence. For database MCP checks, use only test/dev data and verify state with read-only queries plus cleanup evidence.",
+			"- Do not mark tasks.md; the coordinator marks it only after VERIFICATION_PASS plus evidence.",
+			"- Final line must be VERIFICATION_PASS on success or VERIFICATION_FAIL on failure.",
+		];
+	}
+	if (definition.completionSignal === "REFACTOR_COMPLETE") {
+		return [
+			"Refactor-task instructions:",
+			"- Apply only the requested refactor/spec update and preserve implementation learnings.",
+			"- Run the task's Verify command when present.",
+			"- Successful output must include REFACTOR_COMPLETE, CASCADE_NEEDED, CASCADE_REASON, and evidence: <verification proof>.",
+		];
+	}
+	return [
+		"Execution-task instructions:",
+		"- Implement exactly this one task and no adjacent improvements.",
+		"- Run the task's Verify command or exact MCP proxy call and include the required verify: <proof> line.",
+		"- For MCP-backed verification, use the selected discovered tool only; avoid broad mcp server listing or eager connect unless the task explicitly requires it.",
+		"- Final success output must include TASK_COMPLETE, status: pass, commit: <hash or none>, and verify: <proof>.",
+	];
+}
+
+function buildImplementationPrompt(
+	task: ParsedNativeTask,
+	definition: ImplementationSubagentDefinition,
+	spec: SpecEntry,
+	state: RalphState | null,
+	options: RalphPathOptions,
+): string {
+	const progressPath = getProgressPath(spec, options);
+	return [
+		`You are running one Smart Ralph implementation-loop task as ${definition.agentName}.`,
+		"",
+		"Coordinator contract:",
+		`- specName: ${spec.name}`,
+		`- basePath: ${spec.absolutePath}`,
+		`- taskIndex: ${task.index}`,
+		`- taskNumber: ${task.taskNumber ?? "n/a"}`,
+		`- phase: ${task.phase || "unknown"}`,
+		`- required completion signal: ${definition.completionSignal}`,
+		`- tasksPath: ${artifactPath(spec, "tasks")}`,
+		`- progressPath: ${progressPath}`,
+		`- statePath: ${getRalphStatePath(spec, options)} (read-only; never edit this file)`,
+		"- Write only files required by the task block unless inspection is needed.",
+		"- Do not edit legacy Claude/Codex plugin files unless they are explicitly listed in the task.",
+		"- Never ask the user; report USER_INPUT_REQUIRED or a blocker instead.",
+		"- The coordinator will update native pi-task cards and will not advance without evidence.",
+		"",
+		...agentSpecificImplementationInstructions(definition),
+		"",
+		"Current Ralph state:",
+		"~~~json",
+		JSON.stringify(state ?? {}, null, 2),
+		"~~~",
+		"",
+		"Current task block:",
+		"~~~markdown",
+		task.block,
+		"~~~",
+		"",
+		promptFileSection("Progress", progressPath, readProgress(spec, options)),
+		promptFileSection("Research Verification Context", artifactPath(spec, "research"), buildResearchVerificationContext(spec)),
+		promptFileSection("Requirements", artifactPath(spec, "requirements"), readFileIfExists(artifactPath(spec, "requirements"))),
+		promptFileSection("Design", artifactPath(spec, "design"), readFileIfExists(artifactPath(spec, "design"))),
+	].join("\n");
+}
+
+function subagentCompletionOutput(completion: SubagentCompletion): string {
+	return [completion.result, completion.description, completion.error, completion.status]
+		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		.join("\n");
+}
+
+function hasCompletionSignal(output: string, signal: CompletionSignal): boolean {
+	return new RegExp(`(^|\\n)${signal}\\b`, "m").test(output);
+}
+
+function hasContradiction(output: string): string | null {
+	const patterns = [
+		/requires manual/i,
+		/cannot be automated/i,
+		/could not complete/i,
+		/needs human/i,
+		/manual intervention/i,
+		/TASK_MODIFICATION_REQUEST/i,
+		/USER_INPUT_REQUIRED/i,
+		/VERIFICATION_FAIL/i,
+	];
+	const match = patterns.find((pattern) => pattern.test(output));
+	return match ? match.source : null;
+}
+
+function meaningfulEvidence(value: string): string | null {
+	const normalized = normalizeWhitespace(value.replace(/^[*-]\s*/, ""));
+	if (normalized.length < 8) return null;
+	if (/^(none|n\/a|na|unknown|not run|skipped|pass|passed)$/i.test(normalized)) return null;
+	return normalized;
+}
+
+function extractCompletionEvidence(output: string, signal: CompletionSignal): string | null {
+	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	const keyedEvidence: string[] = [];
+	const passEvidence: string[] = [];
+
+	for (const line of lines) {
+		const keyed = line.match(/^(?:verify|verification|evidence):\s*(.+)$/i);
+		if (keyed) keyedEvidence.push(keyed[1]);
+		if (signal === "VERIFICATION_PASS" && /\bPASS\b/i.test(line) && !/^VERIFICATION_PASS\b/.test(line)) {
+			passEvidence.push(line);
+		}
+	}
+
+	const candidates = signal === "VERIFICATION_PASS" ? [...keyedEvidence, ...passEvidence] : keyedEvidence;
+	for (const candidate of candidates) {
+		const evidence = meaningfulEvidence(candidate);
+		if (evidence) return evidence;
+	}
+	return null;
+}
+
+function validateSubagentCompletion(completion: SubagentCompletion, definition: ImplementationSubagentDefinition): CompletionValidation {
+	const output = subagentCompletionOutput(completion);
+	if (!hasCompletionSignal(output, definition.completionSignal)) {
+		return { ok: false, signal: definition.completionSignal, error: `Missing completion signal ${definition.completionSignal}.`, output };
+	}
+
+	const contradiction = hasContradiction(output);
+	if (contradiction) {
+		return { ok: false, signal: definition.completionSignal, error: `Completion contradicted by output pattern: ${contradiction}.`, output };
+	}
+
+	const evidence = extractCompletionEvidence(output, definition.completionSignal);
+	if (!evidence) {
+		return { ok: false, signal: definition.completionSignal, error: "Completion signal lacked verification evidence.", output };
+	}
+
+	return { ok: true, signal: definition.completionSignal, evidence, output };
+}
+
+function runGitCommand(cwd: string, args: string[]): GitCommandResult {
+	const result = spawnSync("git", args, {
+		cwd,
+		encoding: "utf8",
+		env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+		stdio: ["ignore", "pipe", "pipe"],
+		timeout: 30_000,
+	});
+	const spawnError = result.error instanceof Error ? result.error.message : "";
+	return {
+		ok: result.status === 0,
+		status: result.status,
+		stdout: typeof result.stdout === "string" ? result.stdout.trim() : "",
+		stderr: (typeof result.stderr === "string" ? result.stderr.trim() : "") || spawnError,
+	};
+}
+
+function gitRootForFile(filePath: string): string | null {
+	const result = runGitCommand(dirname(filePath), ["rev-parse", "--show-toplevel"]);
+	return result.ok && result.stdout ? result.stdout.split(/\r?\n/).at(-1)?.trim() || null : null;
+}
+
+function gitRelativePath(root: string, filePath: string): string | null {
+	const relativePath = relative(root, filePath).replace(/\\/g, "/");
+	if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) return null;
+	return relativePath;
+}
+
+function isGitTracked(root: string, relativePath: string): boolean {
+	return runGitCommand(root, ["ls-files", "--error-unmatch", "--", relativePath]).ok;
+}
+
+function gitStatusForPath(root: string, relativePath: string): string | null {
+	const result = runGitCommand(root, ["status", "--porcelain=v1", "--untracked-files=no", "--", relativePath]);
+	return result.ok ? result.stdout : null;
+}
+
+function gitShortHead(root: string): string | undefined {
+	const result = runGitCommand(root, ["rev-parse", "--short=7", "HEAD"]);
+	return result.ok && result.stdout ? result.stdout : undefined;
+}
+
+function commitTrackedProgressIfDirty(progressPath: string, message: string): CoordinatorProgressCommitResult {
+	const root = gitRootForFile(progressPath);
+	if (!root) return { committed: false };
+
+	const relativePath = gitRelativePath(root, progressPath);
+	if (!relativePath || !isGitTracked(root, relativePath)) return { committed: false };
+
+	const status = gitStatusForPath(root, relativePath);
+	if (!status) return { committed: false };
+
+	const commit = runGitCommand(root, ["commit", "-m", message, "--", relativePath]);
+	if (!commit.ok) {
+		return {
+			committed: false,
+			error: normalizeWhitespace(commit.stderr || commit.stdout || `git commit exited with status ${commit.status ?? "unknown"}`),
+		};
+	}
+
+	return { committed: true, hash: gitShortHead(root) };
+}
+
+function appendImplementationProgress(
+	spec: SpecEntry,
+	task: ParsedNativeTask,
+	definition: ImplementationSubagentDefinition,
+	evidence: string,
+	nativeTaskId: string,
+	options: RalphPathOptions,
+): CoordinatorProgressCommitResult {
+	const progressPath = appendProgress(
+		spec,
+		[
+			"",
+			`### Implementation task ${task.index + 1}: ${task.subject} (${new Date().toISOString()})`,
+			`- Agent: ${definition.agentName}`,
+			`- Signal: ${definition.completionSignal}`,
+			`- Native task: #${nativeTaskId}`,
+			`- Evidence: ${evidence}`,
+			"",
+		].join("\n"),
+		options,
+	);
+
+	return commitTrackedProgressIfDirty(
+		progressPath,
+		`chore(ralph): record implementation evidence for ${spec.name} task ${task.index + 1}`,
+	);
+}
+
+function appendImplementationBlocker(
+	spec: SpecEntry,
+	task: ParsedNativeTask | null,
+	reason: string,
+	options: RalphPathOptions,
+): void {
+	appendProgress(
+		spec,
+		[
+			"",
+			`### Implementation blocked (${new Date().toISOString()})`,
+			task ? `- Task: ${task.index + 1} ${task.subject}` : "- Task: none",
+			`- Reason: ${reason}`,
+			"",
+		].join("\n"),
+		options,
+	);
+}
+
+function formatBlockerMessage(spec: SpecEntry, task: ParsedNativeTask | null, reason: string): string {
+	return [
+		`Ralph implementation blocked for spec: ${spec.name}`,
+		"",
+		`Location: ${spec.path}`,
+		task ? `Task: ${task.index + 1}. ${task.subject}` : "Task: <none>",
+		`Reason: ${reason}`,
+		"",
+		"Fix the blocker, then rerun /ralph-implement to resume from tasks.md.",
+	].join("\n");
+}
+
+function implementationAttemptPatch(
+	spec: SpecEntry,
+	state: RalphState | null,
+	parsed: ImplementArguments,
+	task: ParsedNativeTask,
+	totalTasks: number,
+	taskIteration: number,
+	globalIteration: number,
+): Record<string, unknown> {
+	return {
+		source: state?.source ?? "spec",
+		name: spec.name,
+		basePath: spec.path,
+		phase: "execution",
+		taskIndex: task.index,
+		totalTasks,
+		taskIteration,
+		maxTaskIterations: parsed.maxTaskIterations,
+		recoveryMode: parsed.recoveryMode,
+		globalIteration,
+		maxGlobalIterations: parsed.maxGlobalIterations,
+		awaitingApproval: false,
+		blocked: false,
+		validationError: null,
+		activeTaskPendingEvidence: {
+			index: task.index,
+			key: task.stableKey,
+			subject: task.subject,
+			startedAt: new Date().toISOString(),
+		},
+		currentTask: {
+			index: task.index,
+			subject: task.subject,
+			agentType: task.agentType,
+			phase: task.phase,
+		},
+	};
+}
+
+async function blockImplementation(
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	task: ParsedNativeTask | null,
+	reason: string,
+	options: RalphPathOptions,
+): Promise<void> {
+	try {
+		appendImplementationBlocker(spec, task, reason, options);
+		mergeRalphState(
+			spec,
+			{
+				phase: "execution",
+				blocked: true,
+				blockedAt: new Date().toISOString(),
+				validationError: reason,
+				awaitingApproval: false,
+			},
+			options,
+		);
+	} catch {
+		// The blocker notification below is the primary user-facing error.
+	}
+	await notify(ctx, formatBlockerMessage(spec, task, reason), "warning");
+}
+
+function epicIdentityFromState(spec: SpecEntry, state: RalphState | null): { epicName: string; childName: string } | null {
+	const epicName = stringField(state, "epicName");
+	if (!epicName) return null;
+	return { epicName, childName: stringField(state, "epicSpecName") ?? spec.name };
+}
+
+function prepareEpicImplementationStart(spec: SpecEntry, state: RalphState | null, options: RalphPathOptions): { state: RalphState | null; lines: string[]; error?: string } {
+	const identity = epicIdentityFromState(spec, state);
+	if (!identity) return { state, lines: [] };
+	if (!isValidSpecName(identity.epicName)) return { state, lines: [], error: `Invalid epicName '${identity.epicName}' in ${getRalphStatePath(spec, options)}.` };
+
+	const epic = resolveEpicDirectory(identity.epicName, options);
+	if (!epic.exists) return { state, lines: [], error: `Epic '${identity.epicName}' not found for child spec '${spec.name}'.` };
+	const stateRead = safeReadEpicState(epic, options);
+	if (!stateRead.state) return { state, lines: [], error: [`Epic '${identity.epicName}' has no readable state.`, ...stateRead.warnings.map((warning) => `- ${warning}`)].join("\n") };
+	if (stateRead.state.status === "cancelled") return { state, lines: [], error: `Epic '${identity.epicName}' is cancelled; refusing to implement child spec '${identity.childName}'.` };
+
+	const summary = computeEpicDependencyStatus(stateRead.state);
+	const entry = epicStatusForChild(summary, identity.childName);
+	if (!entry) return { state, lines: [], error: `Epic '${identity.epicName}' does not contain child spec '${identity.childName}'.` };
+	if (entry.status === "cancelled") return { state, lines: [], error: `Epic child spec '${identity.childName}' is cancelled.` };
+	if (entry.isExplicitlyBlocked) return { state, lines: [], error: `Epic child spec '${identity.childName}' is blocked: ${formatEpicDependencyReason(entry)}.` };
+	if (entry.isDependencyBlocked && booleanField(state, "epicDependencyOverride") !== true) {
+		return { state, lines: [], error: `Epic child spec '${identity.childName}' is waiting on dependencies: ${formatEpicDependencyReason(entry)}.` };
+	}
+
+	if (entry.status === "pending") {
+		const updatedEpicState = startEpicChildSpec(epic, identity.childName, options);
+		const updatedSummary = computeEpicDependencyStatus(updatedEpicState);
+		const updatedEntry = epicStatusForChild(updatedSummary, identity.childName);
+		const updatedState = mergeRalphState(
+			spec,
+			{
+				...epicStartStatePatch(
+					{
+						epic,
+						state: updatedEpicState,
+						child: updatedEntry?.spec ?? entry.spec,
+						dependencyStatus: updatedEntry ?? entry,
+						selectedByNextFlag: false,
+					},
+					spec,
+					"execution",
+					state,
+					options,
+				),
+				phase: "execution",
+			},
+			options,
+		);
+		return { state: updatedState, lines: [`Epic child spec '${identity.childName}' marked in_progress for epic '${identity.epicName}'.`] };
+	}
+
+	return { state, lines: [] };
+}
+
+function formatEpicCompletionNotification(result: ReturnType<typeof completeEpicChildSpec>): EpicCompletionNotification {
+	const summary = computeEpicDependencyStatus(result.state);
+	const next = summary.nextSpec;
+	const lines = [
+		"Epic update:",
+		`- Epic: ${result.state.name}`,
+		`- Child spec marked completed: ${result.completedSpec.name}`,
+		`- Progress: ${epicProgressText(result.state, summary.completedSpecs.length)}`,
+	];
+
+	if (result.newlyReadySpecs.length > 0) {
+		lines.push(`- Newly unblocked child spec(s): ${result.newlyReadySpecs.map((spec) => spec.name).join(", ")}`);
+	}
+	if (result.epicCompleted) {
+		lines.push("- Epic status: completed.");
+		if (result.currentEpicCleared) lines.push("- Cleared current epic marker.");
+	} else {
+		lines.push(`- Next unblocked child spec: ${next?.name ?? "none"}`);
+		if (next) lines.push("- Next command: /ralph-start --next-epic-spec");
+	}
+	return { lines, type: "info" };
+}
+
+function completeEpicChildAfterImplementation(spec: SpecEntry, finalState: RalphState, options: RalphPathOptions): EpicCompletionNotification {
+	const identity = epicIdentityFromState(spec, finalState);
+	if (!identity) return { lines: [], type: "info" };
+
+	try {
+		if (!isValidSpecName(identity.epicName)) throw new Error(`Invalid epicName '${identity.epicName}' in ${getRalphStatePath(spec, options)}.`);
+		const epic = resolveEpicDirectory(identity.epicName, options);
+		if (!epic.exists) throw new Error(`Epic '${identity.epicName}' not found.`);
+		const stateRead = safeReadEpicState(epic, options);
+		if (!stateRead.state) throw new Error([`Epic '${identity.epicName}' has no readable state.`, ...stateRead.warnings.map((warning) => `- ${warning}`)].join("\n"));
+		const summary = computeEpicDependencyStatus(stateRead.state);
+		const existing = epicStatusForChild(summary, identity.childName);
+		if (!existing) throw new Error(`Epic '${identity.epicName}' does not contain child spec '${identity.childName}'.`);
+		if (existing.status === "completed") {
+			const next = summary.nextSpec;
+			const lines = [
+				"Epic update:",
+				`- Epic: ${stateRead.state.name}`,
+				`- Child spec already marked completed: ${identity.childName}`,
+				`- Progress: ${epicProgressText(stateRead.state, summary.completedSpecs.length)}`,
+				`- Next unblocked child spec: ${next?.name ?? "none"}`,
+			];
+			if (next) lines.push("- Next command: /ralph-start --next-epic-spec");
+			return { lines, type: stateRead.warnings.length > 0 ? "warning" : "info" };
+		}
+
+		const result = completeEpicChildSpec(epic, identity.childName, {
+			...options,
+			clearCurrentEpicOnComplete: true,
+		});
+		return formatEpicCompletionNotification(result);
+	} catch (error) {
+		const message = `Epic state update failed after child implementation completed: ${formatError(error)}`;
+		try {
+			mergeRalphState(
+				spec,
+				{
+					validationError: message,
+					epicCompletionError: message,
+					epicCompletionErrorAt: new Date().toISOString(),
+				},
+				options,
+			);
+		} catch {
+			// Keep the original epic update failure as the user-facing warning.
+		}
+		return {
+			lines: [
+				"Epic update:",
+				`- ${message}`,
+				"- The child spec remains completed.",
+				`- Fix the epic state, then rerun /ralph-implement ${spec.name} or inspect /ralph-epic-status.`,
+			],
+			type: "warning",
+		};
+	}
+}
+
+async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const parsed = parseImplementArgs(args);
+	if (parsed.error) {
+		await notify(ctx, parsed.error, "warning");
+		return;
+	}
+
+	const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
+	const dependencyError = implementationDependencyError(pi, ctx.cwd, agentBootstrap);
+	if (dependencyError) {
+		await notify(ctx, dependencyError, "warning");
+		return;
+	}
+
+	const options = pathOptions(ctx);
+	const resolved = resolveImplementTarget(parsed, options);
+	if (!resolved.target) {
+		await notify(ctx, resolved.error ?? "Unable to resolve Ralph spec.", "warning");
+		return;
+	}
+
+	const spec = resolved.target.spec;
+	writeCurrentSpec(spec, options);
+
+	let state: RalphState | null = resolved.target.state;
+	let taskData: { tasksPath: string; content: string; tasks: ParsedNativeTask[] };
+	const startupSummaries: string[] = [];
+	try {
+		taskData = readImplementationTasks(spec);
+		state = mergeRalphState(
+			spec,
+			{
+				source: state?.source ?? "spec",
+				name: spec.name,
+				basePath: spec.path,
+				phase: "execution",
+				taskIndex: numberField(state, "taskIndex") ?? taskData.tasks.find((task) => task.status !== "completed")?.index ?? taskData.tasks.length,
+				totalTasks: taskData.tasks.length,
+				maxTaskIterations: parsed.maxTaskIterations,
+				maxGlobalIterations: parsed.maxGlobalIterations,
+				recoveryMode: parsed.recoveryMode,
+				globalIteration: numberField(state, "globalIteration") ?? 1,
+				taskIteration: numberField(state, "taskIteration") ?? 1,
+				awaitingApproval: false,
+				blocked: false,
+				validationError: null,
+			},
+			options,
+		);
+		state = ensureNativeTaskCardsForImplementation(pi, ctx, spec, options, state, taskData.tasks);
+		const epicPrepared = prepareEpicImplementationStart(spec, state, options);
+		if (epicPrepared.error) throw new Error(epicPrepared.error);
+		state = epicPrepared.state;
+		startupSummaries.push(...epicPrepared.lines.map((line) => `- ${line}`));
+	} catch (error) {
+		await notify(ctx, `Cannot start Ralph implementation: ${formatError(error)}`, "warning");
+		return;
+	}
+
+	const completedSummaries: string[] = [...startupSummaries];
+	if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph implement: ${spec.name}`);
+
+	try {
+		while (true) {
+			state = readRalphState(spec, options) ?? state;
+			taskData = readImplementationTasks(spec);
+			let tasks = restoreUnverifiedActiveTaskIfNeeded(spec, state, taskData.tasks, options);
+			tasks = readImplementationTasks(spec).tasks;
+			syncNativeCardsFromTasks(ctx, state, tasks);
+
+			const next = nextImplementationTask(tasks);
+			if (next.kind === "complete") {
+				const finalState = mergeRalphState(
+					spec,
+					{
+						phase: "completed",
+						taskIndex: tasks.length,
+						totalTasks: tasks.length,
+						awaitingApproval: false,
+						blocked: false,
+						validationError: null,
+						activeTaskPendingEvidence: null,
+						completedAt: new Date().toISOString(),
+					},
+					options,
+				);
+				const epicCompletion = completeEpicChildAfterImplementation(spec, finalState, options);
+				await notify(
+					ctx,
+					[
+						`Ralph implementation complete for spec: ${spec.name}`,
+						"",
+						`Tasks: ${tasks.length}/${tasks.length} completed`,
+						`State: ${getRalphStatePath(spec, options)}`,
+						`phase: ${stringField(finalState, "phase")}`,
+						...completedSummaries,
+						...(epicCompletion.lines.length > 0 ? ["", ...epicCompletion.lines] : []),
+						"",
+						"ALL_TASKS_COMPLETE",
+					].join("\n"),
+					epicCompletion.type,
+				);
+				return;
+			}
+
+			if (next.kind === "blocked") {
+				await blockImplementation(ctx, spec, next.task, `Task dependencies are incomplete: ${next.blockers.map((index) => index + 1).join(", ")}`, options);
+				return;
+			}
+
+			const task = next.task;
+			const globalIteration = numberField(state, "globalIteration") ?? 1;
+			if (globalIteration > parsed.maxGlobalIterations) {
+				await blockImplementation(ctx, spec, task, `Max global iterations exceeded (${parsed.maxGlobalIterations}).`, options);
+				return;
+			}
+
+			const sameTask = numberField(state, "taskIndex") === task.index;
+			const taskIteration = sameTask ? numberField(state, "taskIteration") ?? 1 : 1;
+			if (taskIteration > parsed.maxTaskIterations) {
+				await blockImplementation(ctx, spec, task, `Max task iterations exceeded (${parsed.maxTaskIterations}).`, options);
+				return;
+			}
+
+			const definition = implementationSubagentDefinition(task);
+			state = mergeRalphState(spec, implementationAttemptPatch(spec, state, parsed, task, tasks.length, taskIteration, globalIteration), options);
+
+			let nativeUpdate: NativeExecutionUpdate;
+			try {
+				nativeUpdate = setNativeTaskExecutionStatus(ctx, state, task, "in_progress", {
+					ralphExecutionAgent: definition.agentName,
+					ralphExecutionSignalRequired: definition.completionSignal,
+				});
+			} catch (error) {
+				await blockImplementation(ctx, spec, task, `Failed to mark native pi-task in_progress: ${formatError(error)}`, options);
+				return;
+			}
+
+			if (ctx.hasUI) ctx.ui.setStatus("ralph", `Ralph implement: ${task.activeForm}`);
+			const prompt = buildImplementationPrompt(task, definition, spec, state, options);
+			let validation: CompletionValidation;
+			try {
+				const completion = await runRalphSubagent(pi, definition, prompt);
+				validation = validateSubagentCompletion(completion, definition);
+			} catch (error) {
+				validation = {
+					ok: false,
+					signal: definition.completionSignal,
+					error: `Subagent failed: ${formatError(error)}`,
+					output: "",
+				};
+			}
+
+			if (!validation.ok) {
+				setTaskCheckboxStatus(spec, task.index, false);
+				const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
+				appendImplementationBlocker(spec, task, reason, options);
+				const exhausted = taskIteration >= parsed.maxTaskIterations || /TASK_MODIFICATION_REQUEST|USER_INPUT_REQUIRED/.test(validation.output);
+				state = mergeRalphState(
+					spec,
+					{
+						phase: "execution",
+						taskIndex: task.index,
+						totalTasks: tasks.length,
+						taskIteration: exhausted ? taskIteration : taskIteration + 1,
+						globalIteration: globalIteration + 1,
+						blocked: exhausted,
+						validationError: reason,
+						lastSubagentOutput: truncateForPrompt(validation.output, 6000),
+					},
+					options,
+				);
+				if (exhausted) {
+					await notify(ctx, formatBlockerMessage(spec, task, reason), "warning");
+					return;
+				}
+				continue;
+			}
+
+			setTaskCheckboxStatus(spec, task.index, true);
+			const coordinatorProgressCommit = appendImplementationProgress(spec, task, definition, validation.evidence ?? "", nativeUpdate.taskId, options);
+			try {
+				setNativeTaskExecutionStatus(ctx, state, task, "completed", {
+					ralphExecutionAgent: definition.agentName,
+					ralphExecutionSignal: definition.completionSignal,
+					ralphExecutionEvidence: validation.evidence,
+				});
+			} catch (error) {
+				await blockImplementation(ctx, spec, task, `Task completed but native pi-task completion update failed: ${formatError(error)}`, options);
+				return;
+			}
+
+			const refreshedTasks = readImplementationTasks(spec).tasks;
+			const following = nextImplementationTask(refreshedTasks);
+			state = mergeRalphState(
+				spec,
+				{
+					phase: following.kind === "complete" ? "completed" : "execution",
+					taskIndex: following.kind === "runnable" ? following.task.index : refreshedTasks.length,
+					totalTasks: refreshedTasks.length,
+					taskIteration: 1,
+					globalIteration: globalIteration + 1,
+					awaitingApproval: false,
+					blocked: false,
+					validationError: null,
+					activeTaskPendingEvidence: null,
+					lastCompletedTaskIndex: task.index,
+					lastCompletedTaskSignal: definition.completionSignal,
+					lastCompletedTaskEvidence: validation.evidence,
+					verifiedTaskEvidence: {
+						[task.checkboxKey]: {
+							signal: definition.completionSignal,
+							evidence: validation.evidence,
+							agent: definition.agentName,
+							completedAt: new Date().toISOString(),
+						},
+					},
+				},
+				options,
+			);
+			const progressCommitSummary = coordinatorProgressCommit.committed
+				? `; coordinator progress commit ${coordinatorProgressCommit.hash ?? "unknown"}`
+				: coordinatorProgressCommit.error
+					? `; coordinator progress commit failed: ${coordinatorProgressCommit.error}`
+					: "";
+			completedSummaries.push(`- Completed task ${task.index + 1}: ${task.subject} (${definition.completionSignal}; ${validation.evidence}${progressCommitSummary})`);
+		}
+	} catch (error) {
+		await blockImplementation(ctx, spec, null, formatError(error), options);
+	} finally {
+		if (ctx.hasUI) ctx.ui.setStatus("ralph", undefined);
+	}
+}
+
+type TriageOutput = "spec-files" | "github-issues" | "both";
+
+type TriageArguments = {
+	epicName: string | null;
+	goal: string;
+	fresh: boolean;
+	yes: boolean;
+	output: TriageOutput;
+	warnings: string[];
+	error?: string;
+};
+
+type TriageMaterializationResult = {
+	directoriesPrepared: number;
+	plansWritten: number;
+	plansKept: number;
+	progressWritten: number;
+	progressKept: number;
+	statesWritten: number;
+	warnings: string[];
+};
+
+type MarkdownSpecBlock = {
+	name: string;
+	heading: string;
+	body: string;
+	order: number;
+};
+
+type TriageGithubChildSync = {
+	specName: string;
+	result?: GithubIssueSyncResult;
+	status: string;
+	issueNumber: number | null;
+	issueUrl: string | null;
+	error?: string;
+};
+
+type TriageGithubSyncResult = {
+	status: "synced" | "skipped" | "failed";
+	repository?: GithubRepository;
+	epic?: GithubIssueSyncResult;
+	children: TriageGithubChildSync[];
+	created: number;
+	updated: number;
+	warnings: string[];
+	skippedReason?: string;
+};
+
+const TRIAGE_AGENT = "ralph-triage-analyst";
+const TRIAGE_OUTPUT_VALUES = new Set<string>(["spec-files", "github-issues", "both"]);
+
+function triageOutputIncludesSpecFiles(output: unknown): boolean {
+	return output === "spec-files" || output === "both";
+}
+
+function triageOutputIncludesGithub(output: unknown): boolean {
+	return output === "github-issues" || output === "both";
+}
+
+function parseTriageArgs(args: string): TriageArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) return emptyTriageArguments(tokenized.error);
+
+	const positionals: string[] = [];
+	const warnings: string[] = [];
+	let fresh = false;
+	let yes = false;
+	let output: TriageOutput = "spec-files";
+
+	for (let index = 0; index < tokenized.tokens.length; index += 1) {
+		const token = tokenized.tokens[index];
+		if (token === "--fresh") {
+			fresh = true;
+			continue;
+		}
+		if (token === "--yes" || token === "-y") {
+			yes = true;
+			continue;
+		}
+		if (token === "--output" || token.startsWith("--output=")) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			if (!value || value.startsWith("--")) return emptyTriageArguments("--output requires spec-files, github-issues, or both.");
+			if (!TRIAGE_OUTPUT_VALUES.has(value)) return emptyTriageArguments(`Invalid --output value '${value}'. Use spec-files, github-issues, or both.`);
+			output = value as TriageOutput;
+			continue;
+		}
+		if (token.startsWith("--")) return emptyTriageArguments(`Unknown option: ${token}`);
+		positionals.push(token);
+	}
+
+	return {
+		epicName: positionals[0] ?? null,
+		goal: positionals.slice(1).join(" ").trim(),
+		fresh,
+		yes,
+		output,
+		warnings,
+	};
+}
+
+function emptyTriageArguments(error: string): TriageArguments {
+	return {
+		epicName: null,
+		goal: "",
+		fresh: false,
+		yes: false,
+		output: "spec-files",
+		warnings: [],
+		error,
+	};
+}
+
+function triageDependencyError(pi: ExtensionAPI, cwd: string, bootstrapResult?: RalphAgentBootstrapResult): string | null {
+	const toolError = activeToolDependencyError(pi, ["Agent"], "ralph-triage", "@tintinweb/pi-subagents");
+	if (toolError) return toolError;
+
+	return ralphAgentDefinitionError(cwd, [TRIAGE_AGENT], bootstrapResult);
+}
+
+function formatTriageUsage(): string {
+	return "Usage: /ralph-triage [--fresh] [--output spec-files|github-issues|both] [--yes] <epic-name> <goal>";
+}
+
+function epicCompletionCandidates(options: RalphPathOptions = {}): RalphCompletionItem[] {
+	return listEpics({ ...options, allowMissingConfiguredRoots: true }).map((epic) => ({
+		value: epic.name,
+		label: epic.name,
+		description: epic.path,
+	}));
+}
+
+function epicArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, epicCompletionCandidates());
+	} catch {
+		return null;
+	}
+}
+
+const TRIAGE_OUTPUT_COMPLETIONS: RalphCompletionItem[] = [
+	{ value: "spec-files", label: "spec-files", description: "Write epic and child spec files only" },
+	{ value: "github-issues", label: "github-issues", description: "Create/update GitHub issues only after confirmation" },
+	{ value: "both", label: "both", description: "Write child spec files and sync GitHub issues" },
+];
+
+function triageArgumentCompletions(prefix: string) {
+	try {
+		return completeOptionValues(prefix, "--output", TRIAGE_OUTPUT_COMPLETIONS) ?? completeArgumentToken(prefix, [
+			flagItem("--fresh", "Regenerate epic artifacts and state"),
+			flagItem("--output", "Choose spec-files, github-issues, or both"),
+			flagItem("--yes", "Confirm GitHub issue writes for noninteractive runs"),
+			...epicCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function epicStatusArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, [
+			flagItem("--json", "Print normalized epic state JSON"),
+			flagItem("--repair", "Repair missing child stubs and stale activeSpec"),
+			...epicCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function epicNextArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, [
+			flagItem("--peek", "Preview the next child without changing state"),
+			flagItem("--switch", "Also set .current-spec after selecting"),
+			flagItem("--start", "Delegate directly to /ralph-start --next-epic-spec"),
+			...epicCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function epicCancelArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, [
+			flagItem("--delete-child-specs", "Also request child spec directory deletion after typed confirmation"),
+			...epicCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function formatAvailableEpics(epics: CurrentEpic[], options: RalphPathOptions, activeEpicName: string | null): string {
+	const root = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
+	const lines = [`Available epics in ${root.path}/_epics:`];
+	if (!root.exists) {
+		lines.push("  (spec root missing)");
+		return lines.join("\n");
+	}
+	if (epics.length === 0) {
+		lines.push("  (none)");
+		return lines.join("\n");
+	}
+	for (const epic of epics) {
+		const active = epic.name === activeEpicName ? " [ACTIVE]" : "";
+		lines.push(`  - ${epic.name}${active} - ${epic.path}`);
+	}
+	return lines.join("\n");
+}
+
+function resolveExistingEpic(reference: string, options: RalphPathOptions): { epic?: CurrentEpic; error?: string } {
+	const name = reference.trim();
+	if (!name) return { error: "Epic name is required." };
+	if (!isValidSpecName(name)) return { error: `Invalid epic name '${name}'. Use kebab-case like 'auth-system'.` };
+
+	const epic = resolveEpicDirectory(name, options);
+	if (!epic.exists) {
+		const epics = listEpics({ ...options, allowMissingConfiguredRoots: true });
+		return { error: [`Epic '${name}' not found.`, "", formatAvailableEpics(epics, options, readCurrentEpicName(options))].join("\n") };
+	}
+	return { epic };
+}
+
+function resolveEpicCommandTarget(reference: string | null, options: RalphPathOptions): { epic?: CurrentEpic; error?: string } {
+	if (reference) return resolveExistingEpic(reference, options);
+
+	const currentName = readCurrentEpicName(options);
+	if (!currentName) {
+		const epics = listEpics({ ...options, allowMissingConfiguredRoots: true });
+		return { error: ["No active epic is set. Pass an epic name or run /ralph-epic-switch <epic>.", "", formatAvailableEpics(epics, options, null)].join("\n") };
+	}
+	return resolveExistingEpic(currentName, options);
+}
+
+function resolveEpicCancelTarget(reference: string | null, options: RalphPathOptions): { epic?: CurrentEpic; error?: string } {
+	if (reference) return resolveExistingEpic(reference, options);
+
+	const currentName = readCurrentEpicName(options);
+	if (!currentName) {
+		const epics = listEpics({ ...options, allowMissingConfiguredRoots: true });
+		return { error: ["No active epic is set. Pass an epic name to cancel a specific epic.", "", formatAvailableEpics(epics, options, null)].join("\n") };
+	}
+	if (!isValidSpecName(currentName)) return { error: `Invalid epic name '${currentName}' in .current-epic. Remove or fix the marker before cancelling.` };
+	return { epic: resolveEpicDirectory(currentName, options) };
+}
+
+async function selectEpic(ctx: ExtensionCommandContext, epics: CurrentEpic[], activeEpicName: string | null): Promise<CurrentEpic | null> {
+	if (!ctx.hasUI) return null;
+
+	const labels = epics.map((epic, index) => {
+		const active = epic.name === activeEpicName ? " [ACTIVE]" : "";
+		return `${index + 1}. ${epic.name}${active} - ${epic.path}`;
+	});
+	const selected = await ctx.ui.select("Switch to epic", labels);
+	if (!selected) return null;
+
+	const selectedIndex = labels.indexOf(selected);
+	return selectedIndex >= 0 ? epics[selectedIndex] : null;
+}
+
+function formatActiveEpic(currentName: string | null, currentEpic: CurrentEpic | null): string {
+	if (!currentName) return "none";
+	if (!currentEpic) return `${currentName} (unresolved)`;
+	return currentEpic.exists ? `${currentEpic.name} (${currentEpic.path})` : `${currentName} (missing at ${currentEpic.path})`;
+}
+
+function epicProgressText(state: EpicState, completedCount: number): string {
+	const total = Array.isArray(state.specs) ? state.specs.length : 0;
+	return `${completedCount}/${total} specs completed`;
+}
+
+function epicValidationWarnings(state: EpicState): string[] {
+	const warnings = state.validation?.warnings;
+	return Array.isArray(warnings) ? warnings.filter((warning): warning is string => typeof warning === "string") : [];
+}
+
+function formatEpicDependencyReason(entry: EpicSpecDependencyStatus): string {
+	if (entry.isExplicitlyBlocked) return entry.spec.blockedReason ?? "explicitly blocked";
+	const waitingOn = [...entry.unmetDependencies, ...entry.missingDependencies];
+	return waitingOn.length > 0 ? `waiting on ${waitingOn.join(", ")}` : "dependencies met";
+}
+
+function formatEpicSpecStatusLine(entry: EpicSpecDependencyStatus, state: EpicState, currentSpecAbsolutePath: string | null, options: RalphPathOptions): string {
+	const child = childSpecEntryForEpicSpec(entry.spec, options);
+	const markers: string[] = [];
+	if (state.activeSpec === entry.name) markers.push("ACTIVE");
+	if (child.absolutePath === currentSpecAbsolutePath) markers.push("CURRENT SPEC");
+
+	const markerText = markers.length > 0 ? ` [${markers.join(", ")}]` : "";
+	const orderText = Number.isFinite(entry.order) ? `#${entry.order}` : "unordered";
+	const dependencies = entry.dependencies.length > 0 ? entry.dependencies.join(", ") : "none";
+	const goal = typeof entry.spec.goal === "string" && entry.spec.goal.trim() ? ` - ${entry.spec.goal.trim()}` : "";
+	const blocked = entry.isDependencyBlocked || entry.isExplicitlyBlocked ? ` (${formatEpicDependencyReason(entry)})` : "";
+	return `- [${entry.status}] ${entry.name}${markerText} (${orderText}; deps: ${dependencies})${blocked}${goal}`;
+}
+
+function parseEpicStatusArgs(args: string): EpicStatusArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) return { reference: null, json: false, repair: false, error: tokenized.error };
+
+	const references: string[] = [];
+	let json = false;
+	let repair = false;
+	for (const token of tokenized.tokens) {
+		if (token === "--json") {
+			json = true;
+			continue;
+		}
+		if (token === "--repair") {
+			repair = true;
+			continue;
+		}
+		if (token.startsWith("--")) return { reference: null, json, repair, error: `Unknown option: ${token}` };
+		references.push(token);
+	}
+
+	if (json && repair) return { reference: null, json, repair, error: "Use either --json or --repair with /ralph-epic-status, not both." };
+	if (references.length > 1) return { reference: null, json, repair, error: `Expected at most one epic name, got: ${references.join(" ")}` };
+	return { reference: references[0] ?? null, json, repair };
+}
+
+function epicWarningsForStatus(stateRead: SafeEpicStateRead, state: EpicState, summary: ReturnType<typeof computeEpicDependencyStatus>): string[] {
+	return unique([...(stateRead.warnings ?? []), ...epicValidationWarnings(state), ...summary.validation.warnings]);
+}
+
+function normalizedEpicChildForJson(entry: EpicSpecDependencyStatus, options: RalphPathOptions): Record<string, unknown> {
+	const paths = normalizedEpicChildPathFields(entry.name, entry.spec.path, entry.spec.planPath, options);
+	return {
+		name: entry.name,
+		goal: typeof entry.spec.goal === "string" ? entry.spec.goal : "",
+		status: entry.status,
+		order: Number.isFinite(entry.order) ? entry.order : null,
+		path: paths.path,
+		planPath: paths.planPath,
+		dependencies: entry.dependencies,
+		size: typeof entry.spec.size === "string" ? entry.spec.size : null,
+		acceptanceCriteria: normalizeStringList(entry.spec.acceptanceCriteria),
+		interfaceContracts: normalizeInterfaceContracts(entry.spec.interfaceContracts),
+		startedAt: typeof entry.spec.startedAt === "string" ? entry.spec.startedAt : null,
+		completedAt: typeof entry.spec.completedAt === "string" ? entry.spec.completedAt : null,
+		blockedReason: typeof entry.spec.blockedReason === "string" ? entry.spec.blockedReason : null,
+		issueNumber: typeof entry.spec.issueNumber === "number" ? entry.spec.issueNumber : null,
+		issueUrl: typeof entry.spec.issueUrl === "string" ? entry.spec.issueUrl : null,
+		githubStatus: typeof entry.spec.githubStatus === "string" ? entry.spec.githubStatus : null,
+		readiness: {
+			isReady: entry.isReady,
+			isExplicitlyBlocked: entry.isExplicitlyBlocked,
+			isDependencyBlocked: entry.isDependencyBlocked,
+			completedDependencies: entry.completedDependencies,
+			unmetDependencies: entry.unmetDependencies,
+			missingDependencies: entry.missingDependencies,
+			reason: entry.isReady ? "ready" : formatEpicDependencyReason(entry),
+		},
+	};
+}
+
+function normalizedEpicStateForJson(epic: CurrentEpic, state: EpicState, summary: ReturnType<typeof computeEpicDependencyStatus>, options: RalphPathOptions): Record<string, unknown> {
+	const storedActiveSpec = typeof state.activeSpec === "string" && state.activeSpec.trim() ? state.activeSpec.trim() : null;
+	const activeSpec = repairedActiveSpecValue(state, summary);
+	return {
+		schemaVersion: Number.isFinite(state.schemaVersion) ? state.schemaVersion : EPIC_SCHEMA_VERSION,
+		name: typeof state.name === "string" && state.name.trim() ? state.name : epic.name,
+		goal: typeof state.goal === "string" ? state.goal : "",
+		status: typeof state.status === "string" ? state.status : "draft",
+		derivedStatus: deriveEpicStatus(state),
+		phase: typeof state.phase === "string" ? state.phase : "unknown",
+		output: typeof state.output === "string" ? state.output : null,
+		basePath: typeof state.basePath === "string" ? state.basePath : epic.path,
+		epicPath: typeof state.epicPath === "string" ? state.epicPath : `${epic.path}/epic.md`,
+		researchPath: typeof state.researchPath === "string" ? state.researchPath : `${epic.path}/research.md`,
+		progressPath: typeof state.progressPath === "string" ? state.progressPath : `${epic.path}/.progress.md`,
+		createdAt: typeof state.createdAt === "string" ? state.createdAt : null,
+		updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null,
+		activeSpec,
+		storedActiveSpec,
+		activeSpecStale: storedActiveSpec !== activeSpec,
+		lastCompletedSpec: typeof state.lastCompletedSpec === "string" && state.lastCompletedSpec.trim() ? state.lastCompletedSpec : null,
+		issueNumber: typeof state.issueNumber === "number" ? state.issueNumber : null,
+		issueUrl: typeof state.issueUrl === "string" ? state.issueUrl : null,
+		githubStatus: typeof state.githubStatus === "string" ? state.githubStatus : null,
+		github: isRecordValue(state.github) ? state.github : null,
+		specs: summary.specs.map((entry) => normalizedEpicChildForJson(entry, options)),
+		contracts: normalizeInterfaceContracts(state.contracts),
+		validation: {
+			valid: summary.validation.valid,
+			warnings: summary.validation.warnings,
+			missingDependencies: summary.validation.missingDependencies,
+			cycles: summary.validation.cycles,
+			duplicateOrders: summary.validation.duplicateOrders,
+			storedWarnings: epicValidationWarnings(state),
+		},
+	};
+}
+
+function epicReadinessForJson(state: EpicState, summary: ReturnType<typeof computeEpicDependencyStatus>): Record<string, unknown> {
+	const blockedSpecs = summary.specs
+		.filter((entry) => entry.isDependencyBlocked || entry.isExplicitlyBlocked)
+		.map((entry) => ({ name: entry.name, reason: formatEpicDependencyReason(entry) }));
+	const storedActiveSpec = typeof state.activeSpec === "string" && state.activeSpec.trim() ? state.activeSpec.trim() : null;
+	const activeSpec = repairedActiveSpecValue(state, summary);
+	return {
+		derivedStatus: deriveEpicStatus(state),
+		progress: {
+			completed: summary.completedSpecs.length,
+			total: summary.specs.length,
+		},
+		activeSpec,
+		storedActiveSpec,
+		activeSpecStale: storedActiveSpec !== activeSpec,
+		nextSpec: summary.nextSpec?.name ?? null,
+		readySpecs: summary.readySpecs.map((spec) => spec.name),
+		inProgressSpecs: summary.inProgressSpecs.map((spec) => spec.name),
+		completedSpecs: summary.completedSpecs.map((spec) => spec.name),
+		blockedSpecs,
+		validation: {
+			valid: summary.validation.valid,
+			warnings: summary.validation.warnings,
+			missingDependencies: summary.validation.missingDependencies,
+			cycles: summary.validation.cycles,
+			duplicateOrders: summary.validation.duplicateOrders,
+		},
+	};
+}
+
+function formatEpicStatusJson(epic: CurrentEpic, stateRead: SafeEpicStateRead, options: RalphPathOptions): string {
+	const currentEpicName = readCurrentEpicName(options);
+	const base = {
+		schemaVersion: EPIC_SCHEMA_VERSION,
+		currentEpic: currentEpicName,
+		showingEpic: {
+			name: epic.name,
+			path: epic.path,
+			statePath: stateRead.path,
+			isCurrent: currentEpicName === epic.name,
+		},
+		currentSpec: readCurrentSpecValue(options),
+	};
+
+	if (!stateRead.state) {
+		return JSON.stringify({
+			...base,
+			state: null,
+			readiness: null,
+			warnings: stateRead.warnings.length > 0 ? stateRead.warnings : ["Missing .epic-state.json"],
+		}, null, 2);
+	}
+
+	const state = stateRead.state;
+	const summary = computeEpicDependencyStatus(state);
+	return JSON.stringify({
+		...base,
+		state: normalizedEpicStateForJson(epic, state, summary, options),
+		readiness: epicReadinessForJson(state, summary),
+		warnings: epicWarningsForStatus(stateRead, state, summary),
+	}, null, 2);
+}
+
+function repairedActiveSpecValue(state: EpicState, summary: ReturnType<typeof computeEpicDependencyStatus>): string | null {
+	const activeName = typeof state.activeSpec === "string" && state.activeSpec.trim() ? state.activeSpec.trim() : null;
+	const activeEntry = activeName ? summary.specs.find((entry) => entry.name === activeName) : undefined;
+	if (activeEntry?.status === "in_progress") return activeEntry.name;
+	return summary.specs.find((entry) => entry.status === "in_progress")?.name ?? null;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+	if (left.length !== right.length) return false;
+	return left.every((value, index) => value === right[index]);
+}
+
+function validationNeedsRepair(state: EpicState, validationWarnings: string[]): boolean {
+	const storedWarnings = epicValidationWarnings(state);
+	return !isRecordValue(state.validation)
+		|| typeof state.validation.lastValidatedAt !== "string"
+		|| !sameStringArray(storedWarnings, validationWarnings);
+}
+
+function repairEpicStateMetadata(epic: CurrentEpic, state: EpicState, summary: ReturnType<typeof computeEpicDependencyStatus>, options: RalphPathOptions, changes: string[]): EpicState {
+	let nextState = state;
+	const now = new Date().toISOString();
+	const specs = Array.isArray(nextState.specs) ? nextState.specs : [];
+	let pathMetadataChanged = false;
+	const normalizedSpecs = specs.map((spec) => {
+		if (!isRecordValue(spec) || typeof spec.name !== "string" || !isValidSpecName(spec.name)) return spec;
+		const paths = normalizedEpicChildPathFields(spec.name, spec.path, spec.planPath, options);
+		const currentPath = typeof spec.path === "string" && spec.path.trim() ? spec.path.trim() : "";
+		const currentPlanPath = typeof spec.planPath === "string" && spec.planPath.trim() ? spec.planPath.trim() : "";
+		if (currentPath === paths.path && currentPlanPath === paths.planPath) return spec;
+		pathMetadataChanged = true;
+		changes.push(`Repaired child path metadata for ${spec.name}: path ${currentPath || "none"} -> ${paths.path}; planPath ${currentPlanPath || "none"} -> ${paths.planPath}`);
+		return { ...spec, path: paths.path, planPath: paths.planPath } as EpicChildSpec;
+	});
+	if (pathMetadataChanged) {
+		nextState = {
+			...nextState,
+			specs: normalizedSpecs as EpicChildSpec[],
+			updatedAt: now,
+		};
+	}
+	const currentActive = typeof state.activeSpec === "string" && state.activeSpec.trim() ? state.activeSpec.trim() : null;
+	const repairedActive = repairedActiveSpecValue(state, summary);
+	if (currentActive !== repairedActive) {
+		nextState = {
+			...nextState,
+			activeSpec: repairedActive,
+			updatedAt: now,
+		};
+		changes.push(`Repaired activeSpec: ${currentActive ?? "none"} -> ${repairedActive ?? "none"}`);
+	}
+
+	const validationWarnings = summary.validation.warnings;
+	if (validationNeedsRepair(nextState, validationWarnings)) {
+		nextState = {
+			...nextState,
+			updatedAt: now,
+			validation: {
+				...(isRecordValue(nextState.validation) ? nextState.validation : {}),
+				warnings: validationWarnings,
+				lastValidatedAt: now,
+			},
+		};
+		changes.push(`Updated dependency validation (${validationWarnings.length} warning${validationWarnings.length === 1 ? "" : "s"})`);
+	}
+
+	if (nextState !== state) {
+		writeEpicState(epic, nextState, options);
+	}
+	return nextState;
+}
+
+function repairEpicChildStubs(epic: CurrentEpic, state: EpicState, options: RalphPathOptions, changes: string[], warnings: string[]): boolean {
+	let changed = false;
+	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
+	const specs = Array.isArray(state.specs) ? state.specs : [];
+	for (const spec of specs) {
+		if (!isValidSpecName(spec.name)) {
+			warnings.push(`Skipped invalid child spec name: ${spec.name}`);
+			continue;
+		}
+
+		const child = childSpecEntryForEpicSpec(spec, options);
+		if (!existsSync(child.absolutePath)) {
+			mkdirSync(child.absolutePath, { recursive: true });
+			changes.push(`Created child spec directory: ${child.path}`);
+			changed = true;
+		}
+
+		const planPath = join(child.absolutePath, "plan.md");
+		if (!existsSync(planPath) || !readFileIfExists(planPath).trim()) {
+			atomicWriteCoordinatorText(planPath, buildChildPlan(epic, state, spec, epicMarkdown));
+			changes.push(`Wrote missing child plan stub: ${child.path}/plan.md`);
+			changed = true;
+		}
+
+		const progressPath = getProgressPath(child, options);
+		if (!existsSync(progressPath) || !readProgress(child, options).trim()) {
+			writeProgress(child, buildChildProgressStub(state, spec, child), options);
+			changes.push(`Wrote missing child progress stub: ${child.path}/.progress.md`);
+			changed = true;
+		}
+
+		const childStatePath = getRalphStatePath(child, options);
+		if (!existsSync(childStatePath)) {
+			mergeRalphState(child, childSpecStatePatch(epic, state, spec, child, null), options);
+			changes.push(`Wrote missing child state stub: ${child.path}/.ralph-state.json`);
+			changed = true;
+		} else {
+			try {
+				readRalphState(child, options);
+			} catch (error) {
+				warnings.push(`Skipped invalid child state for '${spec.name}': ${formatError(error)}`);
+			}
+		}
+	}
+	return changed;
+}
+
+function repairEpicStatus(epic: CurrentEpic, stateRead: SafeEpicStateRead, options: RalphPathOptions): EpicRepairResult {
+	const changes: string[] = [];
+	const warnings: string[] = [...stateRead.warnings];
+	if (!stateRead.state) {
+		return { changes, warnings: warnings.length > 0 ? warnings : ["Missing .epic-state.json"], validationWarnings: [], stateChanged: false, childFilesChanged: false };
+	}
+
+	const summary = computeEpicDependencyStatus(stateRead.state);
+	const state = repairEpicStateMetadata(epic, stateRead.state, summary, options, changes);
+	const childFilesChanged = repairEpicChildStubs(epic, state, options, changes, warnings);
+	return {
+		changes,
+		warnings: unique([...warnings, ...epicWarningsForStatus({ ...stateRead, state }, state, computeEpicDependencyStatus(state))]),
+		validationWarnings: summary.validation.warnings,
+		stateChanged: state !== stateRead.state,
+		childFilesChanged,
+	};
+}
+
+function formatEpicRepairMessage(epic: CurrentEpic, stateRead: SafeEpicStateRead, result: EpicRepairResult): { message: string; type: "info" | "warning" } {
+	const lines = [
+		"# Ralph Epic Repair",
+		"",
+		`Epic: ${epic.name} (${epic.path})`,
+		`State: ${stateRead.path}`,
+		"",
+		"Changes:",
+	];
+	if (result.changes.length === 0) {
+		lines.push("- No repairs needed.");
+	} else {
+		lines.push(...result.changes.map((change) => `- ${change}`));
+	}
+
+	lines.push(
+		"",
+		"Summary:",
+		`- State changed: ${result.stateChanged ? "yes" : "no"}`,
+		`- Child files changed: ${result.childFilesChanged ? "yes" : "no"}`,
+		"",
+		"Dependency graph:",
+	);
+	if (result.validationWarnings.length === 0) {
+		lines.push("- Valid: no dependency warnings.");
+	} else {
+		lines.push(`- Warnings: ${result.validationWarnings.length}`, ...result.validationWarnings.map((warning) => `  - ${warning}`));
+	}
+
+	if (result.warnings.length > 0) {
+		lines.push("", "Warnings:", ...result.warnings.map((warning) => `- ${warning}`));
+	}
+	lines.push("", `Next command: /ralph-epic-status ${epic.name}`);
+	return { message: lines.join("\n"), type: result.warnings.length > 0 ? "warning" : "info" };
+}
+
+function formatEpicStatusMessage(epic: CurrentEpic, stateRead: SafeEpicStateRead, options: RalphPathOptions): { message: string; type: "info" | "warning" } {
+	const currentEpicName = readCurrentEpicName(options);
+	const currentEpic = currentEpicName ? resolveEpicDirectory(currentEpicName, options) : null;
+	const currentSpec = currentSpecPath(options);
+	const lines = [
+		"# Ralph Epic Status",
+		"",
+		`Current epic: ${formatActiveEpic(currentEpicName, currentEpic)}`,
+		`Showing epic: ${epic.name} (${epic.path})`,
+		`State: ${stateRead.path}`,
+	];
+
+	if (!stateRead.state) {
+		lines.push("Status: unavailable", "", "Warnings:", ...(stateRead.warnings.length > 0 ? stateRead.warnings.map((warning) => `- ${warning}`) : ["- Missing .epic-state.json"]), "", `Next command: /ralph-triage --fresh ${epic.name} <goal>`);
+		return { message: lines.join("\n"), type: "warning" };
+	}
+
+	const state = stateRead.state;
+	const summary = computeEpicDependencyStatus(state);
+	const warnings = unique([...(stateRead.warnings ?? []), ...epicValidationWarnings(state), ...summary.validation.warnings]);
+	const inProgress = summary.inProgressSpecs[0] ?? (state.activeSpec && Array.isArray(state.specs) ? state.specs.find((spec) => spec.name === state.activeSpec) : undefined);
+	const next = summary.nextSpec;
+
+	lines.push(
+		`Epic status: ${state.status}`,
+		`Phase: ${state.phase ?? "unknown"}`,
+		`Goal: ${state.goal ?? ""}`,
+		`Progress: ${epicProgressText(state, summary.completedSpecs.length)}`,
+		`Active child spec: ${state.activeSpec ?? "none"}`,
+		`Current spec: ${readCurrentSpecValue(options) ?? "none"}`,
+		"",
+		"## Child spec statuses",
+	);
+
+	if (summary.specs.length === 0) {
+		lines.push("No child specs found in .epic-state.json.");
+	} else {
+		for (const entry of summary.specs) lines.push(formatEpicSpecStatusLine(entry, state, currentSpec, options));
+	}
+
+	lines.push("", "## Unblocked specs");
+	const unblocked = summary.specs.filter((entry) => entry.isReady || entry.status === "in_progress");
+	if (unblocked.length === 0) {
+		lines.push("- None");
+	} else {
+		for (const entry of unblocked) lines.push(`- ${entry.name} (${entry.status === "in_progress" ? "in progress" : "ready"})`);
+	}
+
+	lines.push("", "## Blocked specs");
+	const blocked = summary.specs.filter((entry) => entry.isDependencyBlocked || entry.isExplicitlyBlocked);
+	if (blocked.length === 0) {
+		lines.push("- None");
+	} else {
+		for (const entry of blocked) lines.push(`- ${entry.name}: ${formatEpicDependencyReason(entry)}`);
+	}
+
+	if (warnings.length > 0) {
+		lines.push("", "Warnings:", ...warnings.map((warning) => `- ${warning}`));
+	}
+
+	lines.push("", "Next command:");
+	if (state.status === "completed") {
+		lines.push("- Epic is complete.");
+	} else if (state.status === "cancelled") {
+		lines.push(`- Epic is cancelled. To inspect it again: /ralph-epic-status ${epic.name}`);
+	} else if (inProgress) {
+		lines.push(`- Continue active child spec: /ralph-start ${inProgress.name}`);
+	} else if (next) {
+		lines.push(`- Select next child spec: /ralph-start --next-epic-spec`, `- Or start through epic next: /ralph-epic-next --start`);
+	} else {
+		lines.push("- No unblocked child spec is ready. Resolve blockers or complete dependencies, then rerun /ralph-epic-status.");
+	}
+
+	return { message: lines.join("\n"), type: warnings.length > 0 ? "warning" : "info" };
+}
+
+function formatEpicSwitchSummary(epic: CurrentEpic, stateRead: SafeEpicStateRead, options: RalphPathOptions): string {
+	const lines = [
+		`Switched to epic: ${epic.name}`,
+		"",
+		`Location: ${epic.path}`,
+		`Current marker: ${epic.name}`,
+		`State: ${stateRead.path}`,
+	];
+
+	if (!stateRead.state) {
+		lines.push("Status: unavailable", ...stateRead.warnings.map((warning) => `Warning: ${warning}`), "", `Next: run /ralph-triage --fresh ${epic.name} <goal> to regenerate state.`);
+		return lines.join("\n");
+	}
+
+	const summary = computeEpicDependencyStatus(stateRead.state);
+	lines.push(
+		`Epic status: ${stateRead.state.status}`,
+		`Progress: ${epicProgressText(stateRead.state, summary.completedSpecs.length)}`,
+		`Next unblocked child spec: ${summary.nextSpec?.name ?? "none"}`,
+		"",
+		"Next: run /ralph-epic-status, /ralph-start --next-epic-spec, or /ralph-epic-next --start.",
+	);
+	if (stateRead.warnings.length > 0) lines.push("", "Warnings:", ...stateRead.warnings.map((warning) => `- ${warning}`));
+	return lines.join("\n");
+}
+
+function parseEpicNextArgs(args: string): EpicNextArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) return { reference: null, switchSpec: false, startSpec: false, peek: false, error: tokenized.error };
+
+	const references: string[] = [];
+	let switchSpec = false;
+	let startSpec = false;
+	let peek = false;
+	for (const token of tokenized.tokens) {
+		if (token === "--switch" || token === "--switch-spec") {
+			switchSpec = true;
+			continue;
+		}
+		if (token === "--start") {
+			startSpec = true;
+			continue;
+		}
+		if (token === "--no-switch") {
+			switchSpec = false;
+			continue;
+		}
+		if (token === "--peek" || token === "--dry-run") {
+			peek = true;
+			continue;
+		}
+		if (token.startsWith("--")) return { reference: null, switchSpec, startSpec, peek, error: `Unknown option: ${token}` };
+		references.push(token);
+	}
+
+	if (references.length > 1) return { reference: null, switchSpec, startSpec, peek, error: `Expected at most one epic name, got: ${references.join(" ")}` };
+	return { reference: references[0] ?? null, switchSpec, startSpec, peek };
+}
+
+function parseEpicCancelArgs(args: string): EpicCancelArguments {
+	const tokenized = tokenizeCommandArgs(args);
+	if (tokenized.error) return { reference: null, deleteChildSpecs: false, error: tokenized.error };
+
+	const references: string[] = [];
+	let deleteChildSpecs = false;
+	for (const token of tokenized.tokens) {
+		if (token === "--delete-child-specs" || token === "--delete-children" || token === "--delete-specs") {
+			deleteChildSpecs = true;
+			continue;
+		}
+		if (token.startsWith("--")) return { reference: null, deleteChildSpecs, error: `Unknown option: ${token}` };
+		references.push(token);
+	}
+
+	if (references.length > 1) return { reference: null, deleteChildSpecs, error: `Expected at most one epic name, got: ${references.join(" ")}` };
+	return { reference: references[0] ?? null, deleteChildSpecs };
+}
+
+function formatEpicCancelConfirmation(epic: CurrentEpic, stateRead: SafeEpicStateRead, willDeleteChildSpecs: boolean, options: RalphPathOptions): string {
+	const currentMarker = readCurrentEpicName(options) === epic.name ? "yes" : "no";
+	const childCount = stateRead.state && Array.isArray(stateRead.state.specs) ? stateRead.state.specs.length : 0;
+	return [
+		`Epic: ${epic.name}`,
+		`Location: ${epic.path}`,
+		`State file: ${stateRead.path}`,
+		`Active marker points here: ${currentMarker}`,
+		`Child specs tracked: ${childCount}`,
+		"",
+		...formatEpicStateBeforeCancel(stateRead),
+		"",
+		"This cancels epic orchestration: it marks readable epic state cancelled, clears activeSpec, and clears .current-epic if it points to this epic.",
+		willDeleteChildSpecs ? "You also requested permanent deletion of child spec directories after an additional typed confirmation." : "Child spec directories will be kept.",
+		"Choose OK only if you want to stop this epic's current Ralph run.",
+	].join("\n");
+}
+
+function formatEpicStateBeforeCancel(stateRead: SafeEpicStateRead): string[] {
+	if (!stateRead.state) return ["State before cancellation: unavailable"];
+	const summary = computeEpicDependencyStatus(stateRead.state);
+	return [
+		"State before cancellation:",
+		`- Epic status: ${stateRead.state.status}`,
+		`- Phase: ${stateRead.state.phase ?? "unknown"}`,
+		`- Active child spec: ${stateRead.state.activeSpec ?? "none"}`,
+		`- Progress: ${epicProgressText(stateRead.state, summary.completedSpecs.length)}`,
+	];
+}
+
+function cancelEpicState(epic: CurrentEpic, state: EpicState | null, options: RalphPathOptions): boolean {
+	if (!state) return false;
+	writeEpicState(epic, {
+		...state,
+		status: "cancelled",
+		phase: "cancelled",
+		activeSpec: null,
+		updatedAt: new Date().toISOString(),
+	}, options);
+	return true;
+}
+
+async function maybeDeleteEpicChildSpecs(ctx: ExtensionCommandContext, state: EpicState | null, options: RalphPathOptions): Promise<string[]> {
+	if (!state || !Array.isArray(state.specs) || state.specs.length === 0) return ["- Skipped child spec directory delete: no child specs in readable epic state."];
+	if (!ctx.hasUI) return ["- Skipped child spec directory delete: Pi UI confirmation is required."];
+
+	const childNames = state.specs.map((spec) => spec.name).filter((name): name is string => typeof name === "string");
+	const listedChildren = childNames.slice(0, 12).map((name) => `- ${name}`);
+	if (childNames.length > listedChildren.length) listedChildren.push(`- ...and ${childNames.length - listedChildren.length} more`);
+	const confirmed = await ctx.ui.confirm(
+		"Delete epic child spec directories?",
+		[
+			`Permanently delete ${state.specs.length} child spec director${state.specs.length === 1 ? "y" : "ies"} for epic '${state.name}'?`,
+			"",
+			...listedChildren,
+			"",
+			"This removes child spec files and cannot be undone. The epic record will be kept.",
+		].join("\n"),
+	);
+	if (!confirmed) return ["- Skipped child spec directory delete: user cancelled."];
+
+	const typed = await ctx.ui.input("Confirm child spec deletion", `type ${state.name} to delete child specs`);
+	if (typed?.trim() !== state.name) return ["- Skipped child spec directory delete: typed confirmation did not match epic name."];
+
+	const results: string[] = [];
+	for (const spec of state.specs) {
+		if (!isValidSpecName(spec.name)) {
+			results.push(`- Skipped invalid child spec name: ${spec.name}`);
+			continue;
+		}
+		const child = childSpecEntry(spec.name, options);
+		const safetyError = specDeleteSafetyError(child, options);
+		if (safetyError) {
+			results.push(`- Skipped ${spec.name}: ${safetyError}`);
+			continue;
+		}
+		rmSync(child.absolutePath, { recursive: true, force: true });
+		results.push(`- Deleted child spec directory: ${child.path}`);
+	}
+	return results;
+}
+
+function formatEpicNextSummary(
+	epic: CurrentEpic,
+	state: EpicState,
+	summary: ReturnType<typeof computeEpicDependencyStatus>,
+	spec: EpicChildSpec,
+	updated: boolean,
+	switchedValue: string | null,
+	warnings: string[],
+): string {
+	const lines = [
+		`${updated ? "Selected" : "Next unblocked"} child spec for epic '${epic.name}': ${spec.name}`,
+		"",
+		`Epic progress: ${epicProgressText(state, summary.completedSpecs.length)}`,
+		`Goal: ${spec.goal ?? ""}`,
+		`Dependencies: ${spec.dependencies && spec.dependencies.length > 0 ? spec.dependencies.join(", ") : "none"}`,
+		`Plan: ${spec.planPath ?? `${spec.path ?? spec.name}/plan.md`}`,
+		`Epic state updated: ${updated ? "yes" : "no (--peek)"}`,
+		`Current spec switched: ${switchedValue ?? "no"}`,
+	];
+	if (warnings.length > 0) lines.push("", "Warnings:", ...warnings.map((warning) => `- ${warning}`));
+	lines.push("", `Next command: /ralph-start ${spec.name}`, "Alias: /ralph-epic-next --start");
+	return lines.join("\n");
+}
+
+function epicMarkdownPath(epic: CurrentEpic): string {
+	return join(epic.absolutePath, "epic.md");
+}
+
+function epicResearchPath(epic: CurrentEpic): string {
+	return join(epic.absolutePath, "research.md");
+}
+
+function epicDisplayPath(epic: CurrentEpic, fileName: string): string {
+	return `${epic.path.replace(/\/$/, "")}/${fileName}`;
+}
+
+function childSpecEntry(specName: string, options: RalphPathOptions): SpecEntry {
+	const root = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
+	return specEntryFromAbsolutePath(join(root.absolutePath, specName), { ...options, allowMissingConfiguredRoots: true });
+}
+
+function normalizedEpicPathField(value: unknown): string | null {
+	if (typeof value !== "string" || !value.trim()) return null;
+	let normalized = value.trim().replace(/\\/g, "/");
+	while (normalized.length > 1 && normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+	return normalized || null;
+}
+
+function epicPathFieldToAbsolute(pathText: string, options: RalphPathOptions): string {
+	const cwd = options.cwd ?? process.cwd();
+	return resolve(isAbsolute(pathText) ? pathText : join(cwd, pathText));
+}
+
+function isDirectChildOfConfiguredSpecRoot(absolutePath: string, specName: string, options: RalphPathOptions): boolean {
+	const normalizedAbsolutePath = resolve(absolutePath);
+	return getSpecRoots({ ...options, allowMissingConfiguredRoots: true }).some((root) => {
+		const relativePath = relative(root.absolutePath, normalizedAbsolutePath).replace(/\\/g, "/");
+		return relativePath === specName;
+	});
+}
+
+function childSpecEntryFromConfiguredPath(value: unknown, specName: string, options: RalphPathOptions): SpecEntry | null {
+	const pathText = normalizedEpicPathField(value);
+	if (!pathText) return null;
+	const absolutePath = epicPathFieldToAbsolute(pathText, options);
+	if (!isDirectChildOfConfiguredSpecRoot(absolutePath, specName, options)) return null;
+	return specEntryFromAbsolutePath(absolutePath, { ...options, allowMissingConfiguredRoots: true });
+}
+
+function childSpecEntryFromConfiguredPlanPath(value: unknown, specName: string, options: RalphPathOptions): SpecEntry | null {
+	const pathText = normalizedEpicPathField(value);
+	if (!pathText) return null;
+	const absolutePlanPath = epicPathFieldToAbsolute(pathText, options);
+	const absoluteChildPath = dirname(absolutePlanPath);
+	const planFile = relative(absoluteChildPath, absolutePlanPath).replace(/\\/g, "/");
+	if (planFile !== "plan.md" || !isDirectChildOfConfiguredSpecRoot(absoluteChildPath, specName, options)) return null;
+	return specEntryFromAbsolutePath(absoluteChildPath, { ...options, allowMissingConfiguredRoots: true });
+}
+
+function normalizedEpicChildPathFields(specName: string, rawPath: unknown, rawPlanPath: unknown, options: RalphPathOptions): { path: string; planPath: string } {
+	const child = childSpecEntryFromConfiguredPath(rawPath, specName, options)
+		?? childSpecEntryFromConfiguredPlanPath(rawPlanPath, specName, options)
+		?? childSpecEntry(specName, options);
+	return { path: child.path, planPath: `${child.path}/plan.md` };
+}
+
+function childSpecEntryForEpicSpec(spec: EpicChildSpec, options: RalphPathOptions): SpecEntry {
+	const paths = normalizedEpicChildPathFields(spec.name, spec.path, spec.planPath, options);
+	return specEntryFromAbsolutePath(epicPathFieldToAbsolute(paths.path, options), { ...options, allowMissingConfiguredRoots: true });
+}
+
+function buildInitialEpicProgress(epicName: string, goal: string): string {
+	return [
+		`# Epic: ${epicName}`,
+		"",
+		"## Original Goal",
+		goal.trim() || "_No goal captured yet_",
+		"",
+		"## Completed",
+		"(none yet)",
+		"",
+		"## Learnings",
+		"(none yet)",
+		"",
+	].join("\n");
+}
+
+function buildInitialEpicResearch(epicName: string, goal: string): string {
+	return [
+		`# Epic Research: ${epicName}`,
+		"",
+		"## Goal",
+		goal.trim() || "_No goal captured yet_",
+		"",
+		"## Exploration Notes",
+		"- Coordinator initialized this file for Pi triage. The triage analyst may append concrete research findings.",
+		"",
+	].join("\n");
+}
+
+function ensureInitialEpicFiles(epic: CurrentEpic, parsed: TriageArguments, goal: string): { epicPath: string; researchPath: string; progressPath: string } {
+	mkdirSync(epic.absolutePath, { recursive: true });
+	const epicPath = epicMarkdownPath(epic);
+	const researchPath = epicResearchPath(epic);
+
+	if (parsed.fresh || !existsSync(epic.progressPath)) {
+		atomicWriteCoordinatorText(epic.progressPath, buildInitialEpicProgress(epic.name, goal));
+	}
+	if (parsed.fresh || !existsSync(researchPath)) {
+		atomicWriteCoordinatorText(researchPath, buildInitialEpicResearch(epic.name, goal));
+	}
+
+	return { epicPath, researchPath, progressPath: epic.progressPath };
+}
+
+function normalizeTriageSpecName(value: unknown): string | null {
+	if (typeof value !== "string" || !value.trim()) return null;
+	const trimmed = value.trim();
+	if (isValidSpecName(trimmed)) return trimmed;
+	const inferred = inferSpecNameFromGoal(trimmed);
+	return isValidSpecName(inferred) ? inferred : null;
+}
+
+function normalizeTriageChildStatus(value: unknown): EpicChildSpecStatus {
+	return value === "in_progress" || value === "completed" || value === "cancelled" || value === "blocked" ? value : "pending";
+}
+
+function normalizeStringList(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return value.filter((item): item is string => typeof item === "string").map((item) => normalizeWhitespace(item)).filter(Boolean);
+	}
+	if (typeof value !== "string") return [];
+	if (/^\s*(none|n\/a|na)\s*$/i.test(value)) return [];
+
+	const lines = value
+		.split(/\r?\n/)
+		.map((line) => line.replace(/^\s*-\s*(?:\[[ xX]\]\s*)?/, "").trim())
+		.filter(Boolean);
+	return lines.length > 0 ? lines : [normalizeWhitespace(value)].filter(Boolean);
+}
+
+function normalizeDependencyNames(value: unknown): string[] {
+	if (Array.isArray(value)) {
+		return unique(value.map(normalizeTriageSpecName).filter((item): item is string => item !== null));
+	}
+	if (typeof value !== "string") return [];
+	if (/^\s*(none|n\/a|na)\s*$/i.test(value)) return [];
+
+	return unique(
+		value
+			.split(/[,\n]/)
+			.map((item) => item.replace(/^\s*-\s*/, "").replace(/`/g, "").trim())
+			.map(normalizeTriageSpecName)
+			.filter((item): item is string => item !== null),
+	);
+}
+
+function normalizeInterfaceContracts(value: unknown): EpicInterfaceContract[] {
+	if (!Array.isArray(value)) return [];
+	return value
+		.map((contract) => {
+			if (isRecordValue(contract)) return { ...contract } as EpicInterfaceContract;
+			if (typeof contract === "string" && contract.trim()) return { shape: normalizeWhitespace(contract) } as EpicInterfaceContract;
+			return null;
+		})
+		.filter((contract): contract is EpicInterfaceContract => contract !== null);
+}
+
+function normalizeEpicChildSpec(raw: unknown, index: number, options: RalphPathOptions): EpicChildSpec | null {
+	if (!isRecordValue(raw)) return null;
+	const name = normalizeTriageSpecName(raw.name);
+	if (!name) return null;
+
+	const dependencies = normalizeDependencyNames(raw.dependencies).filter((dependency) => dependency !== name);
+	const acceptanceCriteria = normalizeStringList(raw.acceptanceCriteria);
+	const interfaceContracts = normalizeInterfaceContracts(raw.interfaceContracts);
+	const mvpScope = isRecordValue(raw.mvpScope) ? raw.mvpScope : undefined;
+	const paths = normalizedEpicChildPathFields(name, raw.path, raw.planPath, options);
+
+	return {
+		...raw,
+		name,
+		goal: typeof raw.goal === "string" ? raw.goal.trim() : undefined,
+		status: normalizeTriageChildStatus(raw.status),
+		order: typeof raw.order === "number" && Number.isFinite(raw.order) ? raw.order : index + 1,
+		path: paths.path,
+		planPath: paths.planPath,
+		dependencies,
+		size: typeof raw.size === "string" && raw.size.trim() ? raw.size.trim() : undefined,
+		acceptanceCriteria,
+		mvpScope,
+		interfaceContracts,
+		startedAt: typeof raw.startedAt === "string" ? raw.startedAt : raw.startedAt === null ? null : null,
+		completedAt: typeof raw.completedAt === "string" ? raw.completedAt : raw.completedAt === null ? null : null,
+		blockedReason: typeof raw.blockedReason === "string" ? raw.blockedReason : raw.blockedReason === null ? null : null,
+		issueNumber: typeof raw.issueNumber === "number" ? raw.issueNumber : raw.issueNumber === null ? null : null,
+		issueUrl: typeof raw.issueUrl === "string" ? raw.issueUrl : raw.issueUrl === null ? null : null,
+		githubStatus: typeof raw.githubStatus === "string" ? raw.githubStatus : raw.githubStatus === null ? null : null,
+	};
+}
+
+function slugFromSpecHeading(heading: string): string | null {
+	const withoutPrefix = heading.replace(/^Spec\s+\d+\s*:\s*/i, "").trim();
+	const withoutDecorators = withoutPrefix.replace(/`/g, "").replace(/^[#*\s]+|[#*\s]+$/g, "");
+	return normalizeTriageSpecName(withoutDecorators);
+}
+
+function parseEpicMarkdownSpecBlocks(content: string): MarkdownSpecBlock[] {
+	const lines = content.replace(/\r\n/g, "\n").split("\n");
+	const blocks: MarkdownSpecBlock[] = [];
+	let current: { name: string; heading: string; start: number } | null = null;
+
+	for (let index = 0; index <= lines.length; index += 1) {
+		const line = lines[index] ?? "";
+		const headingMatch = line.match(/^###\s+(.+?)\s*$/);
+		const headingName = headingMatch ? slugFromSpecHeading(headingMatch[1]) : null;
+
+		if (index === lines.length || headingName) {
+			if (current) {
+				blocks.push({
+					name: current.name,
+					heading: current.heading,
+					body: lines.slice(current.start + 1, index).join("\n").trim(),
+					order: blocks.length + 1,
+				});
+			}
+			if (headingName) current = { name: headingName, heading: line.trim(), start: index };
+		}
+	}
+
+	return blocks;
+}
+
+function markdownFieldText(body: string, field: string): string {
+	const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = body.match(new RegExp(`^\\s*\\*\\*${escaped}\\*\\*:\\s*([\\s\\S]*?)(?=\\n\\s*\\*\\*[^*]+\\*\\*:\\s*|$)`, "im"));
+	return match?.[1]?.trim() ?? "";
+}
+
+function parseMarkdownDependencies(body: string, knownSpecNames: Set<string>, currentSpecName: string): string[] {
+	const text = markdownFieldText(body, "Dependencies");
+	if (!text || /^\s*(none|n\/a|na)\s*$/i.test(text)) return [];
+
+	const fromKnownNames = [...knownSpecNames]
+		.filter((name) => name !== currentSpecName)
+		.filter((name) => new RegExp(`(^|[^a-z0-9-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9-]|$)`, "i").test(text));
+	return fromKnownNames.length > 0 ? fromKnownNames : normalizeDependencyNames(text).filter((name) => name !== currentSpecName);
+}
+
+function parseMarkdownContracts(content: string): EpicInterfaceContract[] {
+	const section = extractSection(content, "Cross-Spec Contracts");
+	const rows = section.split(/\r?\n/).filter((line) => /^\s*\|/.test(line));
+	if (rows.length < 2) return [];
+
+	return rows.slice(2).map((row) => {
+		const cells = row.split("|").slice(1, -1).map((cell) => cell.trim());
+		if (cells.length < 5 || !cells[0]) return null;
+		return {
+			name: cells[0],
+			producer: cells[1] || undefined,
+			consumers: cells[2] ? cells[2].split(/,\s*/).filter(Boolean) : [],
+			shape: cells[3] || undefined,
+			compatibilityNotes: cells[4] || undefined,
+		} as EpicInterfaceContract;
+	}).filter((contract): contract is EpicInterfaceContract => contract !== null);
+}
+
+function parseEpicMarkdownChildSpecs(content: string, options: RalphPathOptions): EpicChildSpec[] {
+	const blocks = parseEpicMarkdownSpecBlocks(content);
+	const knownSpecNames = new Set(blocks.map((block) => block.name));
+
+	return blocks.map((block) => {
+		const goal = markdownFieldText(block.body, "Goal");
+		const included = normalizeStringList(markdownFieldText(block.body, "MVP Scope"));
+		const excluded = normalizeStringList(markdownFieldText(block.body, "Out of Scope"));
+		const acceptanceCriteria = normalizeStringList(markdownFieldText(block.body, "Acceptance Criteria"));
+		const contractsText = markdownFieldText(block.body, "Interface Contracts");
+		const size = markdownFieldText(block.body, "Size").split(/\s+/)[0];
+		return normalizeEpicChildSpec(
+			{
+				name: block.name,
+				goal: goal || undefined,
+				status: "pending",
+				order: block.order,
+				dependencies: parseMarkdownDependencies(block.body, knownSpecNames, block.name),
+				size: size && !/^none$/i.test(size) ? size : undefined,
+				acceptanceCriteria,
+				mvpScope: { in: included, out: excluded },
+				interfaceContracts: contractsText && !/^\s*(none|n\/a|na)\s*$/i.test(contractsText)
+					? [{ name: `${block.name}-contract`, producer: block.name, shape: normalizeWhitespace(contractsText) }]
+					: [],
+			},
+			block.order - 1,
+			options,
+		);
+	}).filter((spec): spec is EpicChildSpec => spec !== null);
+}
+
+function normalizeEpicContracts(raw: EpicState | null, epicMarkdown: string): EpicInterfaceContract[] {
+	const rawContracts = normalizeInterfaceContracts(raw?.contracts);
+	return rawContracts.length > 0 ? rawContracts : parseMarkdownContracts(epicMarkdown);
+}
+
+function normalizeTriageEpicState(epic: CurrentEpic, raw: EpicState | null, parsed: TriageArguments, goal: string, options: RalphPathOptions): EpicState {
+	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
+	const rawSpecs = Array.isArray(raw?.specs) ? raw.specs : [];
+	const normalizedRawSpecs = rawSpecs.map((spec, index) => normalizeEpicChildSpec(spec, index, options)).filter((spec): spec is EpicChildSpec => spec !== null);
+	const specs = normalizedRawSpecs.length > 0 ? normalizedRawSpecs : parseEpicMarkdownChildSpecs(epicMarkdown, options);
+	const now = new Date().toISOString();
+	const output = parsed.output;
+	const state: EpicState = {
+		...(raw ?? {}),
+		schemaVersion: EPIC_SCHEMA_VERSION,
+		name: epic.name,
+		goal: goal || raw?.goal || parsed.goal,
+		status: raw?.status === "completed" || raw?.status === "in_progress" || raw?.status === "cancelled" ? raw.status : "ready",
+		phase: raw?.phase === "completed" ? "completed" : "ready",
+		output,
+		basePath: epic.path,
+		epicPath: epicDisplayPath(epic, "epic.md"),
+		researchPath: epicDisplayPath(epic, "research.md"),
+		progressPath: epicDisplayPath(epic, ".progress.md"),
+		createdAt: typeof raw?.createdAt === "string" ? raw.createdAt : now,
+		updatedAt: now,
+		activeSpec: typeof raw?.activeSpec === "string" ? raw.activeSpec : null,
+		lastCompletedSpec: typeof raw?.lastCompletedSpec === "string" ? raw.lastCompletedSpec : null,
+		issueNumber: typeof raw?.issueNumber === "number" ? raw.issueNumber : raw?.issueNumber === null ? null : null,
+		issueUrl: typeof raw?.issueUrl === "string" ? raw.issueUrl : raw?.issueUrl === null ? null : null,
+		githubStatus: typeof raw?.githubStatus === "string" ? raw.githubStatus : raw?.githubStatus === null ? null : null,
+		github: isRecordValue(raw?.github) ? raw.github : undefined,
+		specs,
+		contracts: normalizeEpicContracts(raw, epicMarkdown),
+		validation: {
+			...(isRecordValue(raw?.validation) ? raw.validation : {}),
+			warnings: [],
+			lastValidatedAt: now,
+		},
+	};
+
+	return state;
+}
+
+function collectTriageValidationErrors(epic: CurrentEpic, state: EpicState): string[] {
+	const errors: string[] = [];
+	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
+
+	if (!epicMarkdown.trim()) errors.push(`Expected epic.md was not created: ${epicMarkdownPath(epic)}`);
+	if (epicMarkdown.trim() && !/^#\s+Epic\b/im.test(epicMarkdown)) errors.push("epic.md must contain a top-level Epic heading.");
+	if (epicMarkdown.trim() && !/^##\s+Specs\b/im.test(epicMarkdown)) errors.push("epic.md must contain a Specs section.");
+	if (state.schemaVersion !== EPIC_SCHEMA_VERSION) errors.push(`.epic-state.json schemaVersion must be ${EPIC_SCHEMA_VERSION}.`);
+	if (state.name !== epic.name) errors.push(`.epic-state.json name must be '${epic.name}'.`);
+	if (typeof state.goal !== "string" || !state.goal.trim()) errors.push(".epic-state.json goal is required.");
+	if (typeof state.output !== "string" || !TRIAGE_OUTPUT_VALUES.has(state.output)) errors.push(".epic-state.json output must be one of: spec-files, github-issues, both.");
+	if (!Array.isArray(state.specs) || state.specs.length === 0) errors.push(".epic-state.json specs must contain at least one child spec.");
+	for (const required of ["basePath", "epicPath", "researchPath", "progressPath", "createdAt", "updatedAt"] as const) {
+		if (typeof state[required] !== "string" || !state[required]) errors.push(`.epic-state.json missing required field '${required}'.`);
+	}
+
+	const validation = validateEpicState(state);
+	errors.push(...validation.warnings);
+	return unique(errors);
+}
+
+function applyTriageValidation(state: EpicState, warnings: string[]): EpicState {
+	const now = new Date().toISOString();
+	return {
+		...state,
+		status: warnings.length > 0 ? "blocked" : state.status,
+		phase: warnings.length > 0 ? "blocked" : state.phase,
+		updatedAt: now,
+		validation: {
+			...(isRecordValue(state.validation) ? state.validation : {}),
+			warnings,
+			lastValidatedAt: now,
+		},
+	};
+}
+
+function contractRelatesToSpec(contract: EpicInterfaceContract, specName: string): boolean {
+	if (contract.producer === specName) return true;
+	if (Array.isArray(contract.consumers) && contract.consumers.includes(specName)) return true;
+	return false;
+}
+
+function relevantContractsForSpec(state: EpicState, spec: EpicChildSpec): EpicInterfaceContract[] {
+	const direct = normalizeInterfaceContracts(spec.interfaceContracts);
+	const shared = normalizeInterfaceContracts(state.contracts).filter((contract) => contractRelatesToSpec(contract, spec.name));
+	return [...shared, ...direct];
+}
+
+function extractEpicSpecBlock(content: string, specName: string): string {
+	const block = parseEpicMarkdownSpecBlocks(content).find((candidate) => candidate.name === specName);
+	return block ? `${block.heading}\n${block.body}`.trim() : "";
+}
+
+function formatStringList(values: unknown, fallback = "None"): string[] {
+	const list = normalizeStringList(values);
+	return list.length > 0 ? list.map((item) => `- ${item}`) : [`- ${fallback}`];
+}
+
+function formatContractsForPlan(contracts: EpicInterfaceContract[]): string[] {
+	if (contracts.length === 0) return ["- None"];
+	return contracts.map((contract) => {
+		const name = contract.name ? `${contract.name}: ` : "";
+		const producer = contract.producer ? ` producer=${contract.producer}` : "";
+		const consumers = Array.isArray(contract.consumers) && contract.consumers.length > 0 ? ` consumers=${contract.consumers.join(", ")}` : "";
+		const shape = contract.shape ? ` shape=${contract.shape}` : "";
+		return `- ${name}${[producer, consumers, shape].join("").trim() || JSON.stringify(contract)}`;
+	});
+}
+
+function childGithubIssueReference(spec: EpicChildSpec): string | null {
+	if (typeof spec.issueUrl === "string" && spec.issueUrl.trim()) return spec.issueUrl.trim();
+	return typeof spec.issueNumber === "number" && Number.isSafeInteger(spec.issueNumber) && spec.issueNumber > 0 ? `#${spec.issueNumber}` : null;
+}
+
+function buildChildPlan(epic: CurrentEpic, state: EpicState, spec: EpicChildSpec, epicMarkdown: string): string {
+	const contracts = relevantContractsForSpec(state, spec);
+	const sourceBlock = extractEpicSpecBlock(epicMarkdown, spec.name);
+	const githubIssue = childGithubIssueReference(spec);
+	return [
+		`# Plan: ${spec.name}`,
+		"",
+		`Epic: ${epicDisplayPath(epic, "epic.md")}`,
+		`Epic State: ${epicDisplayPath(epic, ".epic-state.json")}`,
+		...(githubIssue ? [`GitHub Issue: ${githubIssue}`] : []),
+		"",
+		"## Goal",
+		spec.goal || "_No goal captured._",
+		"",
+		"## Dependencies",
+		...(spec.dependencies && spec.dependencies.length > 0 ? spec.dependencies.map((dependency) => `- ${dependency}`) : ["- None"]),
+		"",
+		"## Acceptance Criteria",
+		...formatStringList(spec.acceptanceCriteria),
+		"",
+		"## MVP Scope",
+		...formatStringList(isRecordValue(spec.mvpScope) ? spec.mvpScope.in : []),
+		"",
+		"## Interface Contracts",
+		...formatContractsForPlan(contracts),
+		"",
+		"## Source Epic Detail",
+		sourceBlock || "_No per-spec epic detail was parsed._",
+		"",
+	].join("\n");
+}
+
+function buildChildProgressStub(state: EpicState, spec: EpicChildSpec, child: SpecEntry): string {
+	return [
+		"---",
+		`spec: ${child.name}`,
+		`basePath: ${child.path}`,
+		"phase: planned",
+		"task: 0/0",
+		`updated: ${new Date().toISOString()}`,
+		"---",
+		"",
+		`# Progress: ${child.name}`,
+		"",
+		"## Original Goal",
+		spec.goal || "_No goal captured._",
+		"",
+		"## Epic Context",
+		`- Epic: ${state.name}`,
+		`- Epic state: ${state.epicPath ? state.epicPath.replace(/epic\.md$/, ".epic-state.json") : "_unknown_"}`,
+		`- Dependencies: ${spec.dependencies && spec.dependencies.length > 0 ? spec.dependencies.join(", ") : "none"}`,
+		"",
+		"## Completed Tasks",
+		"_No tasks completed yet_",
+		"",
+		"## Current Task",
+		"Planned from epic triage. Run /ralph-start to begin normal Ralph phases.",
+		"",
+		"## Learnings",
+		"_Discoveries and insights will be captured here_",
+		"",
+		"## Blockers",
+		"- None currently",
+		"",
+		"## Next",
+		`Run /ralph-start ${child.name}`,
+		"",
+	].join("\n");
+}
+
+function childSpecStatePatch(epic: CurrentEpic, state: EpicState, spec: EpicChildSpec, child: SpecEntry, existingState: RalphState | null): Record<string, unknown> {
+	const patch: Record<string, unknown> = {
+		source: existingState?.source ?? "epic",
+		name: child.name,
+		basePath: child.path,
+		phase: stringField(existingState, "phase") ?? "planned",
+		taskIndex: numberField(existingState, "taskIndex") ?? 0,
+		totalTasks: numberField(existingState, "totalTasks") ?? 0,
+		awaitingApproval: booleanField(existingState, "awaitingApproval") ?? false,
+		epicName: state.name,
+		epicSpecName: spec.name,
+		epicStatePath: getEpicStatePath(epic, { cwd: child.rootAbsolutePath }),
+		epicDependencies: spec.dependencies ?? [],
+		epicContracts: relevantContractsForSpec(state, spec),
+		epicPath: state.epicPath,
+		planPath: `${child.path}/plan.md`,
+	};
+	if (typeof spec.issueNumber === "number") patch.githubIssueNumber = spec.issueNumber;
+	if (typeof spec.issueUrl === "string" && spec.issueUrl.trim()) patch.githubIssueUrl = spec.issueUrl.trim();
+	if (typeof spec.githubStatus === "string" && spec.githubStatus.trim()) patch.githubStatus = spec.githubStatus.trim();
+	return patch;
+}
+
+function materializeEpicChildSpecs(epic: CurrentEpic, state: EpicState, options: RalphPathOptions, fresh: boolean): TriageMaterializationResult {
+	const result: TriageMaterializationResult = {
+		directoriesPrepared: 0,
+		plansWritten: 0,
+		plansKept: 0,
+		progressWritten: 0,
+		progressKept: 0,
+		statesWritten: 0,
+		warnings: [],
+	};
+	if (!triageOutputIncludesSpecFiles(state.output)) return result;
+
+	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
+	for (const spec of state.specs) {
+		try {
+			const child = childSpecEntryForEpicSpec(spec, options);
+			mkdirSync(child.absolutePath, { recursive: true });
+			result.directoriesPrepared += 1;
+
+			const planPath = join(child.absolutePath, "plan.md");
+			if (fresh || !existsSync(planPath)) {
+				atomicWriteCoordinatorText(planPath, buildChildPlan(epic, state, spec, epicMarkdown));
+				result.plansWritten += 1;
+			} else {
+				result.plansKept += 1;
+			}
+
+			const existingProgress = readProgress(child, options);
+			if (fresh || !existingProgress.trim()) {
+				writeProgress(child, buildChildProgressStub(state, spec, child), options);
+				result.progressWritten += 1;
+			} else {
+				result.progressKept += 1;
+			}
+
+			const existingState = readRalphState(child, options);
+			mergeRalphState(child, childSpecStatePatch(epic, state, spec, child, existingState), options);
+			result.statesWritten += 1;
+		} catch (error) {
+			result.warnings.push(`Failed to create child spec stub for '${spec.name}': ${formatError(error)}`);
+		}
+	}
+	return result;
+}
+
+function formatMaterializationSummary(result: TriageMaterializationResult | null): string[] {
+	if (!result) return [];
+	return [
+		"Child spec files:",
+		`- Directories prepared: ${result.directoriesPrepared}`,
+		`- plan.md written: ${result.plansWritten}; kept: ${result.plansKept}`,
+		`- .progress.md written: ${result.progressWritten}; kept: ${result.progressKept}`,
+		`- .ralph-state.json stubs written: ${result.statesWritten}`,
+	];
+}
+
+function githubRepositoryFromDetection(detection: GithubDetection): GithubRepository | null {
+	const owner = detection.repository.owner;
+	const name = detection.repository.name;
+	const nameWithOwner = detection.repository.nameWithOwner;
+	if (!owner || !name || !nameWithOwner) return null;
+	return { owner, name, nameWithOwner, url: detection.repository.url };
+}
+
+function githubDetectionWarnings(detection: GithubDetection): string[] {
+	const warnings: string[] = [];
+	if (!detection.gh.available) warnings.push(`GitHub CLI is unavailable: ${detection.gh.error ?? "gh --version failed"}`);
+	if (!detection.repository.detected) warnings.push(`GitHub repository could not be detected: ${detection.repository.error ?? "gh repo view failed"}`);
+	if (!detection.auth.authenticated) warnings.push(`GitHub CLI is not authenticated: ${detection.auth.error ?? detection.auth.output ?? "gh auth status failed"}`);
+	if (detection.labels.error) warnings.push(`GitHub labels could not be inspected: ${detection.labels.error}`);
+	return unique(warnings);
+}
+
+function issueNumberOrNull(value: unknown): number | null {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function issueUrlForNumber(repository: GithubRepository | undefined, issueNumber: number | null): string | null {
+	return repository && issueNumber ? `https://github.com/${repository.nameWithOwner}/issues/${issueNumber}` : null;
+}
+
+function githubIssueUrl(result: GithubIssueSyncResult | undefined, repository: GithubRepository | undefined): string | null {
+	if (!result) return null;
+	if (typeof result.issueUrl === "string" && result.issueUrl.trim()) return result.issueUrl.trim();
+	return issueUrlForNumber(repository, result.issueNumber);
+}
+
+function githubIssueLine(result: GithubIssueSyncResult): string {
+	const issue = result.issueNumber ? `#${result.issueNumber}` : "new issue";
+	return `${result.action.replace(/^would_/, "would ")} ${issue}: ${result.title}`;
+}
+
+async function confirmTriageGithubWrites(
+	ctx: ExtensionCommandContext,
+	parsed: TriageArguments,
+	repository: GithubRepository,
+	dryRuns: GithubIssueSyncResult[],
+): Promise<{ confirmed: boolean; reason?: string }> {
+	if (parsed.yes) return { confirmed: true };
+
+	if (!ctx.hasUI) {
+		return {
+			confirmed: false,
+			reason: "GitHub issue output requires Pi UI confirmation or --yes in noninteractive mode; no GitHub issues were created.",
+		};
+	}
+
+	const creates = dryRuns.filter((result) => result.action === "would_create").length;
+	const updates = dryRuns.filter((result) => result.action === "would_update").length;
+	const confirmed = await ctx.ui.confirm(
+		"Confirm GitHub issue writes",
+		[
+			`Repository: ${repository.nameWithOwner}`,
+			`Planned remote writes: ${creates} create, ${updates} update`,
+			"",
+			...dryRuns.map((result) => `- ${githubIssueLine(result)}`),
+			"",
+			"This will run gh issue create/edit against the repository above.",
+			"Choose OK only if you want Smart Ralph to write or update these GitHub issues now.",
+		].join("\n"),
+	);
+	return confirmed ? { confirmed: true } : { confirmed: false, reason: "User cancelled GitHub issue creation; no GitHub issues were created." };
+}
+
+function applyEpicGithubResult(state: EpicState, result: GithubIssueSyncResult, repository: GithubRepository, now: string): EpicState {
+	const issueNumber = result.issueNumber ?? issueNumberOrNull(state.issueNumber);
+	const issueUrl = githubIssueUrl(result, repository) ?? (typeof state.issueUrl === "string" ? state.issueUrl : null);
+	return {
+		...state,
+		issueNumber,
+		issueUrl,
+		githubStatus: result.action,
+		updatedAt: now,
+	};
+}
+
+function applyChildGithubResult(state: EpicState, specName: string, result: GithubIssueSyncResult, repository: GithubRepository, now: string): EpicState {
+	const specs = state.specs.map((spec) => {
+		if (spec.name !== specName) return spec;
+		const issueNumber = result.issueNumber ?? issueNumberOrNull(spec.issueNumber);
+		const issueUrl = githubIssueUrl(result, repository) ?? (typeof spec.issueUrl === "string" ? spec.issueUrl : null);
+		return {
+			...spec,
+			issueNumber,
+			issueUrl,
+			githubStatus: result.action,
+		};
+	});
+	return { ...state, specs, updatedAt: now };
+}
+
+function applyChildGithubFailure(state: EpicState, specName: string, status: string, now: string): EpicState {
+	return {
+		...state,
+		updatedAt: now,
+		specs: state.specs.map((spec) => (spec.name === specName ? { ...spec, githubStatus: status } : spec)),
+	};
+}
+
+function githubIssueMetadata(result: GithubIssueSyncResult | undefined, repository: GithubRepository | undefined): Record<string, unknown> | null {
+	if (!result) return null;
+	return {
+		action: result.action,
+		operation: result.operation,
+		issueNumber: result.issueNumber,
+		issueUrl: githubIssueUrl(result, repository),
+		issueNumberSource: result.issueNumberSource ?? null,
+		labels: result.labels,
+		missingLabels: result.missingLabels,
+	};
+}
+
+function childGithubMetadata(state: EpicState): Record<string, unknown> {
+	const childIssues: Record<string, unknown> = {};
+	for (const spec of state.specs) {
+		childIssues[spec.name] = {
+			issueNumber: issueNumberOrNull(spec.issueNumber),
+			issueUrl: typeof spec.issueUrl === "string" ? spec.issueUrl : null,
+			githubStatus: typeof spec.githubStatus === "string" ? spec.githubStatus : null,
+		};
+	}
+	return childIssues;
+}
+
+function withGithubMetadata(
+	state: EpicState,
+	repository: GithubRepository | undefined,
+	summary: TriageGithubSyncResult,
+	detection: GithubDetection,
+	now: string,
+	confirmedBy: string,
+): EpicState {
+	const missingLabels = unique([
+		...(summary.epic?.missingLabels ?? []),
+		...summary.children.flatMap((child) => child.result?.missingLabels ?? []),
+	]);
+	return {
+		...state,
+		updatedAt: now,
+		github: {
+			schemaVersion: RALPH_GITHUB_METADATA_SCHEMA_VERSION,
+			tool: RALPH_GITHUB_METADATA_TOOL,
+			status: summary.status,
+			output: state.output,
+			repository: repository
+				? { owner: repository.owner, name: repository.name, nameWithOwner: repository.nameWithOwner, url: repository.url ?? null }
+				: {
+					owner: detection.repository.owner ?? null,
+					name: detection.repository.name ?? null,
+					nameWithOwner: detection.repository.nameWithOwner ?? null,
+					url: detection.repository.url ?? null,
+				},
+			syncedAt: now,
+			confirmedBy,
+			epicIssue: {
+				issueNumber: issueNumberOrNull(state.issueNumber),
+				issueUrl: typeof state.issueUrl === "string" ? state.issueUrl : null,
+				githubStatus: typeof state.githubStatus === "string" ? state.githubStatus : null,
+				result: githubIssueMetadata(summary.epic, repository),
+			},
+			childIssues: childGithubMetadata(state),
+			summary: {
+				created: summary.created,
+				updated: summary.updated,
+				total: (summary.epic ? 1 : 0) + summary.children.length,
+				missingLabels,
+				skippedReason: summary.skippedReason ?? null,
+			},
+			warnings: summary.warnings,
+		},
+	};
+}
+
+function formatGithubSyncSummary(result: TriageGithubSyncResult | null): string[] {
+	if (!result) return [];
+	const lines = ["GitHub issues:"];
+	if (result.repository) lines.push(`- Repository: ${result.repository.nameWithOwner}`);
+	if (result.skippedReason) lines.push(`- Skipped: ${result.skippedReason}`);
+	if (result.epic) {
+		const issue = result.epic.issueNumber ? `#${result.epic.issueNumber}` : "unknown issue";
+		const url = githubIssueUrl(result.epic, result.repository);
+		lines.push(`- Epic issue: ${issue}${url ? ` ${url}` : ""} (${result.epic.action})`);
+	}
+	if (result.children.length > 0) {
+		lines.push(`- Child issues: created ${result.children.filter((child) => child.status === "created").length}, updated ${result.children.filter((child) => child.status === "updated").length}, failed ${result.children.filter((child) => child.status === "failed").length}`);
+		for (const child of result.children) {
+			const issue = child.issueNumber ? `#${child.issueNumber}` : "no issue";
+			const url = child.issueUrl ? ` ${child.issueUrl}` : "";
+			lines.push(`  - ${child.specName}: ${issue}${url} (${child.status})`);
+		}
+	}
+	return lines;
+}
+
+function githubSyncSummaryStatus(children: TriageGithubChildSync[], warnings: string[]): "synced" | "failed" {
+	return children.some((child) => child.status === "failed") || warnings.some((warning) => /^Failed to sync/i.test(warning)) ? "failed" : "synced";
+}
+
+async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicState, parsed: TriageArguments): Promise<{ state: EpicState; summary: TriageGithubSyncResult }> {
+	setRalphStatus(ctx, `Ralph triage: checking GitHub CLI and repository`);
+	const detection = detectGithub({ cwd: ctx.cwd });
+	const repository = githubRepositoryFromDetection(detection) ?? undefined;
+	const detectionWarnings = githubDetectionWarnings(detection);
+	const now = new Date().toISOString();
+
+	if (!detection.ready || !repository) {
+		const skippedReason = "GitHub CLI, repository, or auth is not ready; no GitHub issues were created.";
+		const summary: TriageGithubSyncResult = {
+			status: "skipped",
+			repository,
+			children: [],
+			created: 0,
+			updated: 0,
+			warnings: detectionWarnings.length > 0 ? detectionWarnings : [skippedReason],
+			skippedReason,
+		};
+		const nextState = withGithubMetadata({ ...state, githubStatus: "unavailable" }, repository, summary, detection, now, "not-confirmed");
+		return { state: nextState, summary };
+	}
+
+	const commonOptions = {
+		cwd: ctx.cwd,
+		repository,
+		availableLabels: detection.labels.detected ? detection.labels.names : undefined,
+	};
+	setRalphStatus(ctx, `Ralph triage: planning GitHub issue writes`);
+	const dryRuns = [
+		createOrUpdateEpicIssue(state, { ...commonOptions, dryRun: true }),
+		...state.specs.map((spec) => createOrUpdateChildSpecIssue(state, spec, { ...commonOptions, dryRun: true })),
+	];
+	setRalphStatus(ctx, `Ralph triage: awaiting GitHub issue confirmation`);
+	const confirmation = await confirmTriageGithubWrites(ctx, parsed, repository, dryRuns);
+	if (!confirmation.confirmed) {
+		const summary: TriageGithubSyncResult = {
+			status: "skipped",
+			repository,
+			children: state.specs.map((spec, index) => {
+				const dryRun = dryRuns[index + 1];
+				return {
+					specName: spec.name,
+					result: dryRun,
+					status: dryRun.action,
+					issueNumber: dryRun.issueNumber,
+					issueUrl: githubIssueUrl(dryRun, repository),
+				};
+			}),
+			created: 0,
+			updated: 0,
+			warnings: unique([...detectionWarnings, confirmation.reason ?? "GitHub issue creation was not confirmed."]),
+			skippedReason: confirmation.reason,
+		};
+		const nextState = withGithubMetadata({ ...state, githubStatus: "confirmation_required" }, repository, summary, detection, now, "not-confirmed");
+		return { state: nextState, summary };
+	}
+
+	setRalphStatus(ctx, `Ralph triage: creating/updating GitHub issues`);
+	const warnings = [...detectionWarnings];
+	let nextState = state;
+	let epicResult: GithubIssueSyncResult | undefined;
+	try {
+		epicResult = createOrUpdateEpicIssue(nextState, commonOptions);
+		nextState = applyEpicGithubResult(nextState, epicResult, repository, now);
+		warnings.push(...epicResult.warnings);
+	} catch (error) {
+		warnings.push(`Failed to sync epic GitHub issue: ${formatError(error)}`);
+		const summary: TriageGithubSyncResult = {
+			status: "failed",
+			repository,
+			children: [],
+			created: 0,
+			updated: 0,
+			warnings: unique(warnings),
+		};
+		return { state: withGithubMetadata({ ...nextState, githubStatus: "failed" }, repository, summary, detection, now, parsed.yes ? "--yes" : "pi-ui"), summary };
+	}
+
+	const children: TriageGithubChildSync[] = [];
+	for (const spec of nextState.specs) {
+		try {
+			const result = createOrUpdateChildSpecIssue(nextState, spec, commonOptions);
+			nextState = applyChildGithubResult(nextState, spec.name, result, repository, now);
+			warnings.push(...result.warnings);
+			children.push({
+				specName: spec.name,
+				result,
+				status: result.action,
+				issueNumber: result.issueNumber,
+				issueUrl: githubIssueUrl(result, repository),
+			});
+		} catch (error) {
+			const message = formatError(error);
+			warnings.push(`Failed to sync child GitHub issue for '${spec.name}': ${message}`);
+			nextState = applyChildGithubFailure(nextState, spec.name, "failed", now);
+			children.push({ specName: spec.name, status: "failed", issueNumber: null, issueUrl: null, error: message });
+		}
+	}
+
+	const issueResults = [epicResult, ...children.map((child) => child.result).filter((result): result is GithubIssueSyncResult => Boolean(result))];
+	const summary: TriageGithubSyncResult = {
+		status: githubSyncSummaryStatus(children, warnings),
+		repository,
+		epic: epicResult,
+		children,
+		created: issueResults.filter((result) => result.action === "created").length,
+		updated: issueResults.filter((result) => result.action === "updated").length,
+		warnings: unique(warnings),
+	};
+	return { state: withGithubMetadata(nextState, repository, summary, detection, now, parsed.yes ? "--yes" : "pi-ui"), summary };
+}
+
+function formatTriageSummary(
+	epic: CurrentEpic,
+	state: EpicState,
+	materialized: TriageMaterializationResult | null,
+	warnings: string[],
+	resumed: boolean,
+	githubSync: TriageGithubSyncResult | null = null,
+): string {
+	const summary = computeEpicDependencyStatus(state);
+	const next = summary.nextSpec;
+	const lines = [
+		`${resumed ? "Resumed" : "Triage complete for"} '${state.name}'.`,
+		`Output: ${epicDisplayPath(epic, "epic.md")}`,
+		`State: ${epicDisplayPath(epic, ".epic-state.json")}`,
+		"",
+		"## Epic Summary",
+		`Goal: ${state.goal ?? ""}`,
+		`Progress: ${summary.completedSpecs.length}/${state.specs.length} specs completed`,
+		"",
+		`Specs (${state.specs.length}):`,
+	];
+
+	for (const spec of [...state.specs].sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) || a.name.localeCompare(b.name))) {
+		const dependencies = spec.dependencies && spec.dependencies.length > 0 ? ` (depends on: ${spec.dependencies.join(", ")})` : "";
+		const size = spec.size ? ` [${spec.size}]` : "";
+		lines.push(`- [${spec.status === "completed" ? "x" : " "}] ${spec.name}: ${spec.goal ?? ""}${size}${dependencies}`);
+	}
+
+	lines.push("", "Ready (dependencies met):");
+	if (summary.readySpecs.length > 0) {
+		for (const spec of summary.readySpecs) lines.push(`- ${spec.name}: ${spec.goal ?? ""}`);
+	} else {
+		lines.push("- None");
+	}
+
+	if (summary.dependencyBlockedSpecs.length > 0 || summary.explicitlyBlockedSpecs.length > 0) {
+		lines.push("", "Blocked:");
+		for (const entry of summary.specs.filter((item) => item.isDependencyBlocked || item.isExplicitlyBlocked)) {
+			const reason = entry.isExplicitlyBlocked
+				? entry.spec.blockedReason ?? "explicitly blocked"
+				: `waiting on ${[...entry.unmetDependencies, ...entry.missingDependencies].join(", ")}`;
+			lines.push(`- ${entry.name}: ${reason}`);
+		}
+	}
+
+	lines.push("", ...formatMaterializationSummary(materialized), ...formatGithubSyncSummary(githubSync));
+	const allWarnings = unique([...warnings, ...(materialized?.warnings ?? []), ...(githubSync?.warnings ?? []), ...(state.validation?.warnings ?? [])]);
+	if (allWarnings.length > 0) lines.push("", "Warnings:", ...allWarnings.map((warning) => `- ${warning}`));
+
+	lines.push("");
+	if (next) {
+		lines.push(`-> Suggested next: ${next.name}`, "-> Next: Run /ralph-start --next-epic-spec");
+	} else if (state.status === "completed") {
+		lines.push("-> Epic is complete.");
+	} else {
+		lines.push("-> No unblocked child spec is ready. Resolve blockers or dependencies, then rerun /ralph-triage.");
+	}
+
+	return lines.join("\n");
+}
+
+function buildTriagePrompt(epic: CurrentEpic, parsed: TriageArguments, goal: string, files: { epicPath: string; researchPath: string; progressPath: string }): string {
+	return [
+		"You are running Smart Ralph epic triage as a delegated Pi subagent.",
+		"",
+		"Coordinator contract:",
+		`- epicName: ${epic.name}`,
+		`- goal: ${goal}`,
+		`- basePath: ${epic.absolutePath}`,
+		`- required epic artifact: ${files.epicPath}`,
+		`- required state artifact: ${epic.statePath}`,
+		`- required research artifact: ${files.researchPath}`,
+		`- required progress artifact: ${files.progressPath}`,
+		`- output: ${parsed.output}`,
+		"- Write only inside basePath unless inspecting the codebase.",
+		"- Do not edit legacy Claude/Codex plugin files.",
+		"- Do not call gh or create GitHub issues; the coordinator will perform requested GitHub output after validation and confirmation.",
+		"- Produce vertical-slice child specs with kebab-case names and a valid dependency graph.",
+		"- If user input is required, return USER_INPUT_REQUIRED and questions without writing partial final state.",
+		"",
+		"State file requirement:",
+		`- Write ${epic.statePath} as schemaVersion ${EPIC_SCHEMA_VERSION}.`,
+		"- Required top-level fields: schemaVersion, name, goal, status, phase, output, basePath, epicPath, researchPath, progressPath, createdAt, updatedAt, activeSpec, lastCompletedSpec, issueNumber, specs, contracts, validation.",
+		"- Each child spec requires: name, goal, status='pending', order, path, planPath, dependencies, size, acceptanceCriteria, mvpScope, interfaceContracts, startedAt=null, completedAt=null, blockedReason=null, issueNumber=null.",
+		`- Use output='${parsed.output}'. Do not create child spec directories or GitHub issues; the coordinator will materialize requested outputs after validation.`,
+
+		"",
+		promptFileSection("Existing research", files.researchPath, readFileIfExists(files.researchPath)),
+		promptFileSection("Existing epic", files.epicPath, readFileIfExists(files.epicPath)),
+		promptFileSection("Existing state", epic.statePath, readFileIfExists(epic.statePath)),
+		"",
+		"Completion response:",
+		"- End with TRIAGE_COMPLETE, specs: <count>, next: <first ready spec>.",
+	].join("\n");
+}
+
+async function showCurrentEpicTriageStatus(ctx: ExtensionCommandContext, options: RalphPathOptions): Promise<void> {
+	const current = readCurrentEpic(options);
+	if (!current) {
+		await notify(ctx, `No active epic is set. ${formatTriageUsage()}`, "warning");
+		return;
+	}
+	if (!current.state) {
+		await notify(ctx, [`Active epic '${current.epic.name}' has no readable state.`, ...current.warnings.map((warning) => `- ${warning}`), "", formatTriageUsage()].join("\n"), "warning");
+		return;
+	}
+	await notify(ctx, formatTriageSummary(current.epic, current.state, null, current.warnings, true), current.warnings.length > 0 ? "warning" : "info");
+}
+
+type ActiveTriageAction = "status" | "resume" | "start-next" | "switch" | "new" | "cancel";
+
+async function selectActiveTriageAction(ctx: ExtensionCommandContext, current: NonNullable<ReturnType<typeof readCurrentEpic>>): Promise<ActiveTriageAction> {
+	if (!ctx.hasUI) return "status";
+
+	const summary = current.state ? computeEpicDependencyStatus(current.state) : null;
+	const next = summary?.nextSpec?.name ?? null;
+	const progress = current.state && summary ? epicProgressText(current.state, summary.completedSpecs.length) : "state unavailable";
+	const labels: Array<{ action: ActiveTriageAction; label: string }> = [
+		{ action: "status", label: `Show active epic status (${current.epic.name}; ${progress})` },
+		{ action: "resume", label: `Resume triage for active epic (${current.epic.name})` },
+		{ action: "start-next", label: next ? `Start next child spec (${next})` : "Start next child spec (none ready)" },
+		{ action: "switch", label: "Switch active epic" },
+		{ action: "new", label: "Create a new epic" },
+		{ action: "cancel", label: "Cancel" },
+	];
+
+	const selected = await ctx.ui.select("Active Ralph epic", labels.map((item) => item.label));
+	return labels.find((item) => item.label === selected)?.action ?? "cancel";
+}
+
+async function switchEpicFromTriage(ctx: ExtensionCommandContext, options: RalphPathOptions): Promise<void> {
+	const epics = listEpics({ ...options, allowMissingConfiguredRoots: true });
+	if (epics.length === 0) {
+		await notify(ctx, `${formatAvailableEpics(epics, options, readCurrentEpicName(options))}\n\nNo epics found to switch to.`, "warning");
+		return;
+	}
+
+	const selected = await selectEpic(ctx, epics, readCurrentEpicName(options));
+	if (!selected) {
+		await notify(ctx, `${formatAvailableEpics(epics, options, readCurrentEpicName(options))}\n\nRun /ralph-epic-switch <epic> to select one.`);
+		return;
+	}
+
+	writeCurrentEpic(selected.name, options);
+	const stateRead = safeReadEpicState(selected, options);
+	await notify(ctx, formatEpicSwitchSummary(selected, stateRead, options), stateRead.state ? "info" : "warning");
+}
+
+async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+	await ctx.waitForIdle();
+	const options = pathOptions(ctx);
+	const parsed = parseTriageArgs(args);
+	if (parsed.error) {
+		await notify(ctx, parsed.error, "warning");
+		return;
+	}
+
+	if (!parsed.epicName) {
+		const current = readCurrentEpic(options);
+		if (current) {
+			if (ctx.hasUI) {
+				const action = await selectActiveTriageAction(ctx, current);
+				if (action === "status") {
+					await showCurrentEpicTriageStatus(ctx, options);
+					return;
+				}
+				if (action === "resume") {
+					parsed.epicName = current.epic.name;
+					if (!parsed.goal && typeof current.state?.goal === "string") parsed.goal = current.state.goal;
+					parsed.warnings.push(`Selected active epic '${current.epic.name}' from interactive triage menu.`);
+				} else if (action === "start-next") {
+					writeCurrentEpic(current.epic.name, options);
+					await runStartCommand(pi, "--next-epic-spec", ctx);
+					return;
+				} else if (action === "switch") {
+					await switchEpicFromTriage(ctx, options);
+					return;
+				} else if (action === "new") {
+					const name = await ctx.ui.input("New epic name", "kebab-case, e.g. auth-system");
+					if (name?.trim()) parsed.epicName = name.trim();
+				} else {
+					await notify(ctx, "Ralph triage menu cancelled.");
+					return;
+				}
+			} else {
+				await showCurrentEpicTriageStatus(ctx, options);
+				return;
+			}
+		}
+		if (!parsed.epicName && ctx.hasUI) {
+			const name = await ctx.ui.input("Epic name", "kebab-case, e.g. auth-system");
+			if (name?.trim()) parsed.epicName = name.trim();
+		}
+		if (!parsed.epicName) {
+			await showCurrentEpicTriageStatus(ctx, options);
+			return;
+		}
+	}
+
+	if (!isValidSpecName(parsed.epicName)) {
+		await notify(ctx, `Invalid epic name '${parsed.epicName}'. Use kebab-case like 'auth-system'.`, "warning");
+		return;
+	}
+
+	const epic = resolveEpicDirectory(parsed.epicName, options);
+	mkdirSync(epic.absolutePath, { recursive: true });
+	writeCurrentEpic(epic.name, options);
+
+	const existingStateRead = safeReadEpicState(epic, options);
+	const stateFileExists = existsSync(epic.statePath);
+	if (stateFileExists && !existingStateRead.state && !parsed.fresh) {
+		await notify(ctx, [`Cannot resume epic '${epic.name}' because .epic-state.json is invalid:`, ...existingStateRead.warnings.map((warning) => `- ${warning}`), "", "Rerun with /ralph-triage --fresh <epic-name> <goal> to regenerate."].join("\n"), "warning");
+		return;
+	}
+
+	let goal = parsed.goal || (typeof existingStateRead.state?.goal === "string" ? existingStateRead.state.goal : "");
+	const shouldDelegate = parsed.fresh || !existsSync(epicMarkdownPath(epic)) || !existingStateRead.state;
+	if (!goal && shouldDelegate && ctx.hasUI) {
+		const inputGoal = await ctx.ui.input("Epic goal", "Describe the large feature you want to build");
+		goal = inputGoal?.trim() ?? "";
+	}
+	if (!goal && shouldDelegate) {
+		await notify(ctx, `Epic goal is required for new triage. ${formatTriageUsage()}`, "warning");
+		return;
+	}
+
+	const files = ensureInitialEpicFiles(epic, parsed, goal);
+	if (shouldDelegate) {
+		const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
+		const dependencyError = triageDependencyError(pi, ctx.cwd, agentBootstrap);
+		if (dependencyError) {
+			await notify(ctx, dependencyError, "warning");
+			return;
+		}
+
+		setRalphStatus(ctx, `Ralph triage: running ${TRIAGE_AGENT}`);
+		try {
+			await notify(ctx, `Running ${TRIAGE_AGENT} for epic ${epic.name} (goal captured; writing epic state)...`);
+			const completion = await runRalphSubagent(
+				pi,
+				{ agentName: TRIAGE_AGENT, description: `Triage epic ${epic.name}`, maxTurns: 80 },
+				buildTriagePrompt(epic, parsed, goal, files),
+			);
+			const output = subagentCompletionOutput(completion);
+			if (/USER_INPUT_REQUIRED/i.test(output)) {
+				await notify(ctx, [`Triage for '${epic.name}' needs user input before finalizing:`, "", output].join("\n"), "warning");
+				return;
+			}
+		} catch (error) {
+			await notify(ctx, `Ralph triage failed: ${formatError(error)}`, "warning");
+			return;
+		} finally {
+			setRalphStatus(ctx);
+		}
+	}
+
+	const postRunRead = safeReadEpicState(epic, options);
+	let state = normalizeTriageEpicState(epic, postRunRead.state, parsed, goal, options);
+	let validationErrors = collectTriageValidationErrors(epic, state);
+	state = applyTriageValidation(state, validationErrors);
+	writeEpicState(epic, state, options);
+
+	if (validationErrors.length > 0) {
+		await notify(
+			ctx,
+			[
+				`Epic triage output for '${epic.name}' did not pass validation:`,
+				...validationErrors.map((error) => `- ${error}`),
+				"",
+				`State was written as blocked: ${epicDisplayPath(epic, ".epic-state.json")}`,
+			].join("\n"),
+			"warning",
+		);
+		return;
+	}
+
+	let githubSync: TriageGithubSyncResult | null = null;
+	if (triageOutputIncludesGithub(state.output)) {
+		setRalphStatus(ctx, `Ralph triage: syncing GitHub issues for ${epic.name}`);
+		try {
+			const githubOutcome = await syncTriageGithubIssues(ctx, state, parsed);
+			state = githubOutcome.state;
+			githubSync = githubOutcome.summary;
+			writeEpicState(epic, state, options);
+		} finally {
+			setRalphStatus(ctx);
+		}
+	}
+
+	let materialized: TriageMaterializationResult | null = null;
+	if (triageOutputIncludesSpecFiles(state.output)) {
+		setRalphStatus(ctx, `Ralph triage: materializing ${state.specs.length} child spec stub${state.specs.length === 1 ? "" : "s"}`);
+		try {
+			materialized = materializeEpicChildSpecs(epic, state, options, parsed.fresh);
+		} finally {
+			setRalphStatus(ctx);
+		}
+	}
+	validationErrors = materialized?.warnings.length ? materialized.warnings : [];
+	const warnings = [...parsed.warnings, ...postRunRead.warnings, ...(githubSync?.warnings ?? []), ...validationErrors];
+	const warningOutput = validationErrors.length > 0 || githubSync?.status === "failed" || githubSync?.status === "skipped";
+	await notify(ctx, formatTriageSummary(epic, state, materialized, warnings, shouldDelegate === false, githubSync), warningOutput ? "warning" : "info");
+}
+
+export default function ralphSpecumExtension(pi: ExtensionAPI) {
+	pi.on("session_start", async () => {
+		await bootstrapBundledRuntimes(pi);
+	});
+
+	pi.on("resources_discover", async () => {
+		const skillPath = bundledWebAccessSkillsPath();
+		return skillPath ? { skillPaths: [skillPath] } : {};
+	});
+
+	pi.registerCommand("ralph-help", {
+		description: "Show Smart Ralph Pi shell help",
+		handler: async (_args, ctx) => {
+			await notify(
+				ctx,
+				[
+					"Smart Ralph Pi shell",
+					"",
+					"Commands:",
+					"/ralph-help     Show this help.",
+					"/ralph-triage       Create or resume an epic; --output spec-files|github-issues|both; --yes confirms GitHub writes.",
+					"/ralph-epic-status  Show active epic readiness; --json prints machine state, --repair fills missing stubs.",
+					"/ralph-epic-switch  Switch the active epic marker.",
+					"/ralph-epic-next    Select the next unblocked child spec; --start begins it.",
+					"/ralph-epic-cancel  Cancel active epic execution state safely.",
+					"/ralph-start         Create or resume a spec; --next-epic-spec selects active epic child.",
+					"/ralph-research      Generate research.md with ralph-research-analyst.",
+					"/ralph-requirements  Generate requirements.md with ralph-product-manager.",
+					"/ralph-design        Generate design.md with ralph-architect-reviewer.",
+					"/ralph-tasks         Generate canonical tasks.md with ralph-task-planner.",
+					"/ralph-implement     Execute tasks.md through Ralph subagents.",
+					"/ralph-status        Show specs across configured roots.",
+					"/ralph-switch        Switch the active spec marker.",
+					"/ralph-cancel        Clear execution state for a spec.",
+					"/ralph-init          Bootstrap/check Pi tools and project Ralph subagents; --refresh-agents overwrites conflicts.",
+				].join("\n"),
+			);
+		},
+	});
+
+	pi.registerCommand("ralph-triage", {
+		description: "Create or resume a dependency-aware Ralph epic",
+		getArgumentCompletions: triageArgumentCompletions,
+		handler: async (args, ctx) => runTriageCommand(pi, args, ctx),
+	});
+
+	pi.registerCommand("ralph-epic-status", {
+		description: "Show active epic child spec readiness; use --json or --repair for machine output/repair",
+		getArgumentCompletions: epicStatusArgumentCompletions,
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const options = pathOptions(ctx);
+			const parsed = parseEpicStatusArgs(args);
+			if (parsed.error) {
+				await notify(ctx, `${parsed.error}\nUsage: /ralph-epic-status [--json|--repair] [epic-name]`, "warning");
+				return;
+			}
+
+			const target = resolveEpicCommandTarget(parsed.reference, options);
+			if (!target.epic) {
+				await notify(ctx, target.error ?? "Unable to resolve epic.", "warning");
+				return;
+			}
+
+			const stateRead = safeReadEpicState(target.epic, options);
+			if (parsed.json) {
+				printJsonOutput(ctx, formatEpicStatusJson(target.epic, stateRead, options), stateRead.state ? "info" : "warning");
+				return;
+			}
+			if (parsed.repair) {
+				setRalphStatus(ctx, `Ralph epic repair: ${target.epic.name}`);
+				try {
+					const repair = repairEpicStatus(target.epic, stateRead, options);
+					const status = formatEpicRepairMessage(target.epic, stateRead, repair);
+					await notify(ctx, status.message, status.type);
+				} finally {
+					setRalphStatus(ctx);
+				}
+				return;
+			}
+
+			const status = formatEpicStatusMessage(target.epic, stateRead, options);
+			await notify(ctx, status.message, status.type);
+		},
+	});
+
+	pi.registerCommand("ralph-epic-switch", {
+		description: "Switch the active Ralph epic",
+		getArgumentCompletions: epicArgumentCompletions,
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const options = pathOptions(ctx);
+			const tokenized = tokenizeCommandArgs(args);
+			if (tokenized.error) {
+				await notify(ctx, tokenized.error, "warning");
+				return;
+			}
+			if (tokenized.tokens.length > 1 || tokenized.tokens.some((token) => token.startsWith("--"))) {
+				await notify(ctx, "Usage: /ralph-epic-switch <epic-name>", "warning");
+				return;
+			}
+
+			let epic: CurrentEpic | undefined;
+			const reference = tokenized.tokens[0] ?? "";
+			if (!reference) {
+				const epics = listEpics({ ...options, allowMissingConfiguredRoots: true });
+				if (epics.length === 0) {
+					await notify(ctx, `${formatAvailableEpics(epics, options, readCurrentEpicName(options))}\n\nNo epics found to switch to.`, "warning");
+					return;
+				}
+
+				const selected = await selectEpic(ctx, epics, readCurrentEpicName(options));
+				if (!selected) {
+					await notify(ctx, `${formatAvailableEpics(epics, options, readCurrentEpicName(options))}\n\nRun /ralph-epic-switch <epic> to select one.`);
+					return;
+				}
+				epic = selected;
+			} else {
+				const resolved = resolveExistingEpic(reference, options);
+				if (!resolved.epic) {
+					await notify(ctx, resolved.error ?? `Unable to resolve epic '${reference}'.`, "warning");
+					return;
+				}
+				epic = resolved.epic;
+			}
+
+			writeCurrentEpic(epic.name, options);
+			const stateRead = safeReadEpicState(epic, options);
+			await notify(ctx, formatEpicSwitchSummary(epic, stateRead, options), stateRead.state ? "info" : "warning");
+		},
+	});
+
+	pi.registerCommand("ralph-epic-next", {
+		description: "Select the next unblocked epic child spec",
+		getArgumentCompletions: epicNextArgumentCompletions,
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const options = pathOptions(ctx);
+			const parsed = parseEpicNextArgs(args);
+			if (parsed.error) {
+				await notify(ctx, parsed.error, "warning");
+				return;
+			}
+
+			const target = resolveEpicCommandTarget(parsed.reference, options);
+			if (!target.epic) {
+				await notify(ctx, target.error ?? "Unable to resolve epic.", "warning");
+				return;
+			}
+
+			const stateRead = safeReadEpicState(target.epic, options);
+			if (!stateRead.state) {
+				await notify(ctx, [`Epic '${target.epic.name}' has no readable state.`, ...stateRead.warnings.map((warning) => `- ${warning}`)].join("\n"), "warning");
+				return;
+			}
+
+			if (stateRead.state.status === "cancelled" || stateRead.state.status === "completed") {
+				await notify(ctx, `Epic '${target.epic.name}' is ${stateRead.state.status}; no next child spec can be selected.`, "warning");
+				return;
+			}
+
+			if (parsed.startSpec) {
+				if (parsed.peek) {
+					await notify(ctx, "Use either --start or --peek with /ralph-epic-next, not both.", "warning");
+					return;
+				}
+				writeCurrentEpic(target.epic.name, options);
+				await runStartCommand(pi, "--next-epic-spec", ctx);
+				return;
+			}
+
+			const summary = computeEpicDependencyStatus(stateRead.state);
+			const warnings = unique([...(stateRead.warnings ?? []), ...epicValidationWarnings(stateRead.state), ...summary.validation.warnings]);
+			const next = summary.nextSpec;
+			if (!next) {
+				const active = summary.inProgressSpecs[0] ?? (stateRead.state.activeSpec && Array.isArray(stateRead.state.specs) ? stateRead.state.specs.find((spec) => spec.name === stateRead.state?.activeSpec) : undefined);
+				const lines = [`No unblocked pending child spec is ready for epic '${target.epic.name}'.`];
+				if (active) lines.push(`Active child spec: ${active.name}`, `Next command: /ralph-start ${active.name}`);
+				if (summary.dependencyBlockedSpecs.length > 0 || summary.explicitlyBlockedSpecs.length > 0) lines.push("", "Blocked specs:", ...summary.specs.filter((entry) => entry.isDependencyBlocked || entry.isExplicitlyBlocked).map((entry) => `- ${entry.name}: ${formatEpicDependencyReason(entry)}`));
+				await notify(ctx, lines.join("\n"), "warning");
+				return;
+			}
+
+			let updated = false;
+			let switchedValue: string | null = null;
+			setRalphStatus(ctx, `${parsed.peek ? "Ralph epic next: previewing" : "Ralph epic next: selecting"} ${next.name}`);
+			try {
+				if (!parsed.peek) {
+					try {
+						startEpicChildSpec(target.epic, next.name, options);
+						updated = true;
+					} catch (error) {
+						await notify(ctx, `Failed to update epic next child spec: ${formatError(error)}`, "warning");
+						return;
+					}
+				} else if (parsed.switchSpec) {
+					warnings.push("--switch ignored because --peek was provided.");
+				}
+
+				if (parsed.switchSpec && !parsed.peek) {
+					const child = childSpecEntry(next.name, options);
+					if (!child.exists) {
+						warnings.push(`Child spec directory does not exist, so .current-spec was not changed: ${child.path}`);
+					} else {
+						try {
+							const pointer = writeCurrentSpec(child, options);
+							switchedValue = pointer.value;
+						} catch (error) {
+							await notify(ctx, `Failed to switch current spec: ${formatError(error)}`, "warning");
+							return;
+						}
+					}
+				}
+
+				await notify(ctx, formatEpicNextSummary(target.epic, stateRead.state, summary, next, updated, switchedValue, warnings), warnings.length > 0 ? "warning" : "info");
+			} finally {
+				setRalphStatus(ctx);
+			}
+		},
+	});
+
+	pi.registerCommand("ralph-epic-cancel", {
+		description: "Cancel active Ralph epic execution state safely",
+		getArgumentCompletions: epicCancelArgumentCompletions,
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const options = pathOptions(ctx);
+			const parsed = parseEpicCancelArgs(args);
+			if (parsed.error) {
+				await notify(ctx, parsed.error, "warning");
+				return;
+			}
+
+			const target = resolveEpicCancelTarget(parsed.reference, options);
+			if (!target.epic) {
+				await notify(ctx, target.error ?? "No epic selected for cancellation.", "warning");
+				return;
+			}
+
+			const stateRead = safeReadEpicState(target.epic, options);
+			if (ctx.hasUI) {
+				const confirmed = await ctx.ui.confirm(
+					"Cancel Ralph epic?",
+					formatEpicCancelConfirmation(target.epic, stateRead, parsed.deleteChildSpecs, options),
+				);
+				if (!confirmed) {
+					await notify(ctx, "Ralph epic cancel aborted.");
+					return;
+				}
+			}
+
+			let stateCancelled = false;
+			let clearedCurrent = false;
+			try {
+				stateCancelled = cancelEpicState(target.epic, stateRead.state, options);
+				clearedCurrent = readCurrentEpicName(options) === target.epic.name ? clearCurrentEpic(options) : false;
+			} catch (error) {
+				await notify(ctx, `Failed to clear Ralph epic execution state: ${formatError(error)}`, "warning");
+				return;
+			}
+
+			const cleanupLines = [
+				`- [${stateCancelled ? "x" : " "}] Marked epic state cancelled`,
+				`- [${clearedCurrent ? "x" : " "}] Cleared current epic marker`,
+			];
+			if (parsed.deleteChildSpecs) {
+				cleanupLines.push(...await maybeDeleteEpicChildSpecs(ctx, stateRead.state, options));
+			} else {
+				cleanupLines.push("- [x] Kept child spec directories");
+			}
+
+			await notify(
+				ctx,
+				[
+					`Canceled Ralph epic execution for: ${target.epic.name}`,
+					"",
+					`Location: ${target.epic.path}`,
+					...formatEpicStateBeforeCancel(stateRead),
+					"",
+					"Cleanup:",
+					...cleanupLines,
+				].join("\n"),
+			);
+		},
+	});
+
+	pi.registerCommand("ralph-start", {
+		description: "Create/resume a Ralph spec; --quick reviews artifacts and implements",
+		getArgumentCompletions: startArgumentCompletions,
+		handler: async (args, ctx) => runStartCommand(pi, args, ctx),
+	});
+
+	pi.registerCommand("ralph-research", {
+		description: "Generate research.md for the active Ralph spec",
+		getArgumentCompletions: phaseArgumentCompletions,
+		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.research, args, ctx),
+	});
+
+	pi.registerCommand("ralph-requirements", {
+		description: "Generate requirements.md for the active Ralph spec",
+		getArgumentCompletions: phaseArgumentCompletions,
+		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.requirements, args, ctx),
+	});
+
+	pi.registerCommand("ralph-design", {
+		description: "Generate design.md for the active Ralph spec",
+		getArgumentCompletions: phaseArgumentCompletions,
+		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.design, args, ctx),
+	});
+
+	pi.registerCommand("ralph-tasks", {
+		description: "Generate canonical tasks.md for the active Ralph spec",
+		getArgumentCompletions: (prefix) => phaseArgumentCompletions(prefix, true),
+		handler: async (args, ctx) => runPhaseCommand(pi, PHASE_DEFINITIONS.tasks, args, ctx),
+	});
+
+	pi.registerCommand("ralph-implement", {
+		description: "Execute tasks.md through Ralph subagents",
+		getArgumentCompletions: specArgumentCompletions,
+		handler: async (args, ctx) => runImplementCommand(pi, args, ctx),
+	});
+
+	pi.registerCommand("ralph-status", {
+		description: "Show Ralph specs across configured roots",
+		handler: async (args, ctx) => {
+			const trimmedArgs = args.trim();
+			if (trimmedArgs === "--bootstrap" || trimmedArgs === "--diagnostics") {
+				const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
+				const diagnostics = formatDiagnostics("Smart Ralph Pi status", pi, ctx.cwd, agentBootstrap);
+				await notify(ctx, diagnostics, diagnostics.includes("Overall: PASS") ? "info" : "warning");
+				return;
+			}
+
+			const status = formatRalphSpecStatus(pi, ctx);
+			await notify(ctx, status.message, status.type);
+		},
+	});
+
+	pi.registerCommand("ralph-switch", {
+		description: "Switch the active Ralph spec",
+		getArgumentCompletions: specArgumentCompletions,
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const options = pathOptions(ctx);
+			const reference = args.trim();
+			let spec: SpecEntry | undefined;
+
+			if (!reference) {
+				const specs = listSpecs({ ...options, allowMissingConfiguredRoots: true });
+				if (specs.length === 0) {
+					await notify(ctx, `${formatAvailableSpecs(specs, options, null)}\n\nNo specs found to switch to.`, "warning");
+					return;
+				}
+
+				const selected = await selectSpec(ctx, specs, currentSpecPath(options));
+				if (!selected) {
+					await notify(ctx, `${formatAvailableSpecs(specs, options, currentSpecPath(options))}\n\nRun /ralph-switch <name> to select one.`);
+					return;
+				}
+				spec = selected;
+			} else {
+				const resolved = resolveExistingSpec(reference, options);
+				if (!resolved.spec) {
+					await notify(ctx, resolved.error ?? `Unable to resolve spec '${reference}'.`, "warning");
+					return;
+				}
+				spec = resolved.spec;
+			}
+
+			const pointer = writeCurrentSpec(spec, options);
+			await notify(ctx, formatSwitchSummary(pointer.spec, pointer.value, options));
+		},
+	});
+
+	pi.registerCommand("ralph-cancel", {
+		description: "Clear Ralph execution state for a spec",
+		getArgumentCompletions: cancelArgumentCompletions,
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const options = pathOptions(ctx);
+			const parsed = parseCancelArgs(args);
+			if (parsed.error) {
+				await notify(ctx, parsed.error, "warning");
+				return;
+			}
+
+			const target = resolveCancelTarget(parsed.reference, options);
+			if (!target.spec) {
+				await notify(ctx, target.error ?? "No spec selected for cancellation.", "warning");
+				return;
+			}
+
+			const spec = target.spec;
+			const stateRead = safeReadSpecState(spec, options);
+			if (ctx.hasUI) {
+				const confirmed = await ctx.ui.confirm(
+					"Cancel Ralph execution?",
+					formatCancelConfirmation(spec, stateRead, parsed.deleteSpec, options),
+				);
+				if (!confirmed) {
+					await notify(ctx, "Ralph cancel aborted.");
+					return;
+				}
+			}
+
+			let removedState = false;
+			let clearedCurrent = false;
+			try {
+				removedState = unlinkIfExists(stateRead.path);
+				clearedCurrent = clearCurrentSpecIfMatches(spec, options);
+			} catch (error) {
+				await notify(ctx, `Failed to clear Ralph execution state: ${formatError(error)}`, "warning");
+				return;
+			}
+
+			const cleanupLines = [
+				`- [${removedState ? "x" : " "}] Removed .ralph-state.json`,
+				`- [${clearedCurrent ? "x" : " "}] Cleared current spec marker`,
+			];
+			if (parsed.deleteSpec) {
+				cleanupLines.push(`- ${await maybeDeleteSpecDirectory(ctx, spec, options)}`);
+			} else {
+				cleanupLines.push("- [x] Kept spec files");
+			}
+
+			await notify(
+				ctx,
+				[
+					`Canceled Ralph execution for spec: ${spec.name}`,
+					"",
+					`Location: ${spec.path}`,
+					...formatStateBeforeCancel(stateRead),
+					"",
+					"Cleanup:",
+					...cleanupLines,
+				].join("\n"),
+			);
+		},
+	});
+
+	pi.registerCommand("ralph-init", {
+		description: "Bootstrap and validate Smart Ralph dependencies without starting workflows; use --refresh-agents to overwrite conflicting ralph-*.md files",
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const parsed = parseInitArgs(args);
+			if (parsed.error) {
+				await notify(ctx, parsed.error, "warning");
+				return;
+			}
+			const agentBootstrap = bootstrapRalphAgents(ctx.cwd, parsed.refreshAgents);
+			const diagnostics = formatDiagnostics("Smart Ralph bootstrap diagnostics", pi, ctx.cwd, agentBootstrap);
+			await notify(ctx, diagnostics, diagnostics.includes("Overall: PASS") ? "info" : "warning");
+		},
+	});
+}
