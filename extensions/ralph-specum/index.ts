@@ -64,7 +64,9 @@ import {
 	type EpicState,
 	type SafeEpicStateRead,
 } from "./epics.ts";
+import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 
+// Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(EXTENSION_DIR, "../..");
 const PACKAGE_RESOURCE_ROOT = PACKAGE_ROOT;
@@ -3163,6 +3165,14 @@ async function runStartCommand(
 		parsed.goal = goal?.trim() ?? "";
 	}
 
+	const branchDecision: BranchDecision = decideStartBranchBeforeWrites({
+		cwd: options.cwd,
+		specName: resolved.target.spec.name,
+		isNew: resolved.target.isNew,
+		quickMode: parsed.quickMode,
+		autonomousMode: parsed.autonomousMode,
+	});
+
 	try {
 		mkdirSync(resolved.target.spec.absolutePath, { recursive: true });
 	} catch (error) {
@@ -3229,6 +3239,7 @@ async function runStartCommand(
 			command: invocation.command,
 			aliasOf: invocation.aliasOf,
 			options: buildStartOptionsSnapshot(parsed),
+			branchDecision,
 			statePatch: {
 				phase,
 			},

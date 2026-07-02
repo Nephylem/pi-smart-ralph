@@ -159,7 +159,7 @@
   - _Requirements: FR-4, AC-2.1_
   - _Design: Start branch/worktree helper; Data Flow_
 
-- [ ] 2.2 [GREEN] Pass smoke: add injectable branch decision helper before writes
+- [x] 2.2 [GREEN] Pass smoke: add injectable branch decision helper before writes
   - **Do**:
     1. Create `start-branch.ts` with pure decision planning and injectable git/UI dependencies.
     2. Call the helper for new specs before `.gitignore`, directory, state, progress, or current-spec writes.
