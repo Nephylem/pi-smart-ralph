@@ -28,6 +28,24 @@ function formatManifestEntryLabel(index, entry) {
   return `${RESOURCE_MANIFEST_PATH}[${index}] originalPath=${originalPath}`;
 }
 
+function hasPackageResourceFile(directoryPath) {
+  if (!existsSync(directoryPath)) return false;
+
+  for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
+    const entryPath = join(directoryPath, entry.name);
+    if (entry.isDirectory() && hasPackageResourceFile(entryPath)) return true;
+    if (entry.isFile() && entry.name !== '.gitkeep') return true;
+  }
+
+  return false;
+}
+
+function validatePackageResourceRoot(relativePath) {
+  if (!hasPackageResourceFile(join(root, relativePath))) {
+    failures.push(`${relativePath}/ must contain at least one packaged resource file besides .gitkeep`);
+  }
+}
+
 function validateResourceManifest() {
   if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return;
 
@@ -107,6 +125,7 @@ for (const file of requiredFiles) {
 }
 
 validateResourceManifest();
+validatePackageResourceRoot('templates');
 
 const agentsDir = join(root, 'agents');
 if (existsSync(agentsDir)) {

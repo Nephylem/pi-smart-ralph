@@ -97,7 +97,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
 
 ## Phase 2: Packaged Resource Roots
 
-- [ ] 2.1 [RED] Failing verifier: templates root must contain package files
+- [x] 2.1 [RED] Failing verifier: templates root must contain package files
   - **Do**:
     1. Add a prepack check that `templates/` contains at least one non-`.gitkeep` file.
     2. Make the failure mention `templates/` explicitly.
