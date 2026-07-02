@@ -32,10 +32,24 @@ const requiredFiles = [
   'agents/ralph-spec-executor.md',
   'agents/ralph-task-planner.md',
   'agents/ralph-triage-analyst.md',
+  'references/ralph-resource-manifest.v1.json',
 ];
 
 for (const file of requiredFiles) {
   if (!existsSync(join(root, file))) failures.push(`missing package resource: ${file}`);
+}
+
+const resourceManifestPath = 'references/ralph-resource-manifest.v1.json';
+const resourceManifestFullPath = join(root, resourceManifestPath);
+if (existsSync(resourceManifestFullPath)) {
+  try {
+    const resourceManifest = JSON.parse(readFileSync(resourceManifestFullPath, 'utf8'));
+    if (!Array.isArray(resourceManifest)) {
+      failures.push(`${resourceManifestPath} must contain a top-level JSON array`);
+    }
+  } catch (error) {
+    failures.push(`${resourceManifestPath} must parse as JSON: ${error.message}`);
+  }
 }
 
 const agentsDir = join(root, 'agents');
