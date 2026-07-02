@@ -432,7 +432,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-12, FR-13, AC-4.1, AC-4.2, AC-4.3, AC-4.4_
   - _Design: Documentation, Existing Patterns to Follow_
 
-- [ ] 5.2 [GREEN] Document resource roots, manifest statuses, and verification commands
+- [x] 5.2 [GREEN] Document resource roots, manifest statuses, and verification commands
   - **Do**:
     1. Update README Package layout with `schemas/` and `references/ralph-resource-manifest.v1.json`.
     2. Document manifest status meanings: `copied`, `adapted`, `renamed`, `pi-native`, `excluded`, `deferred`.

@@ -46,6 +46,162 @@ The goal is to make AI-assisted development more auditable and less ad hoc: ever
 
 ---
 
+## How the Pi extension works
+
+Pi Smart Ralph is modeled after the original Smart Ralph flow, but it is implemented as a **Pi package and Pi extension**, not as a Claude Code plugin, Codex skill bundle, or stop-hook loop.
+
+At a high level:
+
+```mermaid
+flowchart TD
+    A["pi install npm:pi-smart-ralph@beta"] --> B["package.json pi manifest"]
+    B --> C["Pi loads extensions/ralph-specum/index.ts"]
+    C --> D["Extension registers /ralph-* commands"]
+    C --> E["session_start: conditionally bootstrap bundled runtimes"]
+    E --> E1["pi-subagents: Agent tool + subagent RPC/events"]
+    E --> E2["pi-tasks: Pi task-card runtime"]
+    E --> E3["pi-mcp-adapter: mcp tool"]
+    E --> E4["pi-web-access: web_search/fetch_content/get_search_content"]
+    C --> F["resources_discover: expose bundled web-access skills when needed"]
+
+    D --> G["/ralph-init"]
+    G --> H["validate package resources, tools, and agent definitions"]
+    G --> I["copy managed agents/ralph-*.md into .pi/agents"]
+    I --> J["Pi subagents can discover Ralph agents"]
+
+    D --> K["/ralph-start <spec> <goal>"]
+    K --> L["create/resume specs/<spec>/ state and progress"]
+    L --> M["/ralph-research -> /ralph-requirements -> /ralph-design -> /ralph-tasks"]
+    M --> N["phase subagents write research.md, requirements.md, design.md, tasks.md"]
+    N --> O["/ralph-tasks mirrors canonical tasks.md into Pi task cards"]
+    O --> P["/ralph-implement runs one task at a time"]
+    P --> Q["Ralph executor/QA/refactor subagents provide completion signal + evidence"]
+    Q --> R["coordinator marks tasks.md and Pi task card complete, or blocks with evidence"]
+
+    D --> S["/ralph-triage <epic> <goal>"]
+    S --> T["ralph-triage-analyst creates epic plan and child spec metadata"]
+    T --> U["specs/_epics/<epic>/epic.md + .epic-state.json"]
+    U --> K
+```
+
+### 1. Pi package loading
+
+`package.json` declares Pi resources under the `pi` key:
+
+```json
+{
+  "pi": {
+    "extensions": ["./extensions/ralph-specum/index.ts"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  }
+}
+```
+
+When Pi loads the package, it imports `extensions/ralph-specum/index.ts`. The extension factory subscribes to Pi lifecycle events and registers the `/ralph-*` slash commands. The commands are extension commands, so they run directly inside Pi command handlers rather than being expanded from prompt text.
+
+### 2. Runtime bootstrap
+
+On `session_start`, Smart Ralph checks the active Pi tool registry. If the required runtime tools already exist and are active, it uses them. If tools are missing, it conditionally imports bundled runtime package entrypoints from this package's `node_modules`:
+
+- `@tintinweb/pi-subagents` for `Agent` and the subagent RPC/event runtime
+- `@tintinweb/pi-tasks` for Pi task-card support
+- `pi-mcp-adapter` for `mcp`
+- `pi-web-access` for `web_search`, `fetch_content`, and `get_search_content`
+
+If a tool provider is registered but inactive, Smart Ralph does **not** load a duplicate provider. `/ralph-init` reports that the tool needs to be enabled.
+
+The extension also handles `resources_discover`. When the bundled `pi-web-access` runtime was loaded by Smart Ralph, its bundled skills directory is exposed to Pi for that session.
+
+### 3. Project bootstrap and Ralph agents
+
+`/ralph-init` validates the package and target project without starting a spec. It checks package resources, required runtime packages, required active tools, and Ralph agent frontmatter.
+
+It also copies the bundled Ralph agent definitions from this package's `agents/` directory into the target project's `.pi/agents/` directory. Existing Smart-Ralph-managed files can be updated automatically. User-owned conflicting `ralph-*.md` files are not overwritten unless you run:
+
+```text
+/ralph-init --refresh-agents
+```
+
+Those project-local `.pi/agents/ralph-*.md` files are what Pi subagent discovery uses during Ralph phase and implementation runs.
+
+### 4. Normal spec flow
+
+`/ralph-start <spec> <goal>` creates or resumes a spec under the configured spec root, normally `specs/<spec>/`. It writes or updates:
+
+```text
+specs/<spec>/
+  .progress.md
+  .ralph-state.json
+```
+
+It also updates the active spec marker:
+
+```text
+specs/.current-spec
+```
+
+The normal phase sequence is:
+
+```text
+/ralph-research      -> ralph-research-analyst      -> research.md
+/ralph-requirements  -> ralph-product-manager       -> requirements.md
+/ralph-design        -> ralph-architect-reviewer    -> design.md
+/ralph-tasks         -> ralph-task-planner          -> tasks.md
+/ralph-implement     -> executor/QA/refactor agents -> checked-off tasks
+```
+
+Each phase command waits for Pi to be idle, validates prerequisites, builds a focused prompt from the current spec state and upstream artifacts, then spawns the relevant Ralph subagent through Pi subagent RPC/events. After the subagent returns, the coordinator validates the expected artifact shape before advancing state.
+
+Outside quick/autonomous mode, phase commands create an approval boundary in Pi UI before moving to the next phase.
+
+### 5. Quick/autonomous flow
+
+`/ralph-start --quick ...` and `/ralph-start --autonomous ...` skip manual approval boundaries, but they do not skip validation. The coordinator:
+
+1. generates each artifact,
+2. runs `ralph-spec-reviewer` against it,
+3. retries reviewable artifact failures up to the configured review limit,
+4. mirrors `tasks.md` to Pi task cards, then
+5. enters `/ralph-implement`.
+
+If a validation or review step cannot pass, the quick flow records the blocker in `.progress.md` and `.ralph-state.json` instead of silently continuing.
+
+### 6. Task execution loop
+
+`tasks.md` remains the canonical implementation plan. `/ralph-tasks` parses checkbox tasks and mirrors them into the Pi task-card store for visibility and status tracking.
+
+`/ralph-implement` repeatedly selects the next incomplete task whose dependencies are complete. For each task it:
+
+1. marks the mirrored Pi task card `in_progress`,
+2. chooses the implementation agent:
+   - `ralph-spec-executor` for normal implementation tasks,
+   - `ralph-qa-engineer` for `[VERIFY]` or QA tasks,
+   - `ralph-refactor-specialist` for refactor/spec-update tasks,
+3. runs exactly that task through Pi subagent RPC/events,
+4. requires the expected completion signal plus meaningful verification evidence,
+5. checks off the task in `tasks.md`,
+6. marks the Pi task card `completed`, and
+7. appends evidence to `.progress.md` and `.ralph-state.json`.
+
+If the subagent output is missing the required signal, includes a contradiction such as `USER_INPUT_REQUIRED` or `VERIFICATION_FAIL`, or lacks verification evidence, the coordinator leaves the task incomplete and records a blocker.
+
+### 7. Epic flow
+
+`/ralph-triage <epic> <goal>` uses `ralph-triage-analyst` to decompose large work into a dependency-aware epic. Depending on `--output`, the coordinator can write spec files, create/update GitHub issues after confirmation, or both.
+
+Epic state is stored under:
+
+```text
+specs/_epics/<epic>/
+  epic.md
+  .epic-state.json
+```
+
+Child specs are then selected with `/ralph-start --next-epic-spec` or `/ralph-epic-next --start`. During implementation, Ralph updates the epic state as child specs move from pending to in-progress to completed.
+
+---
+
 ## Current status
 
 This package is currently in beta.
@@ -387,16 +543,39 @@ git remote -v
 This repository is laid out as a Pi package:
 
 ```text
-agents/                    Ralph subagent definitions
-extensions/ralph-specum/   Pi extension source
-prompts/                   Pi prompt resources
-references/                Workflow reference resources
-skills/                    Pi skill resources
-templates/                 Spec template resources
-scripts/                   Packaging verification scripts
-package.json               Npm and Pi package manifest
-README.md                  Project documentation
+agents/                                      Ralph subagent definitions
+extensions/ralph-specum/                     Pi extension source
+prompts/                                     Pi prompt resources
+references/                                  Workflow reference resources
+references/ralph-resource-manifest.v1.json   Resource parity manifest
+schemas/                                     Packaged compatibility schemas
+skills/                                      Pi skill resources
+templates/                                   Spec template resources
+scripts/                                     Packaging verification scripts
+package.json                                 Npm and Pi package manifest
+README.md                                    Project documentation
 ```
+
+Packaged resources are tracked by `references/ralph-resource-manifest.v1.json`. Each manifest entry maps an original Ralph Specum resource to its Pi package path and uses one status:
+
+- `copied`: byte-identical package resource.
+- `adapted`: intentionally changed for Pi.
+- `renamed`: byte-identical content moved to a Pi package-safe path.
+- `pi-native`: Pi-specific replacement for original workflow behavior.
+- `excluded`: intentionally not packaged.
+- `deferred`: intentionally left for a later parity spec.
+
+Pi commands remain implemented in `extensions/ralph-specum/index.ts`; original command and hook files are reference material and are not installed as executable Claude/Codex hooks.
+
+Before publishing or changing packaged resources, run:
+
+```bash
+npm run prepack
+npm run verify:pack
+npm pack --dry-run --json
+```
+
+Use `npm run prepack` for repository resource and manifest checks, `npm run verify:pack` for the machine-readable package boundary verifier, and `npm pack --dry-run --json` when you need to inspect the raw npm dry-run file list.
 
 The Pi package manifest uses:
 
