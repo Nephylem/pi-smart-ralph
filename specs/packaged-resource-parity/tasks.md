@@ -51,7 +51,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, FR-9_
   - _Design: Prepack verifier, Error Handling_
 
-- [ ] C1 [VERIFY] Quality check: prepack after manifest bootstrap
+- [x] C1 [VERIFY] Quality check: prepack after manifest bootstrap
   - **Do**:
     1. Run the discovered package verification command from `research.md` Quality Commands.
   - **Files**: None
@@ -61,7 +61,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-4_
   - _Design: Prepack verifier_
 
-- [ ] 1.4 [RED] Failing verifier: manifest entries must use the v1 shape
+- [x] 1.4 [RED] Failing verifier: manifest entries must use the v1 shape
   - **Do**:
     1. Add entry validation for `originalPath`, `piPath`, `kind`, `status`, optional `sha256`, and optional `notes`.
     2. Add the finite `kind` and `status` sets from `design.md`.

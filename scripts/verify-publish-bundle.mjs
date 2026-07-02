@@ -9,6 +9,8 @@ const failures = [];
 
 const RESOURCE_MANIFEST_PATH = 'references/ralph-resource-manifest.v1.json';
 const RESOURCE_MANIFEST_FULL_PATH = join(root, RESOURCE_MANIFEST_PATH);
+const RESOURCE_MANIFEST_KINDS = new Set(['command', 'template', 'prompt', 'reference', 'skill', 'schema']);
+const RESOURCE_MANIFEST_STATUSES = new Set(['copied', 'adapted', 'renamed', 'pi-native', 'excluded', 'deferred']);
 
 function parseJsonFile(filePath, label) {
   try {
@@ -23,8 +25,45 @@ function validateResourceManifest() {
   if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return;
 
   const resourceManifest = parseJsonFile(RESOURCE_MANIFEST_FULL_PATH, RESOURCE_MANIFEST_PATH);
-  if (resourceManifest !== undefined && !Array.isArray(resourceManifest)) {
+  if (resourceManifest === undefined) return;
+
+  if (!Array.isArray(resourceManifest)) {
     failures.push(`${RESOURCE_MANIFEST_PATH} must contain a top-level JSON array`);
+    return;
+  }
+
+  for (const [index, entry] of resourceManifest.entries()) {
+    const label = `${RESOURCE_MANIFEST_PATH}[${index}]`;
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      failures.push(`${label} must be an object`);
+      continue;
+    }
+
+    for (const field of ['originalPath', 'piPath']) {
+      if (typeof entry[field] !== 'string' || entry[field].length === 0 && field === 'originalPath') {
+        failures.push(`${label}.${field} must be a ${field === 'originalPath' ? 'non-empty ' : ''}string`);
+      }
+    }
+
+    if (typeof entry.kind !== 'string' || !RESOURCE_MANIFEST_KINDS.has(entry.kind)) {
+      failures.push(`${label}.kind must be one of ${[...RESOURCE_MANIFEST_KINDS].join(', ')}`);
+    }
+
+    if (typeof entry.status !== 'string' || !RESOURCE_MANIFEST_STATUSES.has(entry.status)) {
+      failures.push(`${label}.status must be one of ${[...RESOURCE_MANIFEST_STATUSES].join(', ')}`);
+    }
+
+    if ('sha256' in entry && typeof entry.sha256 !== 'string') {
+      failures.push(`${label}.sha256 must be a string when present`);
+    }
+
+    if ('notes' in entry && typeof entry.notes !== 'string') {
+      failures.push(`${label}.notes must be a string when present`);
+    }
+
+    if (RESOURCE_MANIFEST_STATUSES.has(entry.status) && entry.status !== 'copied' && (typeof entry.notes !== 'string' || entry.notes.trim().length === 0)) {
+      failures.push(`${label}.notes must be a non-empty string when status is ${entry.status}`);
+    }
   }
 }
 

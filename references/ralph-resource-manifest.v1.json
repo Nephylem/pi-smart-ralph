@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "originalPath": "",
+    "piPath": 42,
+    "kind": "invalid-kind",
+    "status": "adapted"
+  }
+]
