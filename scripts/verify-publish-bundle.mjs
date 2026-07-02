@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -34,6 +35,14 @@ function formatManifestEntryLabel(index, entry) {
 
 function toPosixPath(filePath) {
   return filePath.replace(/\\/g, '/');
+}
+
+function sha256File(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex');
+}
+
+function isSha256(value) {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
 function collectFilesRecursive(directoryPath) {
@@ -128,6 +137,41 @@ function validateManifestOriginalCoverage(resourceManifest) {
   }
 }
 
+function validateManifestEntryIntegrity(label, entry) {
+  if (typeof entry.piPath !== 'string' || entry.piPath.length === 0) return;
+
+  const piFullPath = join(root, entry.piPath);
+  if (!existsSync(piFullPath)) {
+    failures.push(`${label}.piPath must point to an existing repository file: ${entry.piPath}`);
+    return;
+  }
+
+  if (!isSha256(entry.sha256)) {
+    failures.push(`${label}.sha256 must be a lowercase SHA-256 hex digest for packaged file ${entry.piPath}`);
+    return;
+  }
+
+  const piHash = sha256File(piFullPath);
+  if (entry.sha256 !== piHash) {
+    failures.push(`${label}.sha256 must match packaged file ${entry.piPath}; expected ${piHash}`);
+  }
+
+  if (entry.status === 'copied' || entry.status === 'renamed') {
+    if (typeof entry.originalPath !== 'string' || entry.originalPath.length === 0) return;
+
+    const originalFullPath = join(ORIGINAL_RESOURCE_ROOT, entry.originalPath);
+    if (!existsSync(originalFullPath)) {
+      failures.push(`${label}.originalPath must point to an existing original file for ${entry.status} comparison: ${entry.originalPath}`);
+      return;
+    }
+
+    const originalHash = sha256File(originalFullPath);
+    if (piHash !== originalHash) {
+      failures.push(`${label} status ${entry.status} requires exact source match between ${entry.originalPath} and ${entry.piPath}`);
+    }
+  }
+}
+
 function validateResourceManifest() {
   if (!existsSync(RESOURCE_MANIFEST_FULL_PATH)) return undefined;
 
@@ -171,6 +215,8 @@ function validateResourceManifest() {
     if (RESOURCE_MANIFEST_STATUSES.has(entry.status) && entry.status !== 'copied' && (typeof entry.notes !== 'string' || entry.notes.trim().length === 0)) {
       failures.push(`${label}.notes must be a non-empty string when status is ${entry.status}`);
     }
+
+    validateManifestEntryIntegrity(label, entry);
   }
 
   validateManifestOriginalCoverage(resourceManifest);

@@ -282,7 +282,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-1, FR-2, FR-13_
   - _Design: Edge Cases, Technical Decisions_
 
-- [ ] C4 [VERIFY] Quality check: prepack after manifest coverage
+- [x] C4 [VERIFY] Quality check: prepack after manifest coverage
   - **Do**:
     1. Run the discovered package verification command from `research.md` Quality Commands.
   - **Files**: None
@@ -292,7 +292,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-2, NFR-4_
   - _Design: Prepack verifier_
 
-- [ ] 3.4 [RED] Failing verifier: piPath existence, notes, and checksums must be enforced
+- [x] 3.4 [RED] Failing verifier: piPath existence, notes, and checksums must be enforced
   - **Do**:
     1. Add validation that every non-empty manifest `piPath` exists from the repository root.
     2. Require non-empty `notes` for every non-`copied` status.
