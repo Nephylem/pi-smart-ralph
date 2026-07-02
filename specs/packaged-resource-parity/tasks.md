@@ -352,7 +352,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-7, FR-11, AC-2.3, AC-3.5_
   - _Design: Technical Decisions, Error Handling_
 
-- [ ] 4.3 [YELLOW] Stabilize package allowlist ordering
+- [x] 4.3 [YELLOW] Stabilize package allowlist ordering
   - **Do**:
     1. Keep `package.json.files` sorted by package resource category.
     2. Avoid unrelated package metadata changes.

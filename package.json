@@ -28,9 +28,9 @@
     "extensions",
     "prompts",
     "references",
+    "schemas",
     "skills",
     "templates",
-    "schemas",
     "README.md"
   ],
   "publishConfig": {
