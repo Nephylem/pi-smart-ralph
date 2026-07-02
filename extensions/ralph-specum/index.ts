@@ -66,6 +66,7 @@ import {
 } from "./epics.ts";
 import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
+import { discoverRelatedSpecs, mergeRelatedSpecsByName } from "./start-discovery.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -3236,7 +3237,9 @@ async function runStartCommand(
 	}
 
 	const phase = determineStartPhase(spec, stateRead.state, parsed, resolved.target.isNew);
+	const discoveredRelatedSpecs = discoverRelatedSpecs(spec, parsed.goal, options);
 	let statePatch = startStatePatch(spec, parsed, phase, stateRead.state);
+	statePatch.relatedSpecs = mergeRelatedSpecsByName(statePatch.relatedSpecs, discoveredRelatedSpecs);
 	if (epicStartContext) {
 		statePatch = {
 			...statePatch,
@@ -3254,6 +3257,8 @@ async function runStartCommand(
 		};
 	}
 
+	const specRoot = getSpecRoots({ ...options, allowMissingConfiguredRoots: true })
+		.find((root) => root.absolutePath === spec.rootAbsolutePath) ?? getSpecRoots({ ...options, allowMissingConfiguredRoots: true })[0];
 	statePatch = {
 		...statePatch,
 		startCompatibility: {
@@ -3261,8 +3266,10 @@ async function runStartCommand(
 			aliasOf: invocation.aliasOf,
 			options: buildStartOptionsSnapshot(parsed),
 			branchDecision,
+			specRoot,
 			statePatch: {
 				phase,
+				relatedSpecs: statePatch.relatedSpecs,
 			},
 		},
 	};

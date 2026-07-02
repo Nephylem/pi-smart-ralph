@@ -345,7 +345,7 @@
   - _Requirements: FR-7, AC-3.1, AC-3.3_
   - _Design: Start discovery helper_
 
-- [ ] 3.2 [GREEN] Pass smoke: implement read-only related spec discovery
+- [x] 3.2 [GREEN] Pass smoke: implement read-only related spec discovery
   - **Do**:
     1. Create `start-discovery.ts` with read-only spec root scanning using existing path helpers and optional index hints.
     2. Score and cap related spec results without invoking `/ralph-index` rebuilding.
