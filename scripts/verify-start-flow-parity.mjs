@@ -607,6 +607,118 @@ for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGi
   );
 }
 
+const destructiveCommandPlanRegressionFixtures = [
+  {
+    label: 'default branch current-directory command plan',
+    coverage: 'default branch',
+    expectedMode: 'create-current-branch',
+    expectedCommandPlan: ['switch', '-c', 'ralph/default-branch-regression'],
+    input: {
+      isNew: true,
+      specName: 'default-branch-regression',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      dirty: false,
+      quickMode: true,
+      autonomousMode: false,
+    },
+  },
+  {
+    label: 'non-default branch stay-current command plan',
+    coverage: 'non-default branch',
+    expectedMode: 'stay-current',
+    expectedCommandPlan: [],
+    input: {
+      isNew: true,
+      specName: 'non-default-regression',
+      currentBranch: 'feature/existing-work',
+      defaultBranch: 'main',
+      dirty: false,
+      quickMode: true,
+      autonomousMode: false,
+    },
+  },
+  {
+    label: 'dirty worktree command plan',
+    coverage: 'dirty worktree',
+    expectedMode: 'create-current-branch',
+    expectedCommandPlan: ['switch', '-c', 'ralph/dirty-worktree-regression'],
+    input: {
+      isNew: true,
+      specName: 'dirty-worktree-regression',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      dirty: true,
+      quickMode: true,
+      autonomousMode: false,
+    },
+  },
+  {
+    label: 'quick/autonomous headless command plan',
+    coverage: 'quick/autonomous',
+    expectedMode: 'create-current-branch',
+    expectedCommandPlan: ['switch', '-c', 'ralph/autonomous-regression'],
+    input: {
+      isNew: true,
+      specName: 'autonomous-regression',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      dirty: false,
+      quickMode: false,
+      autonomousMode: true,
+    },
+  },
+  {
+    label: 'interactive worktree command plan',
+    coverage: 'interactive',
+    expectedMode: 'create-worktree',
+    expectedCommandPlan: ['worktree', 'add', '-b', 'ralph/interactive-regression', '../interactive-regression-worktree'],
+    input: {
+      isNew: true,
+      specName: 'interactive-regression',
+      currentBranch: 'main',
+      defaultBranch: 'main',
+      dirty: false,
+      quickMode: false,
+      autonomousMode: false,
+    },
+  },
+];
+
+const requiredDestructiveRegressionCoverage = ['default branch', 'non-default branch', 'dirty worktree', 'quick/autonomous', 'interactive'];
+
+function formatDestructiveRegressionDiagnostic(smokeCase, reason) {
+  return `Destructive git command regression smoke failed for ${smokeCase.label}: ${reason}`;
+}
+
+for (const requiredCoverage of requiredDestructiveRegressionCoverage) {
+  assert(
+    destructiveCommandPlanRegressionFixtures.some((smokeCase) => smokeCase.coverage === requiredCoverage),
+    `Destructive git command regression smoke must include AC-5.2 coverage fixture ${requiredCoverage}.`,
+  );
+}
+
+for (const smokeCase of destructiveCommandPlanRegressionFixtures) {
+  assert(
+    Array.isArray(smokeCase.expectedCommandPlan),
+    formatDestructiveRegressionDiagnostic(smokeCase, 'fixture must declare the generated branch/worktree command plan to inspect'),
+  );
+  assert(
+    smokeCase.expectedMode === 'stay-current' || smokeCase.expectedCommandPlan.length > 0,
+    formatDestructiveRegressionDiagnostic(smokeCase, 'mutating branch/worktree fixtures must expose their generated command plan'),
+  );
+}
+
+assert(
+  /export\s+function\s+planStartBranchDestructiveRegressionFixtures\s*\([\s\S]*?planStartBranchApplication\(/.test(startBranchSource),
+  'Branch helper must expose generated branch/worktree command plans for destructive git command regression fixtures.',
+);
+
+assert(
+  /default branch[\s\S]*?non-default branch[\s\S]*?dirty worktree[\s\S]*?quick\/autonomous[\s\S]*?interactive/.test(startBranchSource),
+  'Generated destructive git command regression fixtures must cover default branch, non-default branch, dirty worktree, quick/autonomous, and interactive cases.',
+);
+
 const requiredRalphGitignorePatterns = [
   'specs/.current-spec',
   'specs/.current-epic',

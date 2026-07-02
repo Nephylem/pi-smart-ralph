@@ -461,7 +461,7 @@
   - _Requirements: FR-9, FR-12, AC-3.4_
   - _Design: Start contract builder; Existing Patterns to Follow_
 
-- [ ] Q7a [VERIFY] Quality check: start compatibility contract package verification
+- [x] Q7a [VERIFY] Quality check: start compatibility contract package verification
   - **Do**:
     1. Run package verification after StartCompatibilityContractV1 state and summary changes, satisfying the 2-3 task checkpoint cadence from the tasks review.
   - **Files**: None
@@ -473,7 +473,7 @@
 
 ## Phase 4: Additional Testing and Documentation
 
-- [ ] 4.1 [RED] Failing smoke: package verifier covers destructive git command regression cases
+- [x] 4.1 [RED] Failing smoke: package verifier covers destructive git command regression cases
   - **Do**:
     1. Add smoke assertions that search generated branch/worktree command plans for destructive operations.
     2. Include default branch, non-default branch, dirty worktree, quick/autonomous, and interactive fixtures.
