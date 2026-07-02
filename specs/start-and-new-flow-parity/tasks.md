@@ -485,7 +485,7 @@
   - _Requirements: FR-11, NFR-1, AC-5.2_
   - _Design: Test Strategy; Security Considerations_
 
-- [ ] 4.2 [GREEN] Pass smoke: complete branch safety fixture coverage
+- [x] 4.2 [GREEN] Pass smoke: complete branch safety fixture coverage
   - **Do**:
     1. Add missing fixture cases for default branch, non-default branch, dirty worktree, quick/autonomous mode, and interactive mode.
     2. Assert no fixture uses real destructive git operations.

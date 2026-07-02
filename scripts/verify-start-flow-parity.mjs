@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 const root = process.cwd();
 const extensionPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
@@ -607,6 +608,8 @@ for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGi
   );
 }
 
+const isolatedBranchFixtureRoot = join(tmpdir(), 'ralph-start-flow-parity-branch-fixtures');
+
 const destructiveCommandPlanRegressionFixtures = [
   {
     label: 'default branch current-directory command plan',
@@ -707,17 +710,21 @@ for (const smokeCase of destructiveCommandPlanRegressionFixtures) {
     smokeCase.expectedMode === 'stay-current' || smokeCase.expectedCommandPlan.length > 0,
     formatDestructiveRegressionDiagnostic(smokeCase, 'mutating branch/worktree fixtures must expose their generated command plan'),
   );
+
+  const fixtureCwd = resolve(isolatedBranchFixtureRoot, smokeCase.label.replace(/[^a-z0-9]+/gi, '-').toLowerCase());
+  assert(
+    !fixtureCwd.startsWith(resolve(root) + '/') && fixtureCwd !== resolve(root),
+    formatDestructiveRegressionDiagnostic(smokeCase, `fixture cwd ${fixtureCwd} must stay isolated from the repository working tree`),
+  );
+
+  const commandPlan = smokeCase.expectedCommandPlan.join(' ');
+  for (const destructivePattern of branchPlannerBoundarySmokeFixture.destructiveGitPatterns) {
+    assert(
+      !destructivePattern.test(commandPlan),
+      formatDestructiveRegressionDiagnostic(smokeCase, `fixture command plan must not include destructive git operation matching ${destructivePattern}`),
+    );
+  }
 }
-
-assert(
-  /export\s+function\s+planStartBranchDestructiveRegressionFixtures\s*\([\s\S]*?planStartBranchApplication\(/.test(startBranchSource),
-  'Branch helper must expose generated branch/worktree command plans for destructive git command regression fixtures.',
-);
-
-assert(
-  /default branch[\s\S]*?non-default branch[\s\S]*?dirty worktree[\s\S]*?quick\/autonomous[\s\S]*?interactive/.test(startBranchSource),
-  'Generated destructive git command regression fixtures must cover default branch, non-default branch, dirty worktree, quick/autonomous, and interactive cases.',
-);
 
 const requiredRalphGitignorePatterns = [
   'specs/.current-spec',
