@@ -127,7 +127,7 @@ Those project-local `.pi/agents/ralph-*.md` files are what Pi subagent discovery
 
 ### 4. Normal spec flow
 
-`/ralph-start <spec> <goal>` creates or resumes a spec under the configured spec root, normally `specs/<spec>/`. It writes or updates:
+`/ralph-start <spec> <goal>` creates or resumes a spec under the configured spec root, normally `specs/<spec>/`. `/ralph-new <spec> <goal>` is a compatibility alias that follows the same start path and writes equivalent state except for explicit command/alias metadata. Start/new writes or updates:
 
 ```text
 specs/<spec>/
@@ -157,7 +157,9 @@ Outside quick/autonomous mode, phase commands create an approval boundary in Pi 
 
 ### 5. Quick/autonomous flow
 
-`/ralph-start --quick ...` and `/ralph-start --autonomous ...` skip manual approval boundaries, but they do not skip validation. The coordinator:
+`/ralph-start --quick ...`, `/ralph-new --quick ...`, `/ralph-start --autonomous ...`, and `/ralph-new --autonomous ...` skip manual approval boundaries, but they do not skip validation. Before writing new spec files, start/new records a branch/worktree decision. In quick or autonomous mode, default-branch checkouts use a deterministic safe `ralph/<spec-name>` current-directory branch decision, while non-default branch checkouts stay on the current branch. These headless defaults do not prompt and do not use destructive git actions such as forced switches, resets, branch deletion, or discard operations.
+
+The coordinator:
 
 1. generates each artifact,
 2. runs `ralph-spec-reviewer` against it,
@@ -345,6 +347,8 @@ Create a new spec from a goal:
 /ralph-start add-email-login Add passwordless email login with rate limiting and tests
 ```
 
+`/ralph-new` is available as a compatibility command for existing Smart Ralph habits. It uses the same parser and start flow as `/ralph-start`, including supported flags such as `--skip-research`, `--specs-dir`, `--tasks-size`, `--commit-spec`, and `--no-commit-spec`; the only intentional difference is alias metadata recorded for downstream Ralph state consumers.
+
 Run the normal spec phases:
 
 ```text
@@ -379,8 +383,10 @@ For a small smoke test:
 | Command | Description |
 | --- | --- |
 | `/ralph-start <spec> <goal>` | Create or resume a spec and set it active. |
+| `/ralph-new <spec> <goal>` | Compatibility alias for `/ralph-start` with the same options and state behavior, plus alias metadata. |
 | `/ralph-start --quick <spec> <goal>` | Start a quick flow that minimizes approval pauses. |
 | `/ralph-start --autonomous <spec> <goal>` | Start an autonomous-style quick flow. |
+| `/ralph-new --quick <spec> <goal>` | Run the same quick start flow through the compatibility command. |
 | `/ralph-research [spec]` | Generate `research.md`. |
 | `/ralph-requirements [spec]` | Generate `requirements.md`. |
 | `/ralph-design [spec]` | Generate `design.md`. |
@@ -439,6 +445,17 @@ Project markers:
 ```text
 specs/.current-spec
 specs/.current-epic
+```
+
+Start/new also maintains repository-local `.gitignore` entries for Ralph runtime state. The updater is idempotent: it creates `.gitignore` if needed, appends only missing Ralph patterns, and preserves existing unrelated entries in their current order.
+
+Required Ralph runtime ignore patterns:
+
+```text
+specs/.current-spec
+specs/.current-epic
+**/.progress.md
+**/.ralph-state.json
 ```
 
 Ralph agent definitions copied into the target project:

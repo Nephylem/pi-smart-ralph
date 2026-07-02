@@ -519,7 +519,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests_
 
-- [ ] 4.4 [GREEN] Document `/ralph-new`, branch defaults, and `.gitignore` behavior
+- [x] 4.4 [GREEN] Document `/ralph-new`, branch defaults, and `.gitignore` behavior
   - **Do**:
     1. Update README command documentation for `/ralph-new` compatibility with `/ralph-start`.
     2. Document quick/autonomous branch defaults and non-destructive safety expectations.
