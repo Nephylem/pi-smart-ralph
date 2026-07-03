@@ -150,7 +150,7 @@
   - _Requirements: FR-5, FR-12, NFR-2_
   - _Design: `TaskWorkspaceReport`; Terminology consistency_
 
-- [ ] Q3 [VERIFY] Quality check: workspace report coverage
+- [x] Q3 [VERIFY] Quality check: workspace report coverage
   - **Do**:
     1. Run the discovered `verify:index` command after workspace-report changes.
   - **Files**: None
@@ -160,7 +160,7 @@
   - _Requirements: FR-4, FR-5, FR-12_
   - _Design: `scripts/verify-task-blockers-parity.mjs`_
 
-- [ ] 2.4 [RED] Failing test: coordinator preflights topology and preserves `single_repo` behavior
+- [x] 2.4 [RED] Failing test: coordinator preflights topology and preserves `single_repo` behavior
   - **Do**:
     1. Add integration cases that inspect coordinator use of the workspace report before executor dispatch.
     2. Assert `single_repo` tasks keep current commit-required behavior.

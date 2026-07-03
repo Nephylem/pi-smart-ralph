@@ -24,6 +24,7 @@ const cases = new Map([
   ['topology-classification-fixtures', verifyTopologyClassificationFixtures],
   ['topology-input-normalization', verifyTopologyInputNormalization],
   ['commit-mode-derivation', verifyCommitModeDerivation],
+  ['coordinator-preflight-contract', verifyCoordinatorPreflightContract],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -332,6 +333,33 @@ async function verifyCommitModeDerivation() {
     }
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyCoordinatorPreflightContract() {
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  if (!/from\s+["']\.\/task-completion\.ts["']/.test(indexSource)) {
+    expectedFail('coordinator must import task-completion helpers before executor dispatch.');
+  }
+
+  if (!/analyzeTaskWorkspace\(/.test(indexSource)) {
+    expectedFail('coordinator must compute a workspace report before dispatching the executor.');
+  }
+
+  if (!/formatTaskWorkspaceReport\(/.test(indexSource)) {
+    expectedFail('coordinator must format the workspace report for prompt-visible preflight guidance.');
+  }
+
+  const promptSection = indexSource.match(/function buildImplementationPrompt\([\s\S]*?\n}\n\nfunction subagentCompletionOutput/);
+  if (!promptSection || !/topology/i.test(promptSection[0]) || !/single_repo/i.test(promptSection[0]) || !/commit-required/i.test(promptSection[0])) {
+    expectedFail('executor prompt must mention topology preflight and preserve single_repo commit-required behavior.');
+  }
+
+  const executionSection = indexSource.match(/const definition = implementationSubagentDefinition\(task\);[\s\S]*?const prompt = buildImplementationPrompt\(task, definition, spec, state, options\);/);
+  if (!executionSection || !/analyzeTaskWorkspace/.test(executionSection[0])) {
+    expectedFail('coordinator must compute workspace topology in the execution flow before building the executor prompt.');
   }
 }
 
