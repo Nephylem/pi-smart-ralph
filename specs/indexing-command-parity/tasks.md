@@ -84,7 +84,7 @@
   - _Requirements: FR-2, AC-1.2, AC-1.3_
   - _Design: Index option parser; Existing Patterns to Follow_
 
-- [ ] Q2 [VERIFY] Quality check: parser package verification
+- [x] Q2 [VERIFY] Quality check: parser package verification
   - **Do**:
     1. Run discovered package verification commands after parser changes.
   - **Files**: None
@@ -94,7 +94,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.7 [RED] Failing test: configured spec root index paths and state alias
+- [x] 1.7 [RED] Failing test: configured spec root index paths and state alias
   - **Do**:
     1. Add a `paths` verifier case using temp project and temp spec roots.
     2. Assert canonical state is `<specRoot>/.index/index-state.json`.

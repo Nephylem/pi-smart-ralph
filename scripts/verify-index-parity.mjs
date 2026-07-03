@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
 
 const cases = new Map([
   ['parser-unknown', verifyParserUnknown],
   ['parser-options', verifyParserOptions],
+  ['paths', verifyPaths],
 ]);
 
 async function main() {
@@ -56,6 +61,60 @@ async function verifyParserUnknown() {
   }
 
   assertStableDefaultShape(result, 'unknown option parse result');
+}
+
+async function verifyPaths() {
+  const helper = await loadIndexingHelper();
+  const resolveIndexPaths = helper?.resolveIndexPaths;
+  const readPriorIndexState = helper?.readPriorIndexState ?? helper?.readIndexState;
+
+  if (typeof resolveIndexPaths !== 'function') {
+    expectedFail('resolveIndexPaths is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof readPriorIndexState !== 'function') {
+    expectedFail('readPriorIndexState/readIndexState is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-paths-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const specRoot = join(tempRoot, 'custom-spec-root');
+    mkdirSync(scanRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const resolved = resolveIndexPaths({ cwd: projectRoot, scanPath: scanRoot, specRoot });
+    const paths = resolved?.paths ?? resolved;
+    const indexRoot = join(specRoot, '.index');
+    const canonicalStatePath = join(indexRoot, 'index-state.json');
+    const aliasStatePath = join(indexRoot, '.index-state.json');
+
+    assertEqual(paths?.projectRoot, resolve(projectRoot), 'resolved project root');
+    assertEqual(paths?.scanPath, resolve(scanRoot), 'resolved scan path');
+    assertEqual(paths?.specRoot, resolve(specRoot), 'resolved configured spec root');
+    assertEqual(paths?.indexRoot, indexRoot, 'resolved index root');
+    assertEqual(paths?.statePath, canonicalStatePath, 'canonical state path');
+    assertEqual(paths?.summaryPath, join(indexRoot, 'index.md'), 'summary path');
+    assertEqual(paths?.componentRoot, join(indexRoot, 'components'), 'component root');
+    assertEqual(paths?.externalRoot, join(indexRoot, 'external'), 'external root');
+    assertEqual(paths?.stateAliasPath, aliasStatePath, 'compatibility state alias path');
+
+    mkdirSync(indexRoot, { recursive: true });
+    const aliasState = { indexed: 'alias-state-read', components: [], external: [] };
+    writeFileSync(aliasStatePath, `${JSON.stringify(aliasState)}\n`, 'utf8');
+
+    const priorStateResult = readPriorIndexState(paths);
+    const priorState = priorStateResult?.state ?? priorStateResult;
+    const priorStatePath = priorStateResult?.path ?? priorStateResult?.statePath ?? priorStateResult?.sourcePath;
+
+    assertEqual(priorState?.indexed, aliasState.indexed, 'compatibility alias state read');
+    if (priorStatePath !== undefined) {
+      assertEqual(priorStatePath, aliasStatePath, 'compatibility alias state source path');
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 async function verifyParserOptions() {
