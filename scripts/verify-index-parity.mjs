@@ -238,10 +238,38 @@ async function verifyScanner() {
 async function verifyDryRun() {
   const helper = await loadIndexingHelper();
   const runRalphIndex = helper?.runRalphIndex;
+  const parseIndexArgs = helper?.parseIndexArgs;
+  const resolveIndexPaths = helper?.resolveIndexPaths;
+  const scanComponentFiles = helper?.scanComponentFiles;
+  const planIndexWrites = helper?.planIndexWrites;
+  const writeIndexPlan = helper?.writeIndexPlan;
+  const INDEX_WRITE_KINDS = helper?.INDEX_WRITE_KINDS;
 
   if (typeof runRalphIndex !== 'function') {
     expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
   }
+
+  if (typeof parseIndexArgs !== 'function') {
+    expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof resolveIndexPaths !== 'function') {
+    expectedFail('resolveIndexPaths is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof scanComponentFiles !== 'function') {
+    expectedFail('scanComponentFiles is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof planIndexWrites !== 'function') {
+    expectedFail('planIndexWrites is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof writeIndexPlan !== 'function') {
+    expectedFail('writeIndexPlan is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  assertStableWriteKinds(INDEX_WRITE_KINDS);
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-dry-run-'));
   try {
@@ -255,10 +283,38 @@ async function verifyDryRun() {
     const servicePath = join(servicesRoot, 'accounts.service.ts');
     writeFileSync(servicePath, 'export class AccountsService { list() { return []; } }\n', 'utf8');
 
+    const args = ['--path', scanRoot, '--type', 'services', '--dry-run', '--quick'];
+    const parseResult = parseIndexArgs(args);
+    if (parseResult?.ok !== true) {
+      expectedFail(`dry-run planner options must parse successfully; got ${stringifyParseResult(parseResult)}`);
+    }
+
+    const paths = resolveIndexPaths({ cwd: projectRoot, scanPath: parseResult.options.scanPath, specRoot });
+    const scanResult = await scanComponentFiles({ paths, options: parseResult.options });
+    const plan = planIndexWrites({
+      paths,
+      options: { ...parseResult.options, specRoot },
+      components: scanResult.components,
+      priorState: null,
+      indexedAt: '2026-01-02T03:04:05.000Z',
+    });
+
+    assertPlannedWrite(plan.writes, 'component', servicePath);
+    assertPlannedWrite(plan.writes, 'summary', 'index.md');
+    assertPlannedWrite(plan.writes, 'state', 'index-state.json');
+    if (existsSync(join(specRoot, '.index'))) {
+      expectedFail('planner must be invokable without creating a .index/ directory or files.');
+    }
+
+    writeIndexPlan(plan.writes, { dryRun: true });
+    if (existsSync(join(specRoot, '.index'))) {
+      expectedFail('dry-run writer guard must prevent creating a .index/ directory or files.');
+    }
+
     const result = await runRalphIndex({
       cwd: projectRoot,
       specRoot,
-      args: ['--path', scanRoot, '--type', 'services', '--dry-run', '--quick'],
+      args,
     });
 
     if (result?.ok !== true || result?.dryRun !== true) {
@@ -341,6 +397,13 @@ async function verifyParserOptions() {
   assertMissingValueMessage(parseIndexArgs(['--path']), '--path');
   assertMissingValueMessage(parseIndexArgs(['--type=']), '--type');
   assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
+}
+
+function assertStableWriteKinds(kinds) {
+  assertEqual(kinds?.component, 'component', 'stable component write kind');
+  assertEqual(kinds?.external, 'external', 'stable external write kind');
+  assertEqual(kinds?.summary, 'summary', 'stable summary write kind');
+  assertEqual(kinds?.state, 'state', 'stable state write kind');
 }
 
 function assertPlannedWrite(writes, expectedKind, expectedPathFragment) {

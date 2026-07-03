@@ -74,7 +74,15 @@ export interface ScanComponentFilesResult {
 }
 
 export type IndexAction = 'create' | 'update' | 'skip';
-export type PlannedWriteKind = 'component' | 'external' | 'summary' | 'state';
+
+export const INDEX_WRITE_KINDS = Object.freeze({
+  component: 'component',
+  external: 'external',
+  summary: 'summary',
+  state: 'state',
+} as const);
+
+export type PlannedWriteKind = (typeof INDEX_WRITE_KINDS)[keyof typeof INDEX_WRITE_KINDS];
 
 export interface PlannedWrite {
   path: string;
@@ -213,9 +221,7 @@ export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRun
   const plannedAt = new Date().toISOString();
   const plan = planIndexWrites({ paths, options, components: scanResult.components, priorState, indexedAt: plannedAt });
 
-  if (!options.dryRun) {
-    writeIndexPlan(plan.writes);
-  }
+  writeIndexPlan(plan.writes, { dryRun: options.dryRun });
 
   return {
     ok: true,
@@ -296,7 +302,7 @@ export function assertIndexOutputPath(indexRoot: string, candidatePath: string, 
   throw new Error(`Resolved ${label} escapes index root: ${candidatePath}`);
 }
 
-interface IndexPlanInput {
+export interface IndexPlanInput {
   paths: IndexPaths;
   options: IndexOptions;
   components: ComponentEntry[];
@@ -304,12 +310,12 @@ interface IndexPlanInput {
   indexedAt: string;
 }
 
-interface IndexPlanResult {
+export interface IndexPlanResult {
   writes: PlannedWrite[];
   state: IndexStateV1;
 }
 
-function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
+export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   const priorComponentHashes = readPriorComponentHashes(input.priorState);
   const writes: PlannedWrite[] = [];
   let created = 0;
@@ -323,7 +329,7 @@ function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
     if (action === 'update') updated += 1;
     if (action === 'skip') skipped += 1;
     writes.push({
-      kind: 'component',
+      kind: INDEX_WRITE_KINDS.component,
       action,
       path: `${component.sourcePath} -> ${component.artifactPath}`,
       artifactPath: component.artifactPath,
@@ -359,14 +365,14 @@ function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   const summaryContent = renderIndexSummary(state);
   const stateContent = `${JSON.stringify(state, null, 2)}\n`;
   writes.push({
-    kind: 'summary',
+    kind: INDEX_WRITE_KINDS.summary,
     action: chooseWriteAction(input.paths.summaryPath, false, input.options.force),
     path: input.paths.summaryPath,
     artifactPath: input.paths.summaryPath,
     content: summaryContent,
   });
   writes.push({
-    kind: 'state',
+    kind: INDEX_WRITE_KINDS.state,
     action: chooseWriteAction(input.paths.stateWritePath, false, input.options.force),
     path: input.paths.stateWritePath,
     artifactPath: input.paths.stateWritePath,
@@ -430,7 +436,13 @@ function renderIndexSummary(state: IndexStateV1): string {
   return `# Index Summary\n\n- Generated at: ${state.indexed}\n- Components: ${state.componentCount}\n- External: ${state.externalCount}\n- Created: ${state.created}\n- Updated: ${state.updated}\n- Skipped: ${state.skipped}\n`;
 }
 
-function writeIndexPlan(writes: PlannedWrite[]): void {
+export interface WriteIndexPlanOptions {
+  dryRun?: boolean;
+}
+
+export function writeIndexPlan(writes: PlannedWrite[], options: WriteIndexPlanOptions = {}): void {
+  if (options.dryRun) return;
+
   for (const write of writes) {
     if (write.action === 'skip' || write.content === undefined) continue;
     const targetPath = write.artifactPath ?? write.path;

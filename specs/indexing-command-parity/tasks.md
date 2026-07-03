@@ -210,7 +210,7 @@
   - _Requirements: FR-3, FR-4, AC-2.1, AC-2.2_
   - _Design: Index planner; Data Flow_
 
-- [ ] 1.15 [YELLOW] Refactor: separate planner from writer
+- [x] 1.15 [YELLOW] Refactor: separate planner from writer
   - **Do**:
     1. Split planned-write creation from filesystem mutation.
     2. Keep `dryRun` handling in one writer guard.
