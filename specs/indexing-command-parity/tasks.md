@@ -406,7 +406,7 @@
   - _Requirements: FR-12, FR-13, AC-6.2, AC-6.3_
   - _Design: External resource adapters; Error Handling_
 
-- [ ] Q9 [VERIFY] Quality check: external package verification
+- [x] Q9 [VERIFY] Quality check: external package verification
   - **Do**:
     1. Run discovered package verification commands after external adapter changes.
   - **Files**: None
@@ -416,7 +416,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.28 [RED] Failing test: `/ralph-index` is registered and documented
+- [x] 1.28 [RED] Failing test: `/ralph-index` is registered and documented
   - **Do**:
     1. Add a `command-registration` verifier case that inspects `extensions/ralph-specum/index.ts`.
     2. Assert `pi.registerCommand("ralph-index", ...)` is present.

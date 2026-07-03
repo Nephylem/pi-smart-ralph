@@ -19,6 +19,7 @@ const cases = new Map([
   ['hash-skip-force', verifyHashSkipForce],
   ['changed-git', verifyChangedGit],
   ['external-adapters', verifyExternalAdapters],
+  ['command-registration', verifyCommandRegistration],
 ]);
 
 async function main() {
@@ -833,6 +834,35 @@ function assertRecoverableExternalError(errors, sourceType, sourceId, messageFra
   }
   if (error.recoverable !== true) {
     expectedFail(`recoverable ${sourceType} error for ${sourceId} must be normalized with recoverable: true; got ${JSON.stringify(error)}`);
+  }
+}
+
+function verifyCommandRegistration() {
+  const commandSourcePath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const source = readFileSync(commandSourcePath, 'utf8');
+  const failures = [];
+
+  if (!/\.registerCommand\(\s*["']ralph-index["']\s*,/m.test(source)) {
+    failures.push('pi.registerCommand("ralph-index", ...) is absent');
+  }
+
+  const requiredDocumentationTokens = [
+    '/ralph-index',
+    '--path',
+    '--type',
+    '--exclude',
+    '--dry-run',
+    '--force',
+    '--changed',
+    '--quick',
+  ];
+  const missingDocumentationTokens = requiredDocumentationTokens.filter((token) => !source.includes(token));
+  if (missingDocumentationTokens.length > 0) {
+    failures.push(`help/status documentation is missing ${missingDocumentationTokens.join(', ')}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`command registration source inspection failed for ${commandSourcePath}: ${failures.join('; ')}`);
   }
 }
 
