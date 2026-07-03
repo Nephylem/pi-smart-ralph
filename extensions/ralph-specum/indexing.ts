@@ -31,7 +31,9 @@ export interface IndexPaths {
   specRoot: string;
   indexRoot: string;
   statePath: string;
+  stateWritePath: string;
   stateAliasPath: string;
+  stateReadPaths: string[];
   summaryPath: string;
   componentRoot: string;
   externalRoot: string;
@@ -71,29 +73,27 @@ export function resolveIndexPaths(input: ResolveIndexPathsInput | IndexOptions =
   const scanPath = resolveFrom(projectRoot, configuredScanPath);
   const specRoot = resolveFrom(projectRoot, configuredSpecRoot);
   const indexRoot = join(specRoot, '.index');
+  const stateWritePath = resolveIndexOutputPath(indexRoot, 'index-state.json', 'canonical state path');
+  const stateAliasPath = resolveIndexOutputPath(indexRoot, '.index-state.json', 'state alias path');
   const paths: IndexPaths = {
     projectRoot,
     scanPath,
     specRoot,
     indexRoot,
-    statePath: join(indexRoot, 'index-state.json'),
-    stateAliasPath: join(indexRoot, '.index-state.json'),
-    summaryPath: join(indexRoot, 'index.md'),
-    componentRoot: join(indexRoot, 'components'),
-    externalRoot: join(indexRoot, 'external'),
+    statePath: stateWritePath,
+    stateWritePath,
+    stateAliasPath,
+    stateReadPaths: [stateWritePath, stateAliasPath],
+    summaryPath: resolveIndexOutputPath(indexRoot, 'index.md', 'summary path'),
+    componentRoot: resolveIndexOutputPath(indexRoot, 'components', 'component root'),
+    externalRoot: resolveIndexOutputPath(indexRoot, 'external', 'external root'),
   };
-
-  assertInsideIndexRoot(paths.indexRoot, paths.statePath, 'state path');
-  assertInsideIndexRoot(paths.indexRoot, paths.stateAliasPath, 'state alias path');
-  assertInsideIndexRoot(paths.indexRoot, paths.summaryPath, 'summary path');
-  assertInsideIndexRoot(paths.indexRoot, paths.componentRoot, 'component root');
-  assertInsideIndexRoot(paths.indexRoot, paths.externalRoot, 'external root');
 
   return paths;
 }
 
 export function readPriorIndexState(paths: IndexPaths): PriorIndexStateResult {
-  for (const candidatePath of [paths.statePath, paths.stateAliasPath]) {
+  for (const candidatePath of paths.stateReadPaths) {
     if (!existsSync(candidatePath)) continue;
     return {
       state: JSON.parse(readFileSync(candidatePath, 'utf8')),
@@ -107,26 +107,42 @@ export function readPriorIndexState(paths: IndexPaths): PriorIndexStateResult {
 export const readIndexState = readPriorIndexState;
 
 export function getComponentIndexPath(paths: IndexPaths, sourcePath: string, category: IndexCategory = 'other'): string {
-  const artifactPath = join(paths.componentRoot, `${category}-${artifactSlug(sourcePath)}.md`);
-  assertInsideIndexRoot(paths.indexRoot, artifactPath, 'component artifact path');
-  return artifactPath;
+  return resolveIndexOutputPath(paths.indexRoot, join('components', `${category}-${artifactSlug(sourcePath)}.md`), 'component artifact path');
 }
 
 export function getExternalIndexPath(paths: IndexPaths, sourceId: string): string {
-  const artifactPath = join(paths.externalRoot, `${artifactSlug(sourceId)}.md`);
-  assertInsideIndexRoot(paths.indexRoot, artifactPath, 'external artifact path');
-  return artifactPath;
+  return resolveIndexOutputPath(paths.indexRoot, join('external', `${artifactSlug(sourceId)}.md`), 'external artifact path');
+}
+
+export function toIndexDisplayPath(paths: Pick<IndexPaths, 'projectRoot'>, sourcePath: string): string {
+  const absoluteSourcePath = resolveFrom(paths.projectRoot, sourcePath);
+  const projectRelativePath = normalizePathSeparators(relative(paths.projectRoot, absoluteSourcePath));
+  if (projectRelativePath && !projectRelativePath.startsWith('..') && !isAbsolute(projectRelativePath)) {
+    return projectRelativePath;
+  }
+
+  return normalizePathSeparators(absoluteSourcePath);
+}
+
+export function resolveIndexOutputPath(indexRoot: string, outputPath: string, label = 'index output path'): string {
+  const resolvedIndexRoot = resolve(indexRoot);
+  const candidatePath = resolveFrom(resolvedIndexRoot, outputPath);
+  assertIndexOutputPath(resolvedIndexRoot, candidatePath, label);
+  return candidatePath;
+}
+
+export function assertIndexOutputPath(indexRoot: string, candidatePath: string, label = 'index output path'): void {
+  const relativePath = relative(resolve(indexRoot), resolve(candidatePath));
+  if (relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))) return;
+  throw new Error(`Resolved ${label} escapes index root: ${candidatePath}`);
 }
 
 function resolveFrom(basePath: string, configuredPath: string): string {
   return isAbsolute(configuredPath) ? resolve(configuredPath) : resolve(basePath, configuredPath);
 }
 
-function assertInsideIndexRoot(indexRoot: string, candidatePath: string, label: string): void {
-  const relativePath = relative(indexRoot, candidatePath);
-  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-    throw new Error(`Resolved ${label} escapes index root: ${candidatePath}`);
-  }
+function normalizePathSeparators(pathValue: string): string {
+  return pathValue.replace(/\\/g, '/');
 }
 
 function artifactSlug(input: string): string {

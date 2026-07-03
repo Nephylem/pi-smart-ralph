@@ -67,6 +67,9 @@ async function verifyPaths() {
   const helper = await loadIndexingHelper();
   const resolveIndexPaths = helper?.resolveIndexPaths;
   const readPriorIndexState = helper?.readPriorIndexState ?? helper?.readIndexState;
+  const assertIndexOutputPath = helper?.assertIndexOutputPath;
+  const getComponentIndexPath = helper?.getComponentIndexPath;
+  const toIndexDisplayPath = helper?.toIndexDisplayPath;
 
   if (typeof resolveIndexPaths !== 'function') {
     expectedFail('resolveIndexPaths is not exported from extensions/ralph-specum/indexing.ts yet.');
@@ -74,6 +77,18 @@ async function verifyPaths() {
 
   if (typeof readPriorIndexState !== 'function') {
     expectedFail('readPriorIndexState/readIndexState is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof assertIndexOutputPath !== 'function') {
+    expectedFail('assertIndexOutputPath is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof getComponentIndexPath !== 'function') {
+    expectedFail('getComponentIndexPath is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof toIndexDisplayPath !== 'function') {
+    expectedFail('toIndexDisplayPath is not exported from extensions/ralph-specum/indexing.ts yet.');
   }
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-paths-'));
@@ -95,10 +110,18 @@ async function verifyPaths() {
     assertEqual(paths?.specRoot, resolve(specRoot), 'resolved configured spec root');
     assertEqual(paths?.indexRoot, indexRoot, 'resolved index root');
     assertEqual(paths?.statePath, canonicalStatePath, 'canonical state path');
+    assertEqual(paths?.stateWritePath, canonicalStatePath, 'canonical write-only state path');
+    assertArrayEqual(paths?.stateReadPaths, [canonicalStatePath, aliasStatePath], 'canonical-first state read paths');
     assertEqual(paths?.summaryPath, join(indexRoot, 'index.md'), 'summary path');
     assertEqual(paths?.componentRoot, join(indexRoot, 'components'), 'component root');
     assertEqual(paths?.externalRoot, join(indexRoot, 'external'), 'external root');
-    assertEqual(paths?.stateAliasPath, aliasStatePath, 'compatibility state alias path');
+    assertEqual(paths?.stateAliasPath, aliasStatePath, 'compatibility read-only state alias path');
+
+    assertIndexOutputPath(paths.indexRoot, paths.summaryPath, 'summary path');
+    assertIndexOutputPath(paths.indexRoot, getComponentIndexPath(paths, join(scanRoot, 'accounts.service.ts'), 'services'), 'component artifact path');
+    assertThrows(() => assertIndexOutputPath(paths.indexRoot, join(indexRoot, '..', 'escape.md'), 'escaping output path'), 'escaping output path');
+    assertEqual(toIndexDisplayPath(paths, join(projectRoot, 'src', 'accounts.service.ts')), 'src/accounts.service.ts', 'inside project display path');
+    assertEqual(toIndexDisplayPath(paths, join(tempRoot, 'external-src', 'outside.service.ts')), join(tempRoot, 'external-src', 'outside.service.ts'), 'outside project display path');
 
     mkdirSync(indexRoot, { recursive: true });
     const aliasState = { indexed: 'alias-state-read', components: [], external: [] };
@@ -230,6 +253,15 @@ function assertArrayEqual(actual, expected, label) {
   if (!Array.isArray(actual) || actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
     expectedFail(`${label} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   }
+}
+
+function assertThrows(action, label) {
+  try {
+    action();
+  } catch (_error) {
+    return;
+  }
+  expectedFail(`${label} expected to throw`);
 }
 
 function stringifyParseResult(result) {

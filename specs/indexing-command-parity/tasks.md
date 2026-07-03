@@ -118,7 +118,7 @@
   - _Requirements: FR-8, FR-9, NFR-4, AC-4.1, AC-4.4_
   - _Design: Index path resolver_
 
-- [ ] 1.9 [YELLOW] Refactor: centralize path safety checks
+- [x] 1.9 [YELLOW] Refactor: centralize path safety checks
   - **Do**:
     1. Add a shared output containment assertion for `.index/` artifacts.
     2. Normalize display paths for inside and outside repository scan roots.
