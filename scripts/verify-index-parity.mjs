@@ -20,6 +20,7 @@ const cases = new Map([
   ['changed-git', verifyChangedGit],
   ['external-adapters', verifyExternalAdapters],
   ['command-registration', verifyCommandRegistration],
+  ['package-wiring', verifyPackageWiring],
 ]);
 
 async function main() {
@@ -890,6 +891,27 @@ async function verifyCommandRegistration() {
 
   if (failures.length > 0) {
     expectedFail(`command registration source inspection failed for ${commandSourcePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function verifyPackageWiring() {
+  const packageJsonPath = join(root, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const scripts = packageJson?.scripts ?? {};
+  const failures = [];
+
+  const verifyIndexScript = String(scripts['verify:index'] ?? '');
+  if (!verifyIndexScript.includes('scripts/verify-index-parity.mjs')) {
+    failures.push('package.json script "verify:index" must run scripts/verify-index-parity.mjs');
+  }
+
+  const prepackScript = String(scripts.prepack ?? '');
+  if (!prepackScript.includes('scripts/verify-index-parity.mjs') && !prepackScript.includes('npm run verify:index')) {
+    failures.push('package.json script "prepack" must include the index verifier or npm run verify:index');
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`package wiring inspection failed for ${packageJsonPath}: ${failures.join('; ')}`);
   }
 }
 

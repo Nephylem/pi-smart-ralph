@@ -452,7 +452,7 @@
   - _Requirements: FR-1, FR-15, AC-1.1, AC-7.3_
   - _Design: `/ralph-index` command registration; Architecture_
 
-- [ ] Q10 [VERIFY] Quality check: command registration package verification
+- [x] Q10 [VERIFY] Quality check: command registration package verification
   - **Do**:
     1. Run discovered package verification commands after command registration changes.
   - **Files**: None
@@ -462,7 +462,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.31 [RED] Failing test: package script wiring runs index verifier
+- [x] 1.31 [RED] Failing test: package script wiring runs index verifier
   - **Do**:
     1. Add a `package-wiring` verifier case that inspects `package.json`.
     2. Assert `verify:index` runs `scripts/verify-index-parity.mjs`.
