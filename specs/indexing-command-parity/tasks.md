@@ -360,7 +360,7 @@
   - _Requirements: FR-11, AC-5.3, AC-5.4_
   - _Design: Git changed filter; Security Considerations_
 
-- [ ] Q8 [VERIFY] Quality check: changed-files package verification
+- [x] Q8 [VERIFY] Quality check: changed-files package verification
   - **Do**:
     1. Run discovered package verification commands after Git filtering changes.
   - **Files**: None
@@ -382,7 +382,7 @@
   - _Requirements: FR-12, FR-13, AC-6.1, AC-6.2, AC-6.3, AC-6.4_
   - _Design: External resource adapters_
 
-- [ ] 1.26 [GREEN] Pass test: implement package resource and lazy URL/MCP adapters
+- [x] 1.26 [GREEN] Pass test: implement package resource and lazy URL/MCP adapters
   - **Do**:
     1. Add package resource external entries from the Ralph resource manifest and package resource directories.
     2. Add URL and MCP provider seams invoked only for explicit helper inputs.

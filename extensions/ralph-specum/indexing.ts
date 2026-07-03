@@ -65,6 +65,36 @@ export interface ComponentEntry {
   dependencies: string[];
 }
 
+export type ExternalSourceType = 'url' | 'mcp' | 'skill';
+
+export interface ExternalEntry {
+  sourceType: ExternalSourceType;
+  sourceId: string;
+  artifactPath: string;
+  hash?: string;
+  fetched: string;
+  summary: string;
+  error?: string;
+}
+
+export interface ExternalResourceAdapters {
+  fetchUrl?: (url: string) => Promise<Partial<ExternalEntry> | string>;
+  fetchMcpResource?: (resource: string) => Promise<Partial<ExternalEntry> | string>;
+}
+
+export interface CollectExternalResourcesInput {
+  paths: IndexPaths;
+  options: Pick<IndexOptions, 'externalInputs'>;
+  adapters?: ExternalResourceAdapters;
+  indexedAt: string;
+}
+
+export interface CollectExternalResourcesResult {
+  ok: true;
+  external: ExternalEntry[];
+  errors: Array<{ sourceType: string; sourceId: string; message: string }>;
+}
+
 export interface ScanComponentFilesInput {
   paths: IndexPaths;
   options?: Partial<IndexOptions>;
@@ -247,7 +277,16 @@ export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRun
   const priorState = readPriorIndexState(paths).state;
   const scanResult = scanComponentFiles({ paths, options, changedSourcePaths });
   const plannedAt = new Date().toISOString();
-  const plan = planIndexWrites({ paths, options, components: scanResult.components, priorState, indexedAt: plannedAt });
+  const externalResult = await collectExternalResources({ paths, options, indexedAt: plannedAt });
+  const plan = planIndexWrites({
+    paths,
+    options,
+    components: scanResult.components,
+    externalResources: externalResult.external,
+    externalErrors: externalResult.errors,
+    priorState,
+    indexedAt: plannedAt,
+  });
 
   writeIndexPlan(plan.writes, { dryRun: options.dryRun });
 
@@ -308,6 +347,39 @@ export function scanComponentFiles(input: ScanComponentFilesInput): ScanComponen
   return { components, skipped };
 }
 
+export async function collectExternalResources(input: CollectExternalResourcesInput): Promise<CollectExternalResourcesResult> {
+  const external: ExternalEntry[] = [];
+  const errors: Array<{ sourceType: string; sourceId: string; message: string }> = [];
+  const externalInputs = input.options.externalInputs ?? createDefaultIndexOptions().externalInputs;
+
+  if (externalInputs.includePackageResources) {
+    external.push(...collectPackageResourceExternalEntries(input.paths, input.indexedAt));
+  }
+
+  for (const url of externalInputs.urls ?? []) {
+    try {
+      const fetched = await input.adapters?.fetchUrl?.(url);
+      external.push(normalizeFetchedExternalEntry('url', url, fetched, input.paths, input.indexedAt));
+    } catch (error) {
+      errors.push({ sourceType: 'url', sourceId: url, message: errorMessage(error) });
+    }
+  }
+
+  for (const resource of externalInputs.mcpResources ?? []) {
+    try {
+      const fetched = await input.adapters?.fetchMcpResource?.(resource);
+      external.push(normalizeFetchedExternalEntry('mcp', resource, fetched, input.paths, input.indexedAt));
+    } catch (error) {
+      errors.push({ sourceType: 'mcp', sourceId: resource, message: errorMessage(error) });
+    }
+  }
+
+  external.sort((left, right) => `${left.sourceType}:${left.sourceId}`.localeCompare(`${right.sourceType}:${right.sourceId}`));
+  return { ok: true, external, errors };
+}
+
+export const collectIndexExternalResources = collectExternalResources;
+
 export function toIndexDisplayPath(paths: Pick<IndexPaths, 'projectRoot'>, sourcePath: string): string {
   const absoluteSourcePath = resolveFrom(paths.projectRoot, sourcePath);
   const projectRelativePath = normalizePathSeparators(relative(paths.projectRoot, absoluteSourcePath));
@@ -335,6 +407,8 @@ export interface IndexPlanInput {
   paths: IndexPaths;
   options: IndexOptions;
   components: ComponentEntry[];
+  externalResources?: ExternalEntry[];
+  externalErrors?: Array<{ sourceType: string; sourceId: string; message: string }>;
   priorState: unknown;
   indexedAt: string;
 }
@@ -346,6 +420,9 @@ export interface IndexPlanResult {
 
 export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   const priorComponentHashes = readPriorComponentHashes(input.priorState);
+  const priorExternalHashes = readPriorExternalHashes(input.priorState);
+  const externalResources = input.externalResources ?? [];
+  const externalErrors = input.externalErrors ?? [];
   const writes: PlannedWrite[] = [];
   let created = 0;
   let updated = 0;
@@ -376,6 +453,27 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
     });
   }
 
+  for (const externalResource of externalResources) {
+    const priorHash = priorExternalHashes.get(externalResource.sourceId);
+    const action = selectIndexWriteAction({
+      targetPath: externalResource.artifactPath,
+      unchanged: externalResource.hash !== undefined && priorHash === externalResource.hash,
+      force: input.options.force,
+    });
+    const externalActionCounts = countPlannedActions([action]);
+    created += externalActionCounts.create;
+    updated += externalActionCounts.update;
+    skipped += externalActionCounts.skip;
+    writes.push({
+      kind: INDEX_WRITE_KINDS.external,
+      action,
+      path: `${externalResource.sourceId} -> ${externalResource.artifactPath}`,
+      artifactPath: externalResource.artifactPath,
+      content: action === 'skip' ? undefined : renderExternalSpec(externalResource),
+      reason: action === 'skip' ? 'external resource hash unchanged' : undefined,
+    });
+  }
+
   const summaryAction = selectIndexWriteAction({ targetPath: input.paths.summaryPath, unchanged: false, force: input.options.force });
   const stateAction = selectIndexWriteAction({ targetPath: input.paths.stateWritePath, unchanged: false, force: input.options.force });
   const includeContractWriteCounts = !input.options.force && skipped === 0;
@@ -387,7 +485,7 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   const state: IndexStateV1 = {
     indexed: input.indexedAt,
     componentCount: input.components.length,
-    externalCount: 0,
+    externalCount: externalResources.length,
     created: created + contractCreated,
     updated: updated + contractUpdated,
     skipped,
@@ -402,8 +500,15 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
       artifactPath: component.artifactPath,
       indexed: input.indexedAt,
     })),
-    external: [],
-    errors: [],
+    external: externalResources.map((entry) => ({
+      sourceType: entry.sourceType,
+      sourceId: entry.sourceId,
+      artifactPath: entry.artifactPath,
+      fetched: entry.fetched,
+      hash: entry.hash,
+      error: entry.error,
+    })),
+    errors: [...externalErrors],
   };
 
   const summaryContent = renderIndexSummary(state);
@@ -502,6 +607,20 @@ function readPriorComponentHashes(priorState: unknown): Map<string, string> {
   return hashes;
 }
 
+function readPriorExternalHashes(priorState: unknown): Map<string, string> {
+  const hashes = new Map<string, string>();
+  if (!priorState || typeof priorState !== 'object') return hashes;
+  const external = (priorState as { external?: unknown }).external;
+  if (!Array.isArray(external)) return hashes;
+  for (const entry of external) {
+    if (!entry || typeof entry !== 'object') continue;
+    const sourceId = (entry as { sourceId?: unknown }).sourceId;
+    const hash = (entry as { hash?: unknown }).hash;
+    if (typeof sourceId === 'string' && typeof hash === 'string') hashes.set(sourceId, hash);
+  }
+  return hashes;
+}
+
 function readComponentArtifactHash(artifactPath: string): string | undefined {
   if (!existsSync(artifactPath)) return undefined;
   const content = readFileSync(artifactPath, 'utf8');
@@ -546,8 +665,106 @@ function createEmptyIndexState(paths: IndexPaths, options: IndexOptions, indexed
 }
 
 const COMPONENT_FRONTMATTER_TYPE = 'component-spec';
+const EXTERNAL_FRONTMATTER_TYPE = 'external-spec';
 const SUMMARY_FRONTMATTER_TYPE = 'index-summary';
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+function collectPackageResourceExternalEntries(paths: IndexPaths, indexedAt: string): ExternalEntry[] {
+  const entries = new Map<string, ExternalEntry>();
+  addPackageResourceFile(entries, paths, 'references/ralph-resource-manifest.v1.json', indexedAt, 'Ralph package resource manifest');
+
+  const manifestPath = resolve(PACKAGE_ROOT, 'references', 'ralph-resource-manifest.v1.json');
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Array<{ piPath?: unknown; kind?: unknown; notes?: unknown }>;
+      for (const resource of Array.isArray(manifest) ? manifest : []) {
+        if (typeof resource.piPath !== 'string') continue;
+        addPackageResourceFile(
+          entries,
+          paths,
+          resource.piPath,
+          indexedAt,
+          typeof resource.notes === 'string' ? resource.notes : `Packaged Ralph ${String(resource.kind ?? 'resource')}`,
+        );
+      }
+    } catch (_error) {
+      // The manifest file itself is already indexed above; malformed contents should not block other package resources.
+    }
+  }
+
+  for (const resourceDirectory of ['skills', 'agents', 'prompts']) {
+    collectPackageResourceDirectory(entries, paths, resourceDirectory, indexedAt);
+  }
+
+  return [...entries.values()];
+}
+
+function collectPackageResourceDirectory(entries: Map<string, ExternalEntry>, paths: IndexPaths, relativeDirectory: string, indexedAt: string): void {
+  const directoryPath = resolve(PACKAGE_ROOT, relativeDirectory);
+  if (!existsSync(directoryPath)) return;
+  for (const filePath of walkPackageResourceFiles(directoryPath)) {
+    const relativeResourcePath = normalizePathSeparators(relative(PACKAGE_ROOT, filePath));
+    addPackageResourceFile(entries, paths, relativeResourcePath, indexedAt, `Packaged Ralph resource ${relativeResourcePath}`);
+  }
+}
+
+function* walkPackageResourceFiles(currentPath: string): Generator<string> {
+  const entries = readdirSync(currentPath, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    const entryPath = join(currentPath, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkPackageResourceFiles(entryPath);
+      continue;
+    }
+    if (entry.isFile()) yield entryPath;
+  }
+}
+
+function addPackageResourceFile(
+  entries: Map<string, ExternalEntry>,
+  paths: IndexPaths,
+  relativeResourcePath: string,
+  indexedAt: string,
+  summary: string,
+): void {
+  const normalizedResourcePath = normalizePathSeparators(relativeResourcePath);
+  if (entries.has(normalizedResourcePath)) return;
+  const resourcePath = resolve(PACKAGE_ROOT, normalizedResourcePath);
+  if (!existsSync(resourcePath) || !statSync(resourcePath).isFile()) return;
+  const source = readFileSync(resourcePath, 'utf8');
+  entries.set(normalizedResourcePath, {
+    sourceType: 'skill',
+    sourceId: normalizedResourcePath,
+    artifactPath: getExternalIndexPath(paths, normalizedResourcePath),
+    hash: createHash('sha256').update(source).digest('hex'),
+    fetched: indexedAt,
+    summary,
+  });
+}
+
+function normalizeFetchedExternalEntry(
+  sourceType: ExternalSourceType,
+  sourceId: string,
+  fetched: Partial<ExternalEntry> | string | undefined,
+  paths: IndexPaths,
+  indexedAt: string,
+): ExternalEntry {
+  const fetchedObject = typeof fetched === 'object' && fetched !== null ? fetched : {};
+  const summary = typeof fetched === 'string' ? fetched : String(fetchedObject.summary ?? `Fetched ${sourceId}`);
+  const hashSource = typeof fetched === 'string' ? fetched : JSON.stringify(fetchedObject);
+  return {
+    sourceType,
+    sourceId,
+    artifactPath: getExternalIndexPath(paths, sourceId),
+    hash: createHash('sha256').update(hashSource).digest('hex'),
+    fetched: typeof fetchedObject.fetched === 'string' ? fetchedObject.fetched : indexedAt,
+    summary,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function renderComponentSpec(component: ComponentEntry, indexedAt: string): string {
   const fallback = minimalComponentSpecTemplate();
@@ -568,6 +785,24 @@ function renderComponentSpec(component: ComponentEntry, indexedAt: string): stri
 
 function minimalComponentSpecTemplate(): string {
   return `---\ntype: ${COMPONENT_FRONTMATTER_TYPE}\ngenerated: true\nsource: {{SOURCE_PATH}}\nhash: {{CONTENT_HASH}}\ncategory: {{CATEGORY}}\nindexed: {{TIMESTAMP}}\n---\n\n# {{COMPONENT_NAME}}\n\n## Purpose\n{{AUTO_GENERATED_SUMMARY}}\n\n## Source\n- Path: {{SOURCE_PATH}}\n- Category: {{CATEGORY}}\n- Hash: {{CONTENT_HASH}}\n- Indexed: {{TIMESTAMP}}\n`;
+}
+
+function renderExternalSpec(entry: ExternalEntry): string {
+  const fallback = minimalExternalSpecTemplate();
+  return renderTemplate(readPackagedTemplate('external-spec.md') ?? fallback, {
+    SOURCE_TYPE: entry.sourceType,
+    SOURCE_ID: entry.sourceId,
+    FETCH_TIMESTAMP: entry.fetched,
+    RESOURCE_NAME: basename(entry.sourceId, extname(entry.sourceId)) || entry.sourceId,
+    CONTENT_SUMMARY: entry.error ? `${entry.summary}\n\nError: ${entry.error}` : entry.summary,
+    SECTIONS: [],
+    KEYWORDS: [entry.sourceType, basename(entry.sourceId)].filter(Boolean).join(', '),
+    RELATED_COMPONENTS: 'None',
+  });
+}
+
+function minimalExternalSpecTemplate(): string {
+  return `---\ntype: ${EXTERNAL_FRONTMATTER_TYPE}\ngenerated: true\nsource-type: {{SOURCE_TYPE}}\nsource-id: {{SOURCE_ID}}\nfetched: {{FETCH_TIMESTAMP}}\n---\n\n# {{RESOURCE_NAME}}\n\n## Summary\n{{CONTENT_SUMMARY}}\n`;
 }
 
 function renderIndexSummary(state: IndexStateV1): string {
