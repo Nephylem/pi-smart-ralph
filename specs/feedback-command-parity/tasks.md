@@ -162,7 +162,7 @@
   - _Requirements: FR-2, FR-3, AC-1.1, AC-2.1, AC-2.2, AC-2.4_
   - _Design: confirmation data flow; draft-first execution_
 
-- [ ] 2.6 [YELLOW] Refactor: extract authorization and draft-cloning helpers
+- [x] 2.6 [YELLOW] Refactor: extract authorization and draft-cloning helpers
   - **Do**:
     1. Centralize the decision that turns an unconfirmed draft into a confirmed draft.
     2. Keep user-facing no-write reasons stable for verifier assertions.

@@ -9715,7 +9715,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	const ralphFeedbackCommandHandler = createFeedbackCommandHandler(notify);
-	// /ralph-feedback safe help text, runtime adapters, and command metadata are centralized in feedback.ts.
+	// /ralph-feedback safe help text, runtime adapters, authorization helpers, and command metadata are centralized in feedback.ts.
 
 	pi.registerCommand("ralph-help", {
 		description: "Show Smart Ralph Pi shell help",

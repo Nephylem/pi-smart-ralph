@@ -132,6 +132,42 @@ export function cloneFeedbackDraftWithConfirmation(
 	};
 }
 
+export type FeedbackNoWriteReason = "confirmation-declined" | "confirmation-required";
+
+export interface FeedbackAuthorizationDecision {
+	confirmedBy: Exclude<FeedbackConfirmedBy, "unconfirmed"> | null;
+	noWriteReason: FeedbackNoWriteReason | null;
+}
+
+export function createFeedbackAuthorizationDecision(
+	args: FeedbackCommandArgs,
+	runtime: Pick<FeedbackCommandRuntime, "hasUI" | "confirm">,
+	confirmed: boolean,
+): FeedbackAuthorizationDecision {
+	if (confirmed && runtime.hasUI && runtime.confirm) {
+		return { confirmedBy: "ui", noWriteReason: null };
+	}
+
+	if (args.yes) {
+		return { confirmedBy: "yes-flag", noWriteReason: null };
+	}
+
+	return {
+		confirmedBy: null,
+		noWriteReason: runtime.hasUI && runtime.confirm ? "confirmation-declined" : "confirmation-required",
+	};
+}
+
+export function applyFeedbackAuthorizationDecision(
+	draft: FeedbackIssueDraftV1,
+	decision: FeedbackAuthorizationDecision,
+): { confirmedDraft: FeedbackIssueDraftV1 | null; noWriteReason: FeedbackNoWriteReason | null } {
+	return {
+		confirmedDraft: decision.confirmedBy ? cloneFeedbackDraftWithConfirmation(draft, decision.confirmedBy) : null,
+		noWriteReason: decision.noWriteReason,
+	};
+}
+
 export async function resolveFeedbackMessageFromRuntime(
 	message: string | null | undefined,
 	runtime: FeedbackRuntimeAdapters,
@@ -195,21 +231,12 @@ export async function authorizeFeedbackDraft(
 	draft: FeedbackIssueDraftV1,
 	args: FeedbackCommandArgs,
 	runtime: FeedbackCommandRuntime,
-): Promise<{ confirmedDraft: FeedbackIssueDraftV1 | null }> {
-	if (runtime.hasUI && runtime.confirm) {
-		const confirmed = await runtime.confirm("Submit feedback to GitHub?", renderFeedbackFallback(draft));
-		return {
-			confirmedDraft: confirmed ? cloneFeedbackDraftWithConfirmation(draft, "ui") : null,
-		};
-	}
-
-	if (args.yes) {
-		return {
-			confirmedDraft: cloneFeedbackDraftWithConfirmation(draft, "yes-flag"),
-		};
-	}
-
-	return { confirmedDraft: null };
+): Promise<{ confirmedDraft: FeedbackIssueDraftV1 | null; noWriteReason: FeedbackNoWriteReason | null }> {
+	const confirmed = runtime.hasUI && runtime.confirm
+		? await runtime.confirm("Submit feedback to GitHub?", renderFeedbackFallback(draft))
+		: false;
+	const decision = createFeedbackAuthorizationDecision(args, runtime, confirmed);
+	return applyFeedbackAuthorizationDecision(draft, decision);
 }
 
 async function executeFeedbackWrite(runtime: FeedbackCommandRuntime): Promise<void> {
