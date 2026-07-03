@@ -35,7 +35,7 @@
   - _Requirements: FR-1_
   - _Design: `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] P1V1 [VERIFY] Compatibility checkpoint: minimal load triplet
+- [x] P1V1 [VERIFY] Compatibility checkpoint: minimal load triplet
   - **Do**:
     1. Re-run the targeted `minimal-state-load` verifier case immediately after the first TDD triplet.
   - **Files**: None
@@ -45,7 +45,7 @@
   - _Requirements: FR-1; AC-1.1_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
 
-- [ ] 1.4 [RED] Failing test: repair/save backfills Pi-required epic-state fields
+- [x] 1.4 [RED] Failing test: repair/save backfills Pi-required epic-state fields
   - **Do**:
     1. Add `minimal-state-repair` verifier case.
     2. Assert repair/save adds `schemaVersion`, path fields, timestamps, and `validation` without deleting original-compatible fields.

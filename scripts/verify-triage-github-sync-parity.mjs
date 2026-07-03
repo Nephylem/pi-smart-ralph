@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,6 +11,7 @@ const temporaryFixtureRoots = [];
 
 const cases = new Map([
   ['minimal-state-load', verifyMinimalStateLoad],
+  ['minimal-state-repair', verifyMinimalStateRepair],
 ]);
 
 process.on('exit', () => {
@@ -119,25 +120,7 @@ async function loadEpicsModule() {
 async function verifyMinimalStateLoad() {
   const fixtureRoot = createFixtureRoot('minimal-state-load');
   const epicName = 'demo-epic';
-  const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
-  mkdirSync(epicDir, { recursive: true });
-
-  writeFileSync(join(epicDir, '.epic-state.json'), `${JSON.stringify({
-    name: epicName,
-    goal: 'Keep original epic state resumable',
-    specs: [
-      {
-        name: 'alpha-child',
-        status: 'completed',
-        dependencies: ['shared-dependency', 'alpha-prereq'],
-      },
-      {
-        name: 'beta-child',
-        status: 'in_progress',
-        dependencies: ['alpha-child', 'shared-dependency'],
-      },
-    ],
-  }, null, 2)}\n`);
+  seedMinimalEpicStateFixture(fixtureRoot, epicName);
 
   const { safeReadEpicState } = await loadEpicsModule();
   const read = safeReadEpicState(epicName, { cwd: fixtureRoot });
@@ -185,6 +168,74 @@ async function verifyMinimalStateLoad() {
   }
 
   return { summary: `loaded ${state.specs.length} child specs from ${root}` };
+}
+
+async function verifyMinimalStateRepair() {
+  const fixtureRoot = createFixtureRoot('minimal-state-repair');
+  const epicName = 'demo-epic';
+  const statePath = seedMinimalEpicStateFixture(fixtureRoot, epicName);
+
+  const { mergeEpicState } = await loadEpicsModule();
+  mergeEpicState(epicName, {
+    output: 'spec-files',
+  }, { cwd: fixtureRoot });
+
+  const persisted = JSON.parse(readFileSync(statePath, 'utf8'));
+  const failures = [];
+
+  const requiredTopLevelFields = ['schemaVersion', 'basePath', 'epicPath', 'researchPath', 'progressPath', 'createdAt', 'updatedAt', 'validation'];
+  for (const field of requiredTopLevelFields) {
+    if (!(field in persisted)) {
+      failures.push(`expected repair/save to persist missing field ${field}`);
+    }
+  }
+
+  if (persisted.name !== epicName) failures.push(`expected name ${JSON.stringify(epicName)} to be preserved but got ${JSON.stringify(persisted.name)}`);
+  if (persisted.goal !== 'Keep original epic state resumable') failures.push(`expected goal to be preserved but got ${JSON.stringify(persisted.goal)}`);
+
+  const childStatuses = Array.isArray(persisted.specs) ? persisted.specs.map((spec) => spec?.status) : [];
+  if (JSON.stringify(childStatuses) !== JSON.stringify(['completed', 'in_progress'])) {
+    failures.push(`expected child statuses to be preserved but got ${JSON.stringify(childStatuses)}`);
+  }
+
+  const dependencyOrder = Array.isArray(persisted.specs)
+    ? persisted.specs.map((spec) => Array.isArray(spec?.dependencies) ? [...spec.dependencies] : [])
+    : [];
+  if (JSON.stringify(dependencyOrder) !== JSON.stringify([
+    ['shared-dependency', 'alpha-prereq'],
+    ['alpha-child', 'shared-dependency'],
+  ])) {
+    failures.push(`expected dependency order to be preserved but got ${JSON.stringify(dependencyOrder)}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`minimal epic-state repair/save did not backfill Pi-required fields: ${failures.join('; ')}`);
+  }
+
+  return { summary: `repaired epic state at ${statePath}` };
+}
+
+function seedMinimalEpicStateFixture(fixtureRoot, epicName) {
+  const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
+  mkdirSync(epicDir, { recursive: true });
+  const statePath = join(epicDir, '.epic-state.json');
+  writeFileSync(statePath, `${JSON.stringify({
+    name: epicName,
+    goal: 'Keep original epic state resumable',
+    specs: [
+      {
+        name: 'alpha-child',
+        status: 'completed',
+        dependencies: ['shared-dependency', 'alpha-prereq'],
+      },
+      {
+        name: 'beta-child',
+        status: 'in_progress',
+        dependencies: ['alpha-child', 'shared-dependency'],
+      },
+    ],
+  }, null, 2)}\n`);
+  return statePath;
 }
 
 await main();
