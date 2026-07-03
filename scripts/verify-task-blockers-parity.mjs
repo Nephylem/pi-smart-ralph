@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -18,7 +19,23 @@ const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
 let activeCase = requestedCase;
 
+const acceptanceChecklistCaseKey = 'acceptance-checklist';
 const cleanupCaseKey = 'cleanup';
+const acceptanceChecklistCases = [
+  'topology-classification-fixtures',
+  'commit-mode-derivation',
+  'relaxed-completion-validation-fixtures',
+  'topology-blocker-priority-contract',
+  'red-pass-evidence-contract',
+  'executor-topology-contract',
+  'planner-template-contract',
+];
+const verifierTempPrefixes = [
+  'task-blockers-topology-',
+  'task-blockers-normalization-',
+  'task-blockers-commit-mode-',
+  'task-blockers-relaxed-completion-',
+];
 const cases = new Map([
   ['topology-helper-contract', verifyTopologyHelperContract],
   ['topology-classification-fixtures', verifyTopologyClassificationFixtures],
@@ -30,6 +47,7 @@ const cases = new Map([
   ['red-pass-evidence-contract', verifyRedPassEvidenceContract],
   ['executor-topology-contract', verifyExecutorTopologyContract],
   ['planner-template-contract', verifyPlannerTemplateContract],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -49,11 +67,25 @@ async function main() {
       console.log(`PASS ${caseName}`);
     }
 
+    const cleanupResult = await runVerifierCase(cleanupCaseKey, verifyCleanupCase);
+    if (!cleanupResult.ok) {
+      printCaseFailure(cleanupResult);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${cleanupCaseKey}`);
+
     console.log(`PASS task-blockers parity verifier: ${summaries.length}/${cases.size} cases passed`);
     return;
   }
 
   if (requestedCase === cleanupCaseKey) {
+    const result = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!result.ok) {
+      printCaseFailure(result);
+      process.exitCode = 1;
+      return;
+    }
     console.log(`PASS ${requestedCase}`);
     return;
   }
@@ -514,6 +546,53 @@ async function verifyPlannerTemplateContract() {
   });
 }
 
+async function verifyAcceptanceChecklist() {
+  for (const caseName of acceptanceChecklistCases) {
+    const verifyCase = cases.get(caseName);
+    if (typeof verifyCase !== 'function') {
+      throw new Error(`acceptance checklist is missing verifier case ${caseName}`);
+    }
+
+    const result = await runVerifierCase(caseName, verifyCase);
+    if (!result.ok) {
+      throw result.error;
+    }
+  }
+
+  const packageJsonPath = join(root, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const verifyIndexScript = String(packageJson?.scripts?.['verify:index'] ?? '');
+  const verifyPackScript = String(packageJson?.scripts?.['verify:pack'] ?? '');
+
+  if (!scriptEventuallyRunsTaskBlockersCase(verifyIndexScript, acceptanceChecklistCaseKey)) {
+    expectedFail('package verification must route `npm run verify:index` through `scripts/verify-task-blockers-parity.mjs --case acceptance-checklist` so the aggregate acceptance bundle runs in normal verification.');
+  }
+
+  if (!scriptEventuallyRunsTaskBlockersCase(verifyPackScript, cleanupCaseKey)) {
+    expectedFail('package verification must route cleanup through `scripts/verify-task-blockers-parity.mjs --case cleanup` so acceptance fixtures prove temp artifacts are removed.');
+  }
+}
+
+async function verifyCleanupCase() {
+  const beforeEntries = new Set(listVerifierTempEntries());
+  let caseError = null;
+
+  try {
+    await verifyAcceptanceChecklist();
+  } catch (error) {
+    caseError = error;
+  }
+
+  const remainingEntries = listVerifierTempEntries().filter((entry) => !beforeEntries.has(entry));
+  if (remainingEntries.length > 0) {
+    expectedFail(`verifier cleanup must remove temporary artifacts; found ${JSON.stringify(remainingEntries)}`);
+  }
+
+  if (caseError) {
+    throw caseError;
+  }
+}
+
 function assertExecutorSurfaceContract({ surfaceName, source }) {
   if (!/topology preflight|preflight repo topology|repo-topology preflight/i.test(source)) {
     expectedFail(`${surfaceName} must require topology preflight before commit handling.`);
@@ -678,6 +757,15 @@ function assertFormattedWorkspaceReport(testCase, report, helper) {
   if (formattedReport !== expectedFormattedReport) {
     expectedFail(`workspace-report fixture ${testCase.name} expected ${JSON.stringify(expectedFormattedReport)} but received ${JSON.stringify(formattedReport)}`);
   }
+}
+
+function scriptEventuallyRunsTaskBlockersCase(script, caseName) {
+  return script.includes(`scripts/verify-task-blockers-parity.mjs --case ${caseName}`)
+    || script.includes(`scripts/verify-task-blockers-parity.mjs --case=${caseName}`);
+}
+
+function listVerifierTempEntries() {
+  return readdirSync(tmpdir()).filter((entry) => verifierTempPrefixes.some((prefix) => entry.startsWith(prefix)));
 }
 
 function expectedFail(message) {

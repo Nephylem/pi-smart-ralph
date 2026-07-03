@@ -375,7 +375,7 @@
   - _Requirements: FR-6, NFR-2, NFR-4_
   - _Design: Prompt contracts; Terminology consistency_
 
-- [ ] Q8 [VERIFY] Quality check: planner contract
+- [x] Q8 [VERIFY] Quality check: planner contract
   - **Do**:
     1. Run the discovered `verify:index` command after planner/template updates.
   - **Files**: None
@@ -387,7 +387,7 @@
 
 ## Phase 5: Acceptance bundle and package integration
 
-- [ ] 5.1 [RED] Failing test: acceptance bundle covers topology, commit, prompt, and `RED_PASS` regressions
+- [x] 5.1 [RED] Failing test: acceptance bundle covers topology, commit, prompt, and `RED_PASS` regressions
   - **Do**:
     1. Add `acceptance-checklist` and `cleanup` cases to the new parity verifier.
     2. Assert the acceptance bundle exercises topology enums, `Commit: None`, relaxed blocker priority, prompt contract strings, and keyed `RED_PASS` behavior.
