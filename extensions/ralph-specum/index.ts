@@ -70,6 +70,7 @@ import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, merg
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import {
 	buildRefactorFilePromptPlan,
+	buildRefactorRequest,
 	buildRefactorSectionPromptPlan,
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
@@ -9068,8 +9069,21 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				selectedSectionPlan = buildRefactorSelectedSectionPlan(selectedFilePlan, selectedSection);
 			}
 
-			void selectedFilePlan;
-			void selectedSectionPlan;
+			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
+			const prompt = [
+				"Apply one bounded Smart Ralph refactor step using this request payload.",
+				JSON.stringify(request, null, 2),
+			].join("\n\n");
+
+			await runRalphSubagent(
+				pi,
+				{
+					agentName: "ralph-refactor-specialist",
+					description: `Refactor ${selectedFilePlan.selectedFile}.md for ${plan.spec.name}`,
+					maxTurns: 50,
+				},
+				prompt,
+			);
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");
 		},

@@ -242,7 +242,7 @@
   - _Requirements: FR-4, FR-8, FR-9, AC-3.1, AC-3.2, AC-3.6_
   - _Design: `RefactorRequestV1`; coordinator delegation flow_
 
-- [ ] 3.5 [GREEN] Pass test: build bounded request payloads and dispatch one artifact at a time
+- [x] 3.5 [GREEN] Pass test: build bounded request payloads and dispatch one artifact at a time
   - **Do**:
     1. Implement `RefactorRequestV1` construction from the selected-file plan.
     2. Populate `allowedFiles` with only the current artifact path.

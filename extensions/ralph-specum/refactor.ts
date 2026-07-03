@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { findSpec, requireCurrentSpec, type RalphPathOptions, type SpecEntry } from "./paths.ts";
-import { readProgress } from "./state.ts";
+import { getProgressPath, getRalphStatePath, readProgress } from "./state.ts";
 
 export const REFACTOR_ALLOWED_FILES = Object.freeze(["requirements", "design", "tasks"]);
 export const REFACTOR_USAGE = "/ralph-refactor [spec] [--file=requirements|design|tasks]";
@@ -56,6 +56,25 @@ export type RefactorSelectedFilePlan = {
 	availableSections: string[];
 	requiresSectionChoice: boolean;
 	progressLearnings: string[];
+};
+
+export type RefactorCascadePolicy = "detect-only" | "approved" | "skipped";
+
+export type RefactorRequestV1 = {
+	spec: {
+		name: string;
+		basePath: string;
+		statePath: string;
+		progressPath: string;
+	};
+	files: Array<{
+		kind: RefactorArtifact;
+		path: string;
+	}>;
+	sections: string[];
+	progressLearnings: string[];
+	cascadePolicy: RefactorCascadePolicy;
+	allowedFiles: string[];
 };
 
 function emptyRefactorOptions() {
@@ -213,6 +232,36 @@ export function buildRefactorSelectedSectionPlan(selection: RefactorSelectionPla
 		selectedFile: selection.selectedFile,
 		availableSections: [...selection.availableSections],
 		selectedSections,
+	};
+}
+
+export function buildRefactorRequest(
+	plan: RefactorSpecPlan,
+	selectedFilePlan: RefactorSelectedFilePlan,
+	selectedSectionPlan: RefactorSelectedSectionPlan | null,
+	options: RalphPathOptions = {},
+): RefactorRequestV1 {
+	if (!selectedFilePlan.selectedFile || !selectedFilePlan.artifactPath) {
+		throw new Error("Refactor request requires a selected artifact before delegation.");
+	}
+
+	return {
+		spec: {
+			name: plan.spec.name,
+			basePath: plan.spec.absolutePath,
+			statePath: getRalphStatePath(plan.spec, options),
+			progressPath: getProgressPath(plan.spec, options),
+		},
+		files: [
+			{
+				kind: selectedFilePlan.selectedFile,
+				path: selectedFilePlan.artifactPath,
+			},
+		],
+		sections: selectedSectionPlan?.selectedSections ? [...selectedSectionPlan.selectedSections] : [],
+		progressLearnings: [...selectedFilePlan.progressLearnings],
+		cascadePolicy: "detect-only",
+		allowedFiles: [selectedFilePlan.artifactPath],
 	};
 }
 
