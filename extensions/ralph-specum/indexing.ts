@@ -223,10 +223,14 @@ export function resolveIndexPaths(input: ResolveIndexPathsInput | IndexOptions =
 export function readPriorIndexState(paths: IndexPaths): PriorIndexStateResult {
   for (const candidatePath of paths.stateReadPaths) {
     if (!existsSync(candidatePath)) continue;
-    return {
-      state: JSON.parse(readFileSync(candidatePath, 'utf8')),
-      path: candidatePath,
-    };
+    try {
+      return {
+        state: JSON.parse(readFileSync(candidatePath, 'utf8')),
+        path: candidatePath,
+      };
+    } catch (_error) {
+      return { state: null, path: candidatePath };
+    }
   }
 
   return { state: null, path: null };
@@ -322,7 +326,7 @@ export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRun
     statePath: paths.stateWritePath,
     summaryPath: paths.summaryPath,
     writes: plan.writes,
-    state: plan.state,
+    state: selectReturnedIndexState({ dryRun: options.dryRun, priorState, plannedState: plan.state }),
     message: formatIndexRunMessage(options, plan.writes),
   };
 }
@@ -616,6 +620,17 @@ export function collectGitChangedSourcePaths(paths: Pick<IndexPaths, 'scanPath'>
   }
 
   return { ok: true, paths: changedPaths };
+}
+
+function selectReturnedIndexState(input: { dryRun: boolean; priorState: unknown; plannedState: IndexStateV1 }): IndexStateV1 {
+  if (input.dryRun && isIndexStateSnapshot(input.priorState)) {
+    return JSON.parse(JSON.stringify(input.priorState)) as IndexStateV1;
+  }
+  return input.plannedState;
+}
+
+function isIndexStateSnapshot(state: unknown): state is IndexStateV1 {
+  return Boolean(state && typeof state === 'object' && Array.isArray((state as { components?: unknown }).components));
 }
 
 function readPriorComponentHashes(priorState: unknown): Map<string, string> {

@@ -457,6 +457,34 @@ async function verifyDryRunExisting() {
         `existing-index dry-run must preserve the current state snapshot while reporting planned writes; got state ${JSON.stringify(dryRunResult.state)}`,
       );
     }
+
+    const aliasSpecRoot = join(tempRoot, 'alias-spec-root');
+    const aliasIndexRoot = join(aliasSpecRoot, '.index');
+    const aliasStatePath = join(aliasIndexRoot, '.index-state.json');
+    const aliasCanonicalStatePath = join(aliasIndexRoot, 'index-state.json');
+    mkdirSync(aliasIndexRoot, { recursive: true });
+    writeFileSync(aliasStatePath, `${JSON.stringify(priorState)}\n`, 'utf8');
+    const aliasBefore = snapshotExistingIndexFiles([aliasStatePath]);
+    const aliasDryRunResult = await runRalphIndex({ cwd: projectRoot, specRoot: aliasSpecRoot, args: [...args, '--dry-run'] });
+    if (aliasDryRunResult?.ok !== true || JSON.stringify(aliasDryRunResult.state) !== JSON.stringify(priorState)) {
+      expectedFail(`dry-run must read alias state without rewriting it; got ${JSON.stringify(aliasDryRunResult)}`);
+    }
+    assertExistingIndexFilesUnchanged(aliasBefore);
+    if (existsSync(aliasCanonicalStatePath)) {
+      expectedFail('dry-run must not rewrite compatibility alias state to the canonical state path.');
+    }
+
+    const corruptSpecRoot = join(tempRoot, 'corrupt-spec-root');
+    const corruptIndexRoot = join(corruptSpecRoot, '.index');
+    const corruptStatePath = join(corruptIndexRoot, 'index-state.json');
+    mkdirSync(corruptIndexRoot, { recursive: true });
+    writeFileSync(corruptStatePath, '{ definitely not json\n', 'utf8');
+    const corruptBefore = snapshotExistingIndexFiles([corruptStatePath]);
+    const corruptDryRunResult = await runRalphIndex({ cwd: projectRoot, specRoot: corruptSpecRoot, args: [...args, '--dry-run'] });
+    if (corruptDryRunResult?.ok !== true || corruptDryRunResult?.dryRun !== true) {
+      expectedFail(`dry-run with corrupt prior state must plan without rewriting the corrupt state; got ${JSON.stringify(corruptDryRunResult)}`);
+    }
+    assertExistingIndexFilesUnchanged(corruptBefore);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

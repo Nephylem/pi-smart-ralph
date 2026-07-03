@@ -512,7 +512,7 @@
   - _Requirements: FR-4, AC-2.3_
   - _Design: Atomic writer; Edge Cases_
 
-- [ ] 2.2 [GREEN] Pass test: prevent all dry-run filesystem mutation
+- [x] 2.2 [GREEN] Pass test: prevent all dry-run filesystem mutation
   - **Do**:
     1. Guard directory creation and temp-file writes behind non-dry-run execution.
     2. Ensure state read does not rewrite corrupt or alias state during dry-run.
