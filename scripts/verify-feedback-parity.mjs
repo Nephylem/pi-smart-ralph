@@ -11,6 +11,7 @@ const cases = new Map([
   ['command-registration', verifyCommandRegistration],
   ['draft-fallback', verifyDraftFallback],
   ['headless-input', verifyHeadlessInput],
+  ['confirmation-flow', verifyConfirmationFlow],
 ]);
 
 async function main() {
@@ -280,6 +281,119 @@ async function verifyHeadlessInput() {
 
   if (failures.length > 0) {
     expectedFail(`headless input verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function verifyConfirmationFlow() {
+  const feedbackModulePath = join(root, 'extensions', 'ralph-specum', 'feedback.ts');
+  const feedback = await loadFeedbackHelper();
+  const failures = [];
+
+  if (typeof feedback?.createFeedbackCommandHandler !== 'function') {
+    failures.push('feedback.ts must export createFeedbackCommandHandler to exercise confirmation gating');
+  }
+
+  if (feedback?.createFeedbackCommandHandler) {
+    const unconfirmedNotifications = [];
+    let unconfirmedConfirmCount = 0;
+    let unconfirmedWriteCount = 0;
+    const unconfirmedHandler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+      unconfirmedNotifications.push(message);
+    });
+
+    await unconfirmedHandler('Need a safer confirmation flow', {
+      hasUI: true,
+      ui: {
+        confirm: async () => {
+          unconfirmedConfirmCount += 1;
+          return false;
+        },
+      },
+      runner: {
+        run: async () => {
+          unconfirmedWriteCount += 1;
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      },
+    });
+
+    if (unconfirmedConfirmCount !== 1) {
+      failures.push(`interactive unconfirmed flow must request one confirmation before any write; got ${unconfirmedConfirmCount}`);
+    }
+
+    if (unconfirmedWriteCount !== 0) {
+      failures.push(`unconfirmed flow must never invoke gh issue create; got ${unconfirmedWriteCount}`);
+    }
+
+    const unconfirmedMessage = unconfirmedNotifications[0] ?? '';
+    if (!unconfirmedMessage.includes('confirmedBy: unconfirmed')) {
+      failures.push('unconfirmed fallback must preserve confirmedBy: unconfirmed');
+    }
+
+    const uiNotifications = [];
+    let uiConfirmCount = 0;
+    let uiWriteCount = 0;
+    const uiHandler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+      uiNotifications.push(message);
+    });
+
+    await uiHandler('Need a safer confirmation flow', {
+      hasUI: true,
+      ui: {
+        confirm: async () => {
+          uiConfirmCount += 1;
+          return true;
+        },
+      },
+      runner: {
+        run: async () => {
+          uiWriteCount += 1;
+          return { stdout: 'https://github.com/Nephylem/pi-smart-ralph/issues/123', stderr: '', exitCode: 0 };
+        },
+      },
+    });
+
+    if (uiConfirmCount !== 1) {
+      failures.push(`interactive confirmed flow must request one confirmation; got ${uiConfirmCount}`);
+    }
+
+    if (uiWriteCount !== 1) {
+      failures.push(`interactive confirmed flow must invoke gh issue create exactly once; got ${uiWriteCount}`);
+    }
+
+    const uiMessage = uiNotifications[0] ?? '';
+    if (!uiMessage.includes('confirmedBy: ui')) {
+      failures.push('interactive confirmed flow must surface confirmedBy: ui in its draft/result output');
+    }
+
+    const yesNotifications = [];
+    let yesWriteCount = 0;
+    const yesHandler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+      yesNotifications.push(message);
+    });
+
+    await yesHandler('Need a safer confirmation flow --yes', {
+      hasUI: false,
+      runner: {
+        run: async () => {
+          yesWriteCount += 1;
+          return { stdout: 'https://github.com/Nephylem/pi-smart-ralph/issues/124', stderr: '', exitCode: 0 };
+        },
+      },
+    });
+
+    if (yesWriteCount !== 1) {
+      failures.push(`headless --yes flow must invoke gh issue create exactly once; got ${yesWriteCount}`);
+    }
+
+    const yesMessage = yesNotifications[0] ?? '';
+    if (!yesMessage.includes('confirmedBy: yes-flag')) {
+      failures.push('headless --yes flow must surface confirmedBy: yes-flag in its draft/result output');
+    }
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`confirmation flow verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
   }
 }
 

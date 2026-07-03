@@ -139,7 +139,7 @@
   - _Requirements: FR-7, AC-3.1, AC-3.2_
   - _Design: input safety flow_
 
-- [ ] 2.4 [RED] Failing verifier: confirmation gate and `confirmedBy` transitions
+- [x] 2.4 [RED] Failing verifier: confirmation gate and `confirmedBy` transitions
   - **Do**:
     1. Add a `confirmation-flow` case to `scripts/verify-feedback-parity.mjs`.
     2. Assert unconfirmed runs never invoke `gh issue create`, UI approval sets `confirmedBy = "ui"`, and `--yes` sets `confirmedBy = "yes-flag"`.
