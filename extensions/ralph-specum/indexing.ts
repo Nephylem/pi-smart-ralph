@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type IndexCategory = 'controllers' | 'services' | 'models' | 'helpers' | 'migrations' | 'other';
@@ -73,6 +73,53 @@ export interface ScanComponentFilesResult {
   skipped: Array<{ path: string; reason: string }>;
 }
 
+export type IndexAction = 'create' | 'update' | 'skip';
+export type PlannedWriteKind = 'component' | 'external' | 'summary' | 'state';
+
+export interface PlannedWrite {
+  path: string;
+  action: IndexAction;
+  kind: PlannedWriteKind;
+  content?: string;
+  reason?: string;
+  artifactPath?: string;
+  sourcePath?: string;
+}
+
+export interface IndexStateV1 {
+  indexed: string;
+  componentCount: number;
+  externalCount: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  excludes: string[];
+  paths: string[];
+  categories: Record<string, number>;
+  summaryPath: string;
+  components: Array<{ source: string; hash: string; category: IndexCategory; artifactPath: string; indexed: string }>;
+  external: Array<{ sourceType: string; sourceId: string; artifactPath: string; fetched: string; hash?: string; error?: string }>;
+  errors: Array<{ sourceType: string; sourceId: string; message: string }>;
+}
+
+export interface IndexRunInput {
+  cwd?: string;
+  specRoot?: string;
+  args?: string[];
+}
+
+export interface IndexRunResult {
+  ok: boolean;
+  dryRun: boolean;
+  indexRoot: string;
+  statePath: string;
+  summaryPath: string;
+  writes: PlannedWrite[];
+  state: IndexStateV1;
+  message: string;
+  error?: string;
+}
+
 export type IndexExcludeMatcher = (relativePath: string, entryName?: string) => boolean;
 
 const DEFAULT_INDEX_OPTIONS: IndexOptions = {
@@ -130,6 +177,57 @@ export function readPriorIndexState(paths: IndexPaths): PriorIndexStateResult {
 }
 
 export const readIndexState = readPriorIndexState;
+
+export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRunResult> {
+  const parseResult = parseIndexArgs(input.args ?? []);
+  const parsedOptions = parseResult.options;
+  const options: IndexOptions = {
+    ...parsedOptions,
+    categories: [...parsedOptions.categories],
+    excludes: [...parsedOptions.excludes],
+    specRoot: input.specRoot ?? parsedOptions.specRoot,
+    externalInputs: {
+      ...parsedOptions.externalInputs,
+      urls: [...parsedOptions.externalInputs.urls],
+      mcpResources: [...parsedOptions.externalInputs.mcpResources],
+    },
+  };
+  const paths = resolveIndexPaths({ cwd: input.cwd, scanPath: options.scanPath, specRoot: options.specRoot });
+
+  if (!parseResult.ok) {
+    return {
+      ok: false,
+      dryRun: options.dryRun,
+      indexRoot: paths.indexRoot,
+      statePath: paths.stateWritePath,
+      summaryPath: paths.summaryPath,
+      writes: [],
+      state: createEmptyIndexState(paths, options, new Date().toISOString()),
+      message: parseResult.error.message,
+      error: parseResult.error.message,
+    };
+  }
+
+  const priorState = readPriorIndexState(paths).state;
+  const scanResult = scanComponentFiles({ paths, options });
+  const plannedAt = new Date().toISOString();
+  const plan = planIndexWrites({ paths, options, components: scanResult.components, priorState, indexedAt: plannedAt });
+
+  if (!options.dryRun) {
+    writeIndexPlan(plan.writes);
+  }
+
+  return {
+    ok: true,
+    dryRun: options.dryRun,
+    indexRoot: paths.indexRoot,
+    statePath: paths.stateWritePath,
+    summaryPath: paths.summaryPath,
+    writes: plan.writes,
+    state: plan.state,
+    message: formatIndexRunMessage(options, plan.writes),
+  };
+}
 
 export function getComponentIndexPath(paths: IndexPaths, sourcePath: string, category: IndexCategory = 'other'): string {
   return resolveIndexOutputPath(paths.indexRoot, join('components', `${category}-${artifactSlug(sourcePath)}.md`), 'component artifact path');
@@ -196,6 +294,157 @@ export function assertIndexOutputPath(indexRoot: string, candidatePath: string, 
   const relativePath = relative(resolve(indexRoot), resolve(candidatePath));
   if (relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))) return;
   throw new Error(`Resolved ${label} escapes index root: ${candidatePath}`);
+}
+
+interface IndexPlanInput {
+  paths: IndexPaths;
+  options: IndexOptions;
+  components: ComponentEntry[];
+  priorState: unknown;
+  indexedAt: string;
+}
+
+interface IndexPlanResult {
+  writes: PlannedWrite[];
+  state: IndexStateV1;
+}
+
+function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
+  const priorComponentHashes = readPriorComponentHashes(input.priorState);
+  const writes: PlannedWrite[] = [];
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  for (const component of input.components) {
+    const priorHash = priorComponentHashes.get(component.sourceDisplayPath) ?? priorComponentHashes.get(component.sourcePath);
+    const action = chooseWriteAction(component.artifactPath, priorHash === component.hash, input.options.force);
+    if (action === 'create') created += 1;
+    if (action === 'update') updated += 1;
+    if (action === 'skip') skipped += 1;
+    writes.push({
+      kind: 'component',
+      action,
+      path: `${component.sourcePath} -> ${component.artifactPath}`,
+      artifactPath: component.artifactPath,
+      sourcePath: component.sourcePath,
+      content: renderComponentSpec(component, input.indexedAt),
+      reason: action === 'skip' ? 'source hash unchanged' : undefined,
+    });
+  }
+
+  const categories = countComponentsByCategory(input.components);
+  const state: IndexStateV1 = {
+    indexed: input.indexedAt,
+    componentCount: input.components.length,
+    externalCount: 0,
+    created: created + 2,
+    updated,
+    skipped,
+    excludes: [...input.options.excludes],
+    paths: [input.paths.scanPath],
+    categories,
+    summaryPath: input.paths.summaryPath,
+    components: input.components.map((component) => ({
+      source: component.sourceDisplayPath,
+      hash: component.hash,
+      category: component.category,
+      artifactPath: component.artifactPath,
+      indexed: input.indexedAt,
+    })),
+    external: [],
+    errors: [],
+  };
+
+  const summaryContent = renderIndexSummary(state);
+  const stateContent = `${JSON.stringify(state, null, 2)}\n`;
+  writes.push({
+    kind: 'summary',
+    action: chooseWriteAction(input.paths.summaryPath, false, input.options.force),
+    path: input.paths.summaryPath,
+    artifactPath: input.paths.summaryPath,
+    content: summaryContent,
+  });
+  writes.push({
+    kind: 'state',
+    action: chooseWriteAction(input.paths.stateWritePath, false, input.options.force),
+    path: input.paths.stateWritePath,
+    artifactPath: input.paths.stateWritePath,
+    content: stateContent,
+  });
+
+  return { writes, state };
+}
+
+function chooseWriteAction(pathValue: string, unchanged: boolean, force: boolean): IndexAction {
+  if (unchanged && !force) return 'skip';
+  if (existsSync(pathValue)) return 'update';
+  return 'create';
+}
+
+function readPriorComponentHashes(priorState: unknown): Map<string, string> {
+  const hashes = new Map<string, string>();
+  if (!priorState || typeof priorState !== 'object') return hashes;
+  const components = (priorState as { components?: unknown }).components;
+  if (!Array.isArray(components)) return hashes;
+  for (const component of components) {
+    if (!component || typeof component !== 'object') continue;
+    const source = (component as { source?: unknown }).source;
+    const hash = (component as { hash?: unknown }).hash;
+    if (typeof source === 'string' && typeof hash === 'string') hashes.set(source, hash);
+  }
+  return hashes;
+}
+
+function countComponentsByCategory(components: ComponentEntry[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const component of components) {
+    counts[component.category] = (counts[component.category] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function createEmptyIndexState(paths: IndexPaths, options: IndexOptions, indexedAt: string): IndexStateV1 {
+  return {
+    indexed: indexedAt,
+    componentCount: 0,
+    externalCount: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    excludes: [...options.excludes],
+    paths: [paths.scanPath],
+    categories: {},
+    summaryPath: paths.summaryPath,
+    components: [],
+    external: [],
+    errors: [],
+  };
+}
+
+function renderComponentSpec(component: ComponentEntry, indexedAt: string): string {
+  return `---\ntype: component\ngenerated: true\nsource: ${component.sourceDisplayPath}\nhash: ${component.hash}\ncategory: ${component.category}\nindexed: ${indexedAt}\n---\n\n# ${component.name}\n\n- Source: ${component.sourceDisplayPath}\n- Category: ${component.category}\n- Hash: ${component.hash}\n`;
+}
+
+function renderIndexSummary(state: IndexStateV1): string {
+  return `# Index Summary\n\n- Generated at: ${state.indexed}\n- Components: ${state.componentCount}\n- External: ${state.externalCount}\n- Created: ${state.created}\n- Updated: ${state.updated}\n- Skipped: ${state.skipped}\n`;
+}
+
+function writeIndexPlan(writes: PlannedWrite[]): void {
+  for (const write of writes) {
+    if (write.action === 'skip' || write.content === undefined) continue;
+    const targetPath = write.artifactPath ?? write.path;
+    mkdirSync(resolve(targetPath, '..'), { recursive: true });
+    const tempPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+    writeFileSync(tempPath, write.content, 'utf8');
+    renameSync(tempPath, targetPath);
+  }
+}
+
+function formatIndexRunMessage(options: IndexOptions, writes: PlannedWrite[]): string {
+  const prefix = options.dryRun ? 'Dry-run planned index writes' : 'Completed index writes';
+  const lines = writes.map((write) => `${write.action} ${write.kind} ${write.path}`);
+  return [prefix, ...lines].join('\n');
 }
 
 const DEFAULT_EXCLUDES = [

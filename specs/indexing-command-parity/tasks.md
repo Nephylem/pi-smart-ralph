@@ -176,7 +176,7 @@
   - _Requirements: FR-5, FR-7, NFR-1, AC-3.1, AC-3.4_
   - _Design: Component scanner; Technical Decisions_
 
-- [ ] Q4 [VERIFY] Quality check: scanner package verification
+- [x] Q4 [VERIFY] Quality check: scanner package verification
   - **Do**:
     1. Run discovered package verification commands after scanner changes.
   - **Files**: None
@@ -198,7 +198,7 @@
   - _Requirements: FR-3, FR-4, AC-2.1, AC-2.2_
   - _Design: Index planner; Atomic writer_
 
-- [ ] 1.14 [GREEN] Pass test: implement plan-first dry-run runner
+- [x] 1.14 [GREEN] Pass test: implement plan-first dry-run runner
   - **Do**:
     1. Add `runRalphIndex` orchestration over parser, paths, scanner, planner, and writer.
     2. Return planned writes for dry-run without creating directories.
