@@ -183,7 +183,7 @@
   - _Requirements: FR-3, FR-7, AC-1.2, AC-2.3_
   - _Design: `ImplementationCoordinator`; Data Flow_
 
-- [ ] 2.6 [YELLOW] Refactor: keep coordinator orchestration thin
+- [x] 2.6 [YELLOW] Refactor: keep coordinator orchestration thin
   - **Do**:
     1. Move task-blocker-specific branching behind helper calls.
     2. Keep `index.ts` focused on sequencing, not topology math.

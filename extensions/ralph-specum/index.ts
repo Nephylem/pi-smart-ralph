@@ -5888,6 +5888,8 @@ type CompletionValidation = {
 	output: string;
 };
 
+let pendingImplementationPromptWorkspaceReport: ReturnType<typeof analyzeTaskWorkspace> | null = null;
+
 type TaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
 
 type TaskModificationRequest = {
@@ -6554,21 +6556,23 @@ function buildImplementationPrompt(
 	options: RalphPathOptions,
 ): string {
 	const progressPath = getProgressPath(spec, options);
-	const workspaceReport = analyzeTaskWorkspace({
+	const workspaceReport = pendingImplementationPromptWorkspaceReport ?? analyzeTaskWorkspace({
 		basePath: spec.absolutePath,
 		filesDirective: task.fields["files"],
 		tasksPath: artifactPath(spec, "tasks"),
 		progressPath,
 		commitDirective: task.fields["commit"],
 	});
+	pendingImplementationPromptWorkspaceReport = null;
 	const workspaceReportText = formatTaskWorkspaceReport(workspaceReport);
+	const fallbackWorkspaceGuidance = [
+		"- Preflight workspace topology before commit handling and follow the computed report below.",
+		workspaceReport.topology === "single_repo"
+			? "- single_repo keeps existing commit-required behavior unless the task explicitly says `Commit: None`."
+			: "- Non-single_repo workspaces may complete with `commit: none` when one combined commit cannot span required files.",
+	];
 	const workspaceGuidance = definition.completionSignal === "TASK_COMPLETE"
-		? [
-			"- Preflight workspace topology before commit handling and follow the computed report below.",
-			workspaceReport.topology === "single_repo"
-				? "- single_repo keeps existing commit-required behavior unless the task explicitly says `Commit: None`."
-				: "- Non-single_repo workspaces may complete with `commit: none` when one combined commit cannot span required files.",
-		]
+		? (workspaceReport.promptGuidance ?? fallbackWorkspaceGuidance)
 		: [];
 	return [
 		`You are running one Smart Ralph implementation-loop task as ${definition.agentName}.`,
@@ -7292,6 +7296,7 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 				progressPath: getProgressPath(spec, options),
 				commitDirective: task.fields["commit"],
 			});
+			pendingImplementationPromptWorkspaceReport = workspaceReport;
 			const prompt = buildImplementationPrompt(task, definition, spec, state, options);
 			let validation: CompletionValidation;
 			let completionOutput = "";

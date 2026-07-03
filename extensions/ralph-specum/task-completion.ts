@@ -27,6 +27,7 @@ export interface TaskWorkspaceReport {
   entries: TaskWorkspaceEntry[];
   commitMode: TaskCommitMode;
   commitReason?: TaskTopology;
+  promptGuidance?: string[];
 }
 
 export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorkspaceReport {
@@ -164,6 +165,12 @@ function createTaskWorkspaceReport({ topology, entries, commitMode, commitReason
     })),
     commitMode,
     commitReason,
+    promptGuidance: [
+      '- Preflight workspace topology before commit handling and follow the computed report below.',
+      topology === 'single_repo'
+        ? '- single_repo keeps existing commit-required behavior unless the task explicitly says `Commit: None`.'
+        : '- Non-single_repo workspaces may complete with `commit: none` when one combined commit cannot span required files.',
+    ],
   };
 }
 
