@@ -303,7 +303,7 @@
   - _Requirements: NFR-1, NFR-2, AC-1.1, AC-1.2, AC-1.3, AC-1.4, AC-2.1, AC-2.2, AC-2.3, AC-2.4, AC-3.1, AC-3.2, AC-3.3, AC-4.1, AC-4.2_
   - _Design: acceptance bundle; fixture-based verifier_
 
-- [ ] 4.3 [YELLOW] Refactor: harden verifier cleanup and bundled case summaries
+- [x] 4.3 [YELLOW] Refactor: harden verifier cleanup and bundled case summaries
   - **Do**:
     1. Make `cleanup` remove verifier temp fixtures deterministically.
     2. Keep bundled summary output concise for package-script logs.

@@ -46,7 +46,7 @@ async function main() {
         process.exitCode = 1;
         return;
       }
-      console.log(`PASS ${caseName}`);
+      console.log(formatCasePass(caseName, result));
     }
 
     const cleanupResult = await runVerifierCase(cleanupCaseKey, verifyCleanupCase);
@@ -55,7 +55,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    console.log(`PASS ${cleanupCaseKey}`);
+    console.log(formatCasePass(cleanupCaseKey, cleanupResult));
 
     console.log(`PASS feedback parity verifier: ${summaries.length}/${cases.size} cases passed`);
     return;
@@ -68,7 +68,7 @@ async function main() {
       process.exitCode = 1;
       return;
     }
-    console.log(`PASS ${requestedCase}`);
+    console.log(formatCasePass(requestedCase, result));
     return;
   }
 
@@ -87,14 +87,14 @@ async function main() {
     return;
   }
 
-  console.log(`PASS ${requestedCase}`);
+  console.log(formatCasePass(requestedCase, result));
 }
 
 async function runVerifierCase(caseName, verifyCase) {
   activeCase = caseName;
   try {
-    await verifyCase();
-    return { name: caseName, ok: true };
+    const details = await verifyCase();
+    return { name: caseName, ok: true, ...(details ?? {}) };
   } catch (error) {
     return { name: caseName, ok: false, error };
   }
@@ -111,6 +111,11 @@ function printCaseFailure(result) {
 
 function countPassed(results) {
   return results.filter((result) => result.ok).length;
+}
+
+function formatCasePass(caseName, result) {
+  const summary = result?.summary;
+  return summary ? `PASS ${caseName} (${summary})` : `PASS ${caseName}`;
 }
 
 function formatError(error) {
@@ -575,11 +580,17 @@ function requiredAcceptanceChecklistCases() {
   return [...cases.keys()].filter((caseName) => caseName !== acceptanceChecklistCaseKey);
 }
 
-function cleanupVerifierTempFixtures() {
-  for (const entry of readdirSync(tmpdir(), { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    if (!verifierTempPrefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
-    rmSync(join(tmpdir(), entry.name), { recursive: true, force: true });
+function listVerifierTempEntries() {
+  return readdirSync(tmpdir(), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((entryName) => verifierTempPrefixes.some((prefix) => entryName.startsWith(prefix)))
+    .sort();
+}
+
+function cleanupVerifierTempFixtures(entryNames = listVerifierTempEntries()) {
+  for (const entryName of entryNames) {
+    rmSync(join(tmpdir(), entryName), { recursive: true, force: true });
   }
 }
 
@@ -601,19 +612,34 @@ async function verifyAcceptanceChecklist() {
       expectedFail(`acceptance checklist is missing verifier case: ${caseName}`);
     }
 
-    cleanupVerifierTempFixtures();
+    const beforeEntries = new Set(listVerifierTempEntries());
     const result = await runVerifierCase(caseName, verifyCase);
-    cleanupVerifierTempFixtures();
+    const newEntries = listVerifierTempEntries().filter((entryName) => !beforeEntries.has(entryName));
+    cleanupVerifierTempFixtures(newEntries);
+    const remainingEntries = listVerifierTempEntries().filter((entryName) => !beforeEntries.has(entryName));
+    if (remainingEntries.length > 0) {
+      expectedFail(`acceptance checklist cleanup must remove ${caseName} temp fixtures; found ${JSON.stringify(remainingEntries)}`);
+    }
     if (!result.ok) {
+      result.error.message = `${caseName}: ${result.error.message}`;
       throw result.error;
     }
   }
+
+  return { summary: `${acceptanceChecklistCases.length} bundled cases` };
 }
 
 async function verifyCleanupCase() {
   cleanupVerifierTempFixtures();
   await verifyAcceptanceChecklist();
   cleanupVerifierTempFixtures();
+
+  const remainingEntries = listVerifierTempEntries();
+  if (remainingEntries.length > 0) {
+    expectedFail(`cleanup must remove verifier temp fixtures deterministically; found ${JSON.stringify(remainingEntries)}`);
+  }
+
+  return { summary: 'no temp fixtures remain' };
 }
 
 function scriptEventuallyRunsFeedbackCase(script, caseName) {
