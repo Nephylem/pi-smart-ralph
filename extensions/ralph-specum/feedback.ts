@@ -1,7 +1,10 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 export const FEEDBACK_COMMAND_NAME = "ralph-feedback";
-export const FEEDBACK_HELP_LINE = "/ralph-feedback    Prepare feedback safely; draft-only for now and never writes remotely yet.";
+export const FEEDBACK_SAFE_COMMAND_DESCRIPTION = "Prepare feedback safely with a draft-only flow";
+export const FEEDBACK_SAFE_HELP_LINE = "/ralph-feedback    Prepare feedback safely with a draft-only flow; no remote submission yet.";
+
+export type FeedbackCommandNotify = (ctx: ExtensionCommandContext, message: string, type?: "info" | "warning") => Promise<void>;
 
 export function formatFeedbackDraftOnlyMessage(args: string): string {
 	const message = args.trim();
@@ -12,6 +15,8 @@ export function formatFeedbackDraftOnlyMessage(args: string): string {
 	].join("\n");
 }
 
-export async function runFeedbackCommand(args: string, ctx: ExtensionCommandContext, notify: (ctx: ExtensionCommandContext, message: string, type?: "info" | "warning") => Promise<void>): Promise<void> {
-	await notify(ctx, formatFeedbackDraftOnlyMessage(args));
+export function createFeedbackCommandHandler(notify: FeedbackCommandNotify) {
+	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
+		await notify(ctx, formatFeedbackDraftOnlyMessage(args));
+	};
 }

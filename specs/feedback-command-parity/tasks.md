@@ -25,7 +25,7 @@
   - _Requirements: FR-1, FR-3, AC-4.1_
   - _Design: `extensions/ralph-specum/index.ts`; `extensions/ralph-specum/feedback.ts`_
 
-- [ ] 1.3 [YELLOW] Refactor: centralize usage text and command metadata
+- [x] 1.3 [YELLOW] Refactor: centralize usage text and command metadata
   - **Do**:
     1. Move usage/help constants and thin command-surface helpers into `feedback.ts`.
     2. Keep `index.ts` focused on Pi wiring only.

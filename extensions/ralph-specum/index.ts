@@ -69,7 +69,7 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
-import { runFeedbackCommand } from "./feedback.ts";
+import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBACK_SAFE_HELP_LINE } from "./feedback.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
@@ -9714,6 +9714,9 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		return skillPath ? { skillPaths: [skillPath] } : {};
 	});
 
+	const ralphFeedbackCommandHandler = createFeedbackCommandHandler(notify);
+	// /ralph-feedback safe help text and command metadata are centralized in feedback.ts.
+
 	pi.registerCommand("ralph-help", {
 		description: "Show Smart Ralph Pi shell help",
 		handler: async (_args, ctx) => {
@@ -9724,7 +9727,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"",
 					"Commands:",
 					"/ralph-help     Show this help.",
-					"/ralph-feedback    Prepare feedback safely with a draft-only flow; no remote submission yet.",
+					FEEDBACK_SAFE_HELP_LINE,
 					"/ralph-triage       Create or resume an epic; --output spec-files|github-issues|both; --yes confirms GitHub writes.",
 					"/ralph-epic-status  Show active epic readiness; --json prints machine state, --repair fills missing stubs.",
 					"/ralph-epic-switch  Switch the active epic marker.",
@@ -9749,8 +9752,8 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("ralph-feedback", {
-		description: "Prepare feedback safely with a draft-only flow",
-		handler: async (args, ctx) => runFeedbackCommand(args, ctx, notify),
+		description: FEEDBACK_SAFE_COMMAND_DESCRIPTION,
+		handler: ralphFeedbackCommandHandler,
 	});
 
 	pi.registerCommand("ralph-model", {
