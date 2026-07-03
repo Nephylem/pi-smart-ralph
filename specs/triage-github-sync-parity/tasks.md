@@ -67,7 +67,7 @@
   - _Requirements: FR-2, AC-1.2_
   - _Design: `extensions/ralph-specum/epics.ts` compatibility boundary; `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] 1.6 [YELLOW] Refactor: isolate repair/write compatibility warnings
+- [x] 1.6 [YELLOW] Refactor: isolate repair/write compatibility warnings
   - **Do**:
     1. Centralize compatibility-warning generation for read vs save paths.
     2. Keep non-destructive read semantics intact.

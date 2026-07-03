@@ -630,8 +630,8 @@ function normalizeCompatibleEpicState(
 	state: EpicState,
 	options: RalphPathOptions,
 ): { state: EpicState; compatibilityWarnings: string[]; isCompatibilitySubset: boolean } {
-	const compatibilityWarnings = collectEpicCompatibilityWarnings(state);
-	const isCompatibilitySubset = compatibilityWarnings.length > 0;
+	const compatibility = resolveEpicCompatibilityContract(state);
+	const { compatibilityWarnings, isCompatibilitySubset } = compatibility;
 	const defaultRoot = getDefaultSpecRoot(options);
 	const now = timestamp();
 	const specs = getEpicSpecs(state).map((spec, index) => {
@@ -688,10 +688,29 @@ function collectCompatibleEpicReadWarnings(read: { state: EpicState; isCompatibi
 	return read.isCompatibilitySubset ? [] : validateEpicState(read.state).warnings;
 }
 
+function resolveEpicCompatibilityContract(state: EpicState): { compatibilityWarnings: string[]; isCompatibilitySubset: boolean } {
+	const compatibilityWarnings = collectEpicCompatibilityWarnings(state);
+	return {
+		compatibilityWarnings,
+		isCompatibilitySubset: compatibilityWarnings.length > 0,
+	};
+}
+
 function collectEpicCompatibilityWarnings(state: EpicState): string[] {
-	return hasCompatibleEpicStateGaps(state)
-		? ["Normalized original-compatible epic state in memory before strict validation."]
-		: [];
+	if (hasCompatibleEpicStateGaps(state)) {
+		return ["Normalized original-compatible epic state in memory before strict validation."];
+	}
+
+	const persistedWarnings = readCompatibilityWarnings(state.validation);
+	return persistedWarnings.length > 0 ? persistedWarnings : [];
+}
+
+function readCompatibilityWarnings(validation: EpicState["validation"]): string[] {
+	if (!isPlainObject(validation) || !Array.isArray(validation.compatibilityWarnings)) {
+		return [];
+	}
+
+	return validation.compatibilityWarnings.filter((warning): warning is string => typeof warning === "string");
 }
 
 function hasCompatibleEpicStateGaps(state: EpicState): boolean {
