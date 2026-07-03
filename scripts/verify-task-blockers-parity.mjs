@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import vm from 'node:vm';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
@@ -10,6 +20,7 @@ let activeCase = requestedCase;
 const cleanupCaseKey = 'cleanup';
 const cases = new Map([
   ['topology-helper-contract', verifyTopologyHelperContract],
+  ['topology-classification-fixtures', verifyTopologyClassificationFixtures],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -110,6 +121,139 @@ async function verifyTopologyHelperContract() {
 
   if (!/return\s*{\s*topology,\s*entries\s*,?\s*}/s.test(helperSource)) {
     expectedFail('task-completion helper must return a minimal workspace report containing topology and entries.');
+  }
+}
+
+async function verifyTopologyClassificationFixtures() {
+  const helper = loadTaskCompletionHelper();
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-topology-'));
+
+  try {
+    const singleRepo = createGitFixture(join(fixtureRoot, 'single-repo'));
+    const multiRepoOuter = createGitFixture(join(fixtureRoot, 'multi-repo', 'outer'));
+    const multiRepoInner = createGitFixture(join(fixtureRoot, 'multi-repo', 'outer', 'nested-repo'));
+    const repoPlusNonRepo = createGitFixture(join(fixtureRoot, 'repo-plus-nonrepo', 'repo'));
+    const noRepoRoot = join(fixtureRoot, 'no-repo');
+    mkdirSync(noRepoRoot, { recursive: true });
+
+    const casesToVerify = [
+      {
+        name: 'single_repo',
+        expectedTopology: 'single_repo',
+        input: createWorkspaceInput({
+          specDir: join(singleRepo, 'specs', 'single'),
+          taskFiles: [join(singleRepo, 'src', 'task.ts')],
+        }),
+      },
+      {
+        name: 'multi_repo',
+        expectedTopology: 'multi_repo',
+        input: createWorkspaceInput({
+          specDir: join(multiRepoOuter, 'specs', 'multi'),
+          taskFiles: [join(multiRepoInner, 'src', 'task.ts')],
+        }),
+      },
+      {
+        name: 'repo_plus_nonrepo',
+        expectedTopology: 'repo_plus_nonrepo',
+        input: createWorkspaceInput({
+          specDir: join(fixtureRoot, 'repo-plus-nonrepo', 'external-spec'),
+          taskFiles: [join(repoPlusNonRepo, 'src', 'task.ts')],
+        }),
+      },
+      {
+        name: 'no_repo',
+        expectedTopology: 'no_repo',
+        input: createWorkspaceInput({
+          specDir: join(noRepoRoot, 'specs', 'none'),
+          taskFiles: [join(noRepoRoot, 'src', 'task.ts')],
+        }),
+      },
+    ];
+
+    for (const testCase of casesToVerify) {
+      materializeWorkspaceInput(testCase.input);
+      const report = helper.analyzeTaskWorkspace(testCase.input);
+      assertTopologyCase(testCase, report);
+      assertClassificationKinds(testCase, report);
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+function loadTaskCompletionHelper() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'task-completion.ts');
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const executableSource = transpileTaskCompletionSource(helperSource);
+  const context = {
+    module: { exports: {} },
+    exports: {},
+  };
+
+  vm.runInNewContext(executableSource, context, { filename: helperPath });
+  return context.module.exports;
+}
+
+function transpileTaskCompletionSource(source) {
+  return source
+    .replace(/export\s+type\s+[\s\S]*?;\n/g, '')
+    .replace(/export\s+interface\s+[\s\S]*?\n}\n/g, '')
+    .replace(/export\s+function\s+analyzeTaskWorkspace\(([^)]*)\)\s*:\s*TaskWorkspaceReport\s*{/m, 'function analyzeTaskWorkspace($1) {')
+    .replace(/export\s+function\s+classifyTaskWorkspace\(([^)]*)\)\s*:\s*TaskTopology\s*{/m, 'function classifyTaskWorkspace($1) {')
+    .replace(/input:\s*TaskWorkspaceInput\s*=\s*{}/g, 'input = {}')
+    .replace(/entries:\s*TaskWorkspaceEntry\[\]\s*=\s*\[\]/g, 'entries = []')
+    .replace(/\(repoRoot\):\s*repoRoot is string\s*=>\s*Boolean\(repoRoot\)/g, '(repoRoot) => Boolean(repoRoot)')
+    .concat('\nmodule.exports = { analyzeTaskWorkspace, classifyTaskWorkspace };\n');
+}
+
+function createGitFixture(dirPath) {
+  mkdirSync(dirPath, { recursive: true });
+  execFileSync('git', ['init'], { cwd: dirPath, stdio: 'ignore' });
+  return dirPath;
+}
+
+function createWorkspaceInput({ specDir, taskFiles }) {
+  return {
+    basePath: specDir,
+    taskFiles,
+    tasksPath: join(specDir, 'tasks.md'),
+    progressPath: join(specDir, '.progress.md'),
+    commitDirective: '`test(task-blockers): fixture`',
+  };
+}
+
+function materializeWorkspaceInput(input) {
+  writeText(input.tasksPath, '# tasks\n');
+  writeText(input.progressPath, '# progress\n');
+  for (const taskFile of input.taskFiles) {
+    writeText(taskFile, '// task file\n');
+  }
+}
+
+function writeText(filePath, content) {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content, 'utf8');
+}
+
+function assertTopologyCase(testCase, report) {
+  if (report.topology !== testCase.expectedTopology) {
+    expectedFail(`topology fixture ${testCase.name} expected ${testCase.expectedTopology} but received ${report.topology}`);
+  }
+}
+
+function assertClassificationKinds(testCase, report) {
+  const normalizedPaths = new Map((report.entries ?? []).map((entry) => [resolve(entry.path), entry.kind]));
+  const expectedKinds = [
+    [resolve(testCase.input.tasksPath), 'tasks_md'],
+    [resolve(testCase.input.progressPath), 'progress_md'],
+    ...testCase.input.taskFiles.map((taskFile) => [resolve(taskFile), 'task_file']),
+  ];
+
+  for (const [expectedPath, expectedKind] of expectedKinds) {
+    if (normalizedPaths.get(expectedPath) !== expectedKind) {
+      expectedFail(`topology fixture ${testCase.name} must classify ${expectedKind} input ${expectedPath}`);
+    }
   }
 }
 

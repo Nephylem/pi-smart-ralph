@@ -60,7 +60,7 @@
   - _Requirements: FR-11, NFR-2, NFR-3_
   - _Design: Existing Patterns to Follow; `scripts/verify-task-blockers-parity.mjs`_
 
-- [ ] Q1 [VERIFY] Quality check: parity harness baseline
+- [x] Q1 [VERIFY] Quality check: parity harness baseline
   - **Do**:
     1. Run the discovered `verify:index` command after adding the new verifier harness.
   - **Files**: None
@@ -70,7 +70,7 @@
   - _Requirements: FR-11, NFR-3_
   - _Design: package verification wiring_
 
-- [ ] 1.4 [RED] Failing test: classify `single_repo`, `multi_repo`, `repo_plus_nonrepo`, and `no_repo`
+- [x] 1.4 [RED] Failing test: classify `single_repo`, `multi_repo`, `repo_plus_nonrepo`, and `no_repo`
   - **Do**:
     1. Add temp-fixture cases covering the four required topology enums.
     2. Assert task files plus `tasks.md` and `.progress.md` are all part of the classification input.
