@@ -5,6 +5,7 @@ const requestedCase = parseCaseArg(process.argv.slice(2));
 
 const cases = new Map([
   ['parser-unknown', verifyParserUnknown],
+  ['parser-options', verifyParserOptions],
 ]);
 
 async function main() {
@@ -38,12 +39,7 @@ function parseCaseArg(args) {
 }
 
 async function verifyParserUnknown() {
-  const helper = await loadIndexingHelper();
-  const parseIndexArgs = helper?.parseIndexArgs;
-
-  if (typeof parseIndexArgs !== 'function') {
-    expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
-  }
+  const parseIndexArgs = await loadParseIndexArgs();
 
   const defaultsResult = parseIndexArgs([]);
   assertStableDefaultShape(defaultsResult, 'default parse result');
@@ -60,6 +56,54 @@ async function verifyParserUnknown() {
   }
 
   assertStableDefaultShape(result, 'unknown option parse result');
+}
+
+async function verifyParserOptions() {
+  const parseIndexArgs = await loadParseIndexArgs();
+
+  const result = parseIndexArgs([
+    '--path',
+    'src/features',
+    '--type',
+    'services,controllers',
+    '--exclude',
+    'node_modules',
+    '--exclude',
+    'dist/**',
+    '--dry-run',
+    '--force',
+    '--quick',
+  ]);
+
+  if (result?.ok !== true) {
+    expectedFail(`parity flags must parse successfully; got ${stringifyParseResult(result)}`);
+  }
+
+  assertStableDefaultShape(result, 'parity option parse result');
+
+  const options = result.options;
+  assertEqual(options.scanPath, 'src/features', '--path value');
+  assertArrayEqual(options.categories, ['services', 'controllers'], 'comma-list --type values');
+  assertArrayEqual(options.excludes, ['node_modules', 'dist/**'], 'repeated --exclude values');
+  assertEqual(options.dryRun, true, '--dry-run flag');
+  assertEqual(options.force, true, '--force flag');
+  assertEqual(options.changed, false, '--changed default when omitted');
+  assertEqual(options.quick, true, '--quick flag');
+
+  const changedResult = parseIndexArgs(['--changed']);
+  if (changedResult?.ok !== true || changedResult.options.changed !== true) {
+    expectedFail(`--changed must parse successfully when used without --force; got ${stringifyParseResult(changedResult)}`);
+  }
+
+  const conflictResult = parseIndexArgs(['--force', '--changed']);
+  const conflictError = String(conflictResult?.error?.message ?? conflictResult?.error ?? conflictResult?.message ?? '');
+  if (conflictResult?.ok !== false || !conflictError.includes('--force') || !conflictError.includes('--changed')) {
+    expectedFail(
+      `--force --changed must fail before scanning with both flag names in the error; got ${stringifyParseResult(
+        conflictResult,
+      )}`,
+    );
+  }
 }
 
 function assertStableDefaultShape(result, label) {
@@ -85,6 +129,17 @@ function assertStableDefaultShape(result, label) {
   }
 }
 
+async function loadParseIndexArgs() {
+  const helper = await loadIndexingHelper();
+  const parseIndexArgs = helper?.parseIndexArgs;
+
+  if (typeof parseIndexArgs !== 'function') {
+    expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  return parseIndexArgs;
+}
+
 async function loadIndexingHelper() {
   const helperUrl = new URL('../extensions/ralph-specum/indexing.ts', import.meta.url);
   try {
@@ -93,6 +148,25 @@ async function loadIndexingHelper() {
     if (isExpectedMissingHelperError(error)) return null;
     throw error;
   }
+}
+
+function assertEqual(actual, expected, label) {
+  if (actual !== expected) {
+    expectedFail(`${label} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assertArrayEqual(actual, expected, label) {
+  if (!Array.isArray(actual) || actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+    expectedFail(`${label} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function stringifyParseResult(result) {
+  return JSON.stringify(result, (_key, value) => {
+    if (value instanceof Error) return { message: value.message };
+    return value;
+  });
 }
 
 function isExpectedMissingHelperError(error) {
@@ -107,7 +181,7 @@ function isExpectedMissingHelperError(error) {
 }
 
 function expectedFail(message) {
-  console.error(`EXPECTED_FAIL parser-unknown: ${message}`);
+  console.error(`EXPECTED_FAIL ${requestedCase}: ${message}`);
   process.exit(1);
 }
 

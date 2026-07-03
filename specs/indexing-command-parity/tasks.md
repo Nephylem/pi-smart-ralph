@@ -38,7 +38,7 @@
   - _Requirements: FR-2, NFR-5, AC-1.3_
   - _Design: Index option parser; Technical Decisions_
 
-- [ ] Q1 [VERIFY] Quality check: package verification baseline
+- [x] Q1 [VERIFY] Quality check: package verification baseline
   - **Do**:
     1. Run package verification commands discovered in research.md Quality Commands.
   - **Files**: None
@@ -48,7 +48,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy; Existing Patterns to Follow_
 
-- [ ] 1.4 [RED] Failing test: parity flags parse and invalid flag combinations fail
+- [x] 1.4 [RED] Failing test: parity flags parse and invalid flag combinations fail
   - **Do**:
     1. Add a `parser-options` verifier case for `--path`, `--type`, `--exclude`, `--dry-run`, `--force`, `--changed`, and `--quick`.
     2. Assert comma-list `--type` and repeated `--exclude` values are preserved.
