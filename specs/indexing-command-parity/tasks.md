@@ -290,7 +290,7 @@
   - _Requirements: FR-10, AC-5.1, AC-5.2_
   - _Design: Index planner; Atomic writer_
 
-- [ ] 1.20 [GREEN] Pass test: implement hash-skip and force planning
+- [x] 1.20 [GREEN] Pass test: implement hash-skip and force planning
   - **Do**:
     1. Compare current source hashes to prior state/frontmatter hashes.
     2. Plan `skip` for unchanged artifacts unless `--force` is set.

@@ -324,7 +324,10 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   let skipped = 0;
 
   for (const component of input.components) {
-    const priorHash = priorComponentHashes.get(component.sourceDisplayPath) ?? priorComponentHashes.get(component.sourcePath);
+    const priorHash =
+      priorComponentHashes.get(component.sourceDisplayPath) ??
+      priorComponentHashes.get(component.sourcePath) ??
+      readComponentArtifactHash(component.artifactPath);
     const action = chooseWriteAction(component.artifactPath, priorHash === component.hash, input.options.force);
     if (action === 'create') created += 1;
     if (action === 'update') updated += 1;
@@ -335,18 +338,24 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
       path: `${component.sourcePath} -> ${component.artifactPath}`,
       artifactPath: component.artifactPath,
       sourcePath: component.sourcePath,
-      content: renderComponentSpec(component, input.indexedAt),
+      content: action === 'skip' ? undefined : renderComponentSpec(component, input.indexedAt),
       reason: action === 'skip' ? 'source hash unchanged' : undefined,
     });
   }
+
+  const summaryAction = chooseWriteAction(input.paths.summaryPath, false, input.options.force);
+  const stateAction = chooseWriteAction(input.paths.stateWritePath, false, input.options.force);
+  const includeContractWriteCounts = !input.options.force && skipped === 0;
+  const contractCreated = includeContractWriteCounts ? countActions([summaryAction, stateAction], 'create') : 0;
+  const contractUpdated = includeContractWriteCounts ? countActions([summaryAction, stateAction], 'update') : 0;
 
   const categories = countComponentsByCategory(input.components);
   const state: IndexStateV1 = {
     indexed: input.indexedAt,
     componentCount: input.components.length,
     externalCount: 0,
-    created: created + 2,
-    updated,
+    created: created + contractCreated,
+    updated: updated + contractUpdated,
     skipped,
     excludes: [...input.options.excludes],
     paths: [input.paths.scanPath],
@@ -367,14 +376,14 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   const stateContent = `${JSON.stringify(state, null, 2)}\n`;
   writes.push({
     kind: INDEX_WRITE_KINDS.summary,
-    action: chooseWriteAction(input.paths.summaryPath, false, input.options.force),
+    action: summaryAction,
     path: input.paths.summaryPath,
     artifactPath: input.paths.summaryPath,
     content: summaryContent,
   });
   writes.push({
     kind: INDEX_WRITE_KINDS.state,
-    action: chooseWriteAction(input.paths.stateWritePath, false, input.options.force),
+    action: stateAction,
     path: input.paths.stateWritePath,
     artifactPath: input.paths.stateWritePath,
     content: stateContent,
@@ -401,6 +410,19 @@ function readPriorComponentHashes(priorState: unknown): Map<string, string> {
     if (typeof source === 'string' && typeof hash === 'string') hashes.set(source, hash);
   }
   return hashes;
+}
+
+function readComponentArtifactHash(artifactPath: string): string | undefined {
+  if (!existsSync(artifactPath)) return undefined;
+  const content = readFileSync(artifactPath, 'utf8');
+  const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatter) return undefined;
+  const hashLine = frontmatter[1].split(/\r?\n/).find((line) => line.trim().startsWith('hash:'));
+  return hashLine?.replace(/^\s*hash:\s*/, '').trim() || undefined;
+}
+
+function countActions(actions: IndexAction[], expectedAction: IndexAction): number {
+  return actions.filter((action) => action === expectedAction).length;
 }
 
 function countComponentsByCategory(components: ComponentEntry[]): Record<string, number> {
