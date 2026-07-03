@@ -18,6 +18,7 @@ const cases = new Map([
   ['render-contract', verifyRenderContract],
   ['hash-skip-force', verifyHashSkipForce],
   ['changed-git', verifyChangedGit],
+  ['external-adapters', verifyExternalAdapters],
 ]);
 
 async function main() {
@@ -647,6 +648,153 @@ async function verifyChangedGit() {
     assertEqual(result.state?.components?.[0]?.source, 'src/services/accounts.service.ts', '--changed state component source');
   } finally {
     rmSync(gitRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyExternalAdapters() {
+  const helper = await loadIndexingHelper();
+  const parseIndexArgs = helper?.parseIndexArgs;
+  const resolveIndexPaths = helper?.resolveIndexPaths;
+  const collectExternalResources = helper?.collectExternalResources ?? helper?.collectIndexExternalResources;
+
+  if (typeof parseIndexArgs !== 'function') {
+    expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof resolveIndexPaths !== 'function') {
+    expectedFail('resolveIndexPaths is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof collectExternalResources !== 'function') {
+    expectedFail('collectExternalResources is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const manifestPath = join(root, 'references', 'ralph-resource-manifest.v1.json');
+  const manifestSource = readFileSync(manifestPath, 'utf8');
+  const manifestHash = sha256(manifestSource);
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-external-adapters-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const specRoot = join(tempRoot, 'spec-root');
+    mkdirSync(scanRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const parseResult = parseIndexArgs(['--path', scanRoot, '--quick']);
+    if (parseResult?.ok !== true) {
+      expectedFail(`external adapter fixture options must parse successfully; got ${stringifyParseResult(parseResult)}`);
+    }
+
+    const paths = resolveIndexPaths({ cwd: projectRoot, scanPath: parseResult.options.scanPath, specRoot });
+    const baseOptions = {
+      ...parseResult.options,
+      specRoot,
+      externalInputs: {
+        urls: [],
+        mcpResources: [],
+        includePackageResources: false,
+      },
+    };
+    const lazyCalls = { urls: [], mcpResources: [] };
+    const lazyAdapters = createExternalAdapterSpies(lazyCalls);
+
+    const lazyResult = await collectExternalResources({
+      paths,
+      options: baseOptions,
+      adapters: lazyAdapters,
+      indexedAt: '2026-01-02T03:04:05.000Z',
+    });
+    const lazyExternal = normalizeExternalEntries(lazyResult);
+    if (lazyCalls.urls.length !== 0 || lazyCalls.mcpResources.length !== 0) {
+      expectedFail(`URL/MCP adapters must not be called without explicit inputs; got ${JSON.stringify(lazyCalls)}`);
+    }
+    assertEqual(lazyExternal.entries.length, 0, 'no explicit external entries by default');
+
+    const packageResult = await collectExternalResources({
+      paths,
+      options: {
+        ...baseOptions,
+        externalInputs: {
+          ...baseOptions.externalInputs,
+          includePackageResources: true,
+        },
+      },
+      adapters: lazyAdapters,
+      indexedAt: '2026-01-02T03:04:05.000Z',
+    });
+    const packageExternal = normalizeExternalEntries(packageResult);
+    const manifestEntry = packageExternal.entries.find((entry) => JSON.stringify(entry).includes('references/ralph-resource-manifest.v1.json'));
+    if (!manifestEntry) {
+      expectedFail(`package resource indexing must include references/ralph-resource-manifest.v1.json; got ${JSON.stringify(packageExternal)}`);
+    }
+    if (manifestEntry.hash !== manifestHash) {
+      expectedFail(`manifest external entry must hash the packaged manifest contents; expected ${manifestHash}, got ${manifestEntry.hash}`);
+    }
+
+    const failingCalls = { urls: [], mcpResources: [] };
+    const failingAdapters = createExternalAdapterSpies(failingCalls, {
+      urlError: new Error('fixture URL fetch failure'),
+      mcpError: new Error('fixture MCP fetch failure'),
+    });
+    const failureResult = await collectExternalResources({
+      paths,
+      options: {
+        ...baseOptions,
+        externalInputs: {
+          urls: ['https://example.invalid/architecture'],
+          mcpResources: ['mcp://fixture/resource'],
+          includePackageResources: false,
+        },
+      },
+      adapters: failingAdapters,
+      indexedAt: '2026-01-02T03:04:05.000Z',
+    });
+    const failureExternal = normalizeExternalEntries(failureResult);
+
+    assertArrayEqual(failingCalls.urls, ['https://example.invalid/architecture'], 'explicit URL adapter calls');
+    assertArrayEqual(failingCalls.mcpResources, ['mcp://fixture/resource'], 'explicit MCP adapter calls');
+    if (failureExternal.ok === false) {
+      expectedFail(`external adapter failures must be recoverable, not fatal; got ${JSON.stringify(failureResult)}`);
+    }
+    assertRecoverableExternalError(failureExternal.errors, 'url', 'https://example.invalid/architecture', 'fixture URL fetch failure');
+    assertRecoverableExternalError(failureExternal.errors, 'mcp', 'mcp://fixture/resource', 'fixture MCP fetch failure');
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function createExternalAdapterSpies(calls, failures = {}) {
+  return {
+    fetchUrl: async (url) => {
+      calls.urls.push(url);
+      if (failures.urlError) throw failures.urlError;
+      return { sourceType: 'url', sourceId: url, fetched: '2026-01-02T03:04:05.000Z', summary: `Fetched ${url}` };
+    },
+    fetchMcpResource: async (resource) => {
+      calls.mcpResources.push(resource);
+      if (failures.mcpError) throw failures.mcpError;
+      return { sourceType: 'mcp', sourceId: resource, fetched: '2026-01-02T03:04:05.000Z', summary: `Fetched ${resource}` };
+    },
+  };
+}
+
+function normalizeExternalEntries(result) {
+  if (Array.isArray(result)) return { ok: true, entries: result, errors: [] };
+  return {
+    ok: result?.ok,
+    entries: result?.external ?? result?.entries ?? result?.resources ?? [],
+    errors: result?.errors ?? result?.state?.errors ?? [],
+  };
+}
+
+function assertRecoverableExternalError(errors, sourceType, sourceId, messageFragment) {
+  const error = errors.find((candidate) => {
+    const serialized = JSON.stringify(candidate);
+    return serialized.includes(sourceType) && serialized.includes(sourceId) && serialized.includes(messageFragment);
+  });
+  if (!error) {
+    expectedFail(`recoverable ${sourceType} error for ${sourceId} must be recorded; got ${JSON.stringify(errors)}`);
   }
 }
 

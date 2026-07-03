@@ -370,7 +370,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.25 [RED] Failing test: external resources use Pi-native lazy seams
+- [x] 1.25 [RED] Failing test: external resources use Pi-native lazy seams
   - **Do**:
     1. Add an `external-adapters` verifier case.
     2. Assert package resource indexing reads `references/ralph-resource-manifest.v1.json`.
