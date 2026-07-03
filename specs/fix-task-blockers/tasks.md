@@ -308,7 +308,7 @@
   - _Requirements: FR-7, FR-12, AC-2.3_
   - _Design: `agents/ralph-spec-executor.md`; `prompts/executor-prompt.md`_
 
-- [ ] 4.2 [GREEN] Pass test: update executor guidance for topology-aware completion
+- [x] 4.2 [GREEN] Pass test: update executor guidance for topology-aware completion
   - **Do**:
     1. Require repo-topology preflight before commit handling in `agents/ralph-spec-executor.md`.
     2. Mirror the same rules in `prompts/executor-prompt.md`.

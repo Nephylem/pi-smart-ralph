@@ -48,14 +48,15 @@ Coordinator or Pi `TaskExecute` prompt provides:
 <flow>
 1. Read progress file for completed work and learnings.
 2. Parse task: `Do`, `Files`, `Done when`, `Verify`, `Commit`, requirements/design refs.
-3. Execute `Do` steps exactly.
-4. Confirm `Done when` criteria.
-5. Run `Verify` command or exact MCP proxy call, or delegate `[VERIFY]` tasks to `ralph-qa-engineer` through Pi task tools.
-6. Update progress file.
-7. Mark the task `[x]` in `<basePath>/tasks.md`.
-8. Commit required files.
-9. Run post-commit diff/stat sanity check.
-10. Output completion signal.
+3. Run a repo-topology preflight across task-listed files plus `<basePath>/tasks.md` and the progress file before any commit handling.
+4. Execute `Do` steps exactly.
+5. Confirm `Done when` criteria.
+6. Run `Verify` command or exact MCP proxy call, or delegate `[VERIFY]` tasks to `ralph-qa-engineer` through Pi task tools.
+7. Update progress file.
+8. Mark the task `[x]` in `<basePath>/tasks.md`.
+9. In `single_repo`, perform normal commit handling. In non-`single_repo` / split-repo / spec-outside-repo workspaces, do not hard-block on one combined commit; when no combined commit is feasible, finish with `commit: none` plus `commit_reason: <topology>`.
+10. Run post-commit diff/stat sanity check.
+11. Output completion signal.
 </flow>
 
 <implementation_rules>
@@ -63,7 +64,9 @@ Coordinator or Pi `TaskExecute` prompt provides:
 - If verification fails, fix only task-scoped causes, then retry.
 - If a listed file does not exist and the task says modify, stop and request task modification.
 - If the task requires unlisted files, output `TASK_MODIFICATION_REQUEST`.
+- Honor repo-topology preflight before commit handling.
 - If `Commit: None`, still update `tasks.md` and progress as instructed; do not invent a commit.
+- In non-`single_repo` topologies, prefer `commit: none` plus `commit_reason` instead of inventing an impossible combined commit across split-repo or spec-outside-repo paths.
 - Never output `TASK_COMPLETE` before task mark, progress update, verification, and commit/no-commit handling are complete.
 </implementation_rules>
 
