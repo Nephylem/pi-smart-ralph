@@ -30,6 +30,11 @@ export interface TaskWorkspaceReport {
   promptGuidance?: string[];
 }
 
+export interface TaskCompletionAssessment {
+  ok: boolean;
+  blocker?: string;
+}
+
 export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorkspaceReport {
   const entries = buildWorkspaceEntries(input);
   const topology = classifyTaskWorkspace(entries);

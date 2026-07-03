@@ -218,7 +218,7 @@
   - _Requirements: FR-4, FR-9, FR-12, AC-1.3, AC-3.2_
   - _Design: Error Handling; blocker priority order_
 
-- [ ] 3.2 [GREEN] Pass test: accept non-`single_repo` success with `commit: none` plus reason
+- [x] 3.2 [GREEN] Pass test: accept non-`single_repo` success with `commit: none` plus reason
   - **Do**:
     1. Reuse the workspace report during completion validation.
     2. Allow successful non-`single_repo` completions to finish with `commit: none` and `commit_reason`.

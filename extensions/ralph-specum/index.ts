@@ -6671,8 +6671,18 @@ function formatQuestionBlockReason(lines: string[], fallback: string): string {
 	return `${fallback} ${questionLines.slice(0, 2).join(" ")}`;
 }
 
-function detectExplicitFailureReason(output: string, definition: ImplementationSubagentDefinition): string | null {
+function detectExplicitFailureReason(
+	output: string,
+	definition: ImplementationSubagentDefinition,
+	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
+): string | null {
 	if (!output.trim()) return null;
+
+	const topologyAssessment = assessTaskCompletionOutput(output, workspaceReport);
+	if (!topologyAssessment.ok && workspaceReport?.commitMode === "topology_relaxed") {
+		return topologyAssessment.blocker
+			?? `Workspace commit topology ${workspaceReport.topology} is topology_relaxed; non-single_repo completions should report commit: none with commit_reason: ${workspaceReport.commitReason ?? workspaceReport.topology} (split_repo_workspace evidence).`;
+	}
 
 	if (/TASK_MODIFICATION_REQUEST/i.test(output)) {
 		try {
@@ -6743,13 +6753,76 @@ function extractCompletionEvidence(output: string, signal: CompletionSignal): st
 	return null;
 }
 
-function validateSubagentCompletion(completion: SubagentCompletion, definition: ImplementationSubagentDefinition): CompletionValidation {
+function parseTaskCompletionFields(output: string): { commit?: string; commitReason?: string } {
+	const completionFields: { commit?: string; commitReason?: string } = {};
+
+	for (const line of output.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+
+		const commitMatch = trimmed.match(/^commit:\s*(.+)$/i);
+		if (commitMatch) {
+			completionFields.commit = String(commitMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+			continue;
+		}
+
+		const commitReasonMatch = trimmed.match(/^commit_reason:\s*(.+)$/i);
+		if (commitReasonMatch) {
+			completionFields.commitReason = String(commitReasonMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+		}
+	}
+
+	return completionFields;
+}
+
+function assessTaskCompletionOutput(
+	output: string,
+	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
+): { ok: boolean; blocker?: string } {
+	if (!workspaceReport || workspaceReport.commitMode !== "topology_relaxed") {
+		return { ok: true };
+	}
+
+	const completionFields = parseTaskCompletionFields(output);
+	if (completionFields.commit && completionFields.commit !== "none") {
+		return { ok: true };
+	}
+
+	if (completionFields.commit === "none" && completionFields.commitReason === workspaceReport.commitReason) {
+		return { ok: true };
+	}
+
+	const expectedCommitReason = workspaceReport.commitReason ?? workspaceReport.topology;
+	if (completionFields.commit === "none" && completionFields.commitReason && completionFields.commitReason !== expectedCommitReason) {
+		return {
+			ok: false,
+			blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so TASK_COMPLETE must report commit: none with commit_reason: ${expectedCommitReason}; received commit_reason: ${completionFields.commitReason}.`,
+		};
+	}
+	if (completionFields.commit === "none") {
+		return {
+			ok: false,
+			blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so TASK_COMPLETE must report commit: none with commit_reason: ${expectedCommitReason} (split_repo_workspace evidence).`,
+		};
+	}
+
+	return {
+		ok: false,
+		blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so a non-single_repo completion cannot rely on one combined commit across required files; report commit: none with commit_reason: ${expectedCommitReason} (split_repo_workspace evidence).`,
+	};
+}
+
+function validateSubagentCompletion(
+	completion: SubagentCompletion,
+	definition: ImplementationSubagentDefinition,
+	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
+): CompletionValidation {
 	const output = subagentCompletionOutput(completion);
 	if (!hasCompletionSignal(output, definition.completionSignal)) {
 		return {
 			ok: false,
 			signal: definition.completionSignal,
-			error: detectExplicitFailureReason(output, definition) ?? `Missing completion signal ${definition.completionSignal}.`,
+			error: detectExplicitFailureReason(output, definition, workspaceReport) ?? `Missing completion signal ${definition.completionSignal}.`,
 			output,
 		};
 	}
@@ -6759,7 +6832,7 @@ function validateSubagentCompletion(completion: SubagentCompletion, definition: 
 		return {
 			ok: false,
 			signal: definition.completionSignal,
-			error: detectExplicitFailureReason(output, definition) ?? `Completion contradicted by output pattern: ${contradiction}.`,
+			error: detectExplicitFailureReason(output, definition, workspaceReport) ?? `Completion contradicted by output pattern: ${contradiction}.`,
 			output,
 		};
 	}
@@ -6767,6 +6840,18 @@ function validateSubagentCompletion(completion: SubagentCompletion, definition: 
 	const evidence = extractCompletionEvidence(output, definition.completionSignal);
 	if (!evidence) {
 		return { ok: false, signal: definition.completionSignal, error: "Completion signal lacked verification evidence.", output };
+	}
+
+	const completionAssessment = assessTaskCompletionOutput(output, workspaceReport);
+	if (!completionAssessment.ok) {
+		return {
+			ok: false,
+			signal: definition.completionSignal,
+			error: completionAssessment.blocker
+				?? detectExplicitFailureReason(output, definition, workspaceReport)
+				?? `Workspace completion output is invalid for ${workspaceReport?.commitMode ?? "unknown"}.`,
+			output,
+		};
 	}
 
 	return { ok: true, signal: definition.completionSignal, evidence, output };
@@ -7305,7 +7390,7 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 					return startRalphSubagentStatusTicker(ctx, `implement ${task.activeForm}`, definition.agentName, agentId);
 				});
 				completionOutput = subagentCompletionOutput(completion);
-				validation = validateSubagentCompletion(completion, definition);
+				validation = validateSubagentCompletion(completion, definition, workspaceReport);
 			} catch (error) {
 				validation = {
 					ok: false,
