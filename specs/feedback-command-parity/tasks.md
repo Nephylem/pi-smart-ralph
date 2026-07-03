@@ -36,7 +36,7 @@
   - _Requirements: FR-1, FR-3, AC-4.1_
   - _Design: `extensions/ralph-specum/feedback.ts` deep module_
 
-- [ ] Q1 [VERIFY] Quality check: command surface verifier
+- [x] Q1 [VERIFY] Quality check: command surface verifier
   - **Do**:
     1. Run the dedicated verifier for registration/help behavior.
     2. Run the research `source inspection` row for command registration in `extensions/ralph-specum/index.ts`.
@@ -47,7 +47,7 @@
   - _Requirements: FR-1, FR-3, AC-4.1_
   - _Design: `scripts/verify-feedback-parity.mjs`; command registration pattern_
 
-- [ ] 1.4 [RED] Failing verifier: fixed repo draft contract and manual fallback
+- [x] 1.4 [RED] Failing verifier: fixed repo draft contract and manual fallback
   - **Do**:
     1. Add a `draft-fallback` case to `scripts/verify-feedback-parity.mjs`.
     2. Assert `targetRepo` resolves from packaged `package.json` `bugs.url`, `sourceCommand = "/ralph-feedback"`, `confirmedBy = "unconfirmed"`, and the fallback prints the same draft fields plus a prefilled `issues/new` URL.

@@ -9,6 +9,7 @@ let activeCase = requestedCase;
 
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
+  ['draft-fallback', verifyDraftFallback],
 ]);
 
 async function main() {
@@ -107,6 +108,53 @@ async function verifyCommandRegistration() {
 
   if (failures.length > 0) {
     expectedFail(`command registration source inspection failed for ${commandSourcePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function verifyDraftFallback() {
+  const packageJsonPath = join(root, 'package.json');
+  const feedbackModulePath = join(root, 'extensions', 'ralph-specum', 'feedback.ts');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const feedbackSource = readFileSync(feedbackModulePath, 'utf8');
+  const failures = [];
+
+  const bugsUrl = packageJson?.bugs?.url;
+  if (bugsUrl !== 'https://github.com/Nephylem/pi-smart-ralph/issues') {
+    failures.push(`package.json bugs.url must stay fixed to Pi Smart Ralph issues; got ${JSON.stringify(bugsUrl)}`);
+  }
+
+  const requiredExports = [
+    'resolveFeedbackTargetRepo',
+    'buildFeedbackDraft',
+    'renderFeedbackFallback',
+  ];
+  const missingExports = requiredExports.filter(
+    (name) => !new RegExp(`export\\s+function\\s+${name}\\s*\\(`, 'm').test(feedbackSource),
+  );
+  if (missingExports.length > 0) {
+    failures.push(`feedback.ts is missing expected draft/fallback exports: ${missingExports.join(', ')}`);
+  }
+
+  const requiredDraftTokens = [
+    'Nephylem/pi-smart-ralph',
+    '/ralph-feedback',
+    'unconfirmed',
+    'issues/new',
+    'targetRepo',
+    'sourceCommand',
+    'confirmedBy',
+  ];
+  const missingDraftTokens = requiredDraftTokens.filter((token) => !feedbackSource.includes(token));
+  if (missingDraftTokens.length > 0) {
+    failures.push(`feedback.ts draft/fallback source is missing ${missingDraftTokens.join(', ')}`);
+  }
+
+  if (feedbackSource.includes('tzachbon/smart-ralph')) {
+    failures.push('feedback.ts still references archived upstream repo tzachbon/smart-ralph');
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`draft fallback source inspection failed for ${feedbackModulePath}: ${failures.join('; ')}`);
   }
 }
 
