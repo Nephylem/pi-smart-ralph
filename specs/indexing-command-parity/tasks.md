@@ -500,7 +500,7 @@
 
 ## Phase 2: Additional Testing
 
-- [ ] 2.1 [RED] Failing test: dry-run preserves existing index files and mtimes
+- [x] 2.1 [RED] Failing test: dry-run preserves existing index files and mtimes
   - **Do**:
     1. Add a `dry-run-existing` verifier case with a pre-existing `.index/` fixture.
     2. Assert dry-run returns planned writes but does not change state, Markdown content, or mtimes.

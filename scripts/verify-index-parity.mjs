@@ -16,6 +16,7 @@ const cases = new Map([
   ['paths', verifyPaths],
   ['scanner', verifyScanner],
   ['dry-run', verifyDryRun],
+  ['dry-run-existing', verifyDryRunExisting],
   ['render-contract', verifyRenderContract],
   ['hash-skip-force', verifyHashSkipForce],
   ['changed-git', verifyChangedGit],
@@ -392,6 +393,69 @@ async function verifyDryRun() {
 
     if (existsSync(join(specRoot, '.index'))) {
       expectedFail('dry-run must not create a .index/ directory or files.');
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyDryRunExisting() {
+  const helper = await loadIndexingHelper();
+  const runRalphIndex = helper?.runRalphIndex;
+
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-dry-run-existing-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(tempRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const servicePath = join(servicesRoot, 'accounts.service.ts');
+    writeFileSync(servicePath, 'export class AccountsService { list() { return []; } }\n', 'utf8');
+
+    const args = ['--path', scanRoot, '--type', 'services', '--quick'];
+    const initialResult = await runRalphIndex({ cwd: projectRoot, specRoot, args });
+    if (initialResult?.ok !== true || initialResult?.dryRun !== false) {
+      expectedFail(`existing dry-run fixture setup must write an initial index; got ${JSON.stringify(initialResult)}`);
+    }
+
+    const componentWrite = findComponentWrite(initialResult.writes, servicePath);
+    const componentPath = componentWrite.artifactPath;
+    const summaryPath = join(specRoot, '.index', 'index.md');
+    const statePath = join(specRoot, '.index', 'index-state.json');
+    if (!componentPath || !existsSync(componentPath) || !existsSync(summaryPath) || !existsSync(statePath)) {
+      expectedFail(`existing dry-run fixture must include component, summary, and state files; got ${JSON.stringify(initialResult.writes)}`);
+    }
+
+    const before = snapshotExistingIndexFiles([componentPath, summaryPath, statePath]);
+    const priorState = JSON.parse(before.get(statePath).content);
+
+    writeFileSync(servicePath, 'export class AccountsService { listChanged() { return []; } }\n', 'utf8');
+
+    const dryRunResult = await runRalphIndex({ cwd: projectRoot, specRoot, args: [...args, '--dry-run'] });
+    if (dryRunResult?.ok !== true || dryRunResult?.dryRun !== true) {
+      expectedFail(`existing-index dry-run must return an ok dry-run result; got ${JSON.stringify(dryRunResult)}`);
+    }
+
+    const dryRunComponentWrite = findComponentWrite(dryRunResult.writes, servicePath);
+    assertEqual(dryRunComponentWrite.action, 'update', 'existing changed component dry-run action');
+    assertPlannedWrite(dryRunResult.writes, 'summary', 'index.md');
+    assertPlannedWrite(dryRunResult.writes, 'state', 'index-state.json');
+
+    assertExistingIndexFilesUnchanged(before);
+
+    const afterState = JSON.parse(readFileSync(statePath, 'utf8'));
+    assertEqual(JSON.stringify(afterState), JSON.stringify(priorState), 'existing dry-run on-disk state content');
+    if (JSON.stringify(dryRunResult.state) !== JSON.stringify(priorState)) {
+      expectedFail(
+        `existing-index dry-run must preserve the current state snapshot while reporting planned writes; got state ${JSON.stringify(dryRunResult.state)}`,
+      );
     }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
@@ -1041,6 +1105,34 @@ function findComponentWrite(writes, sourcePath) {
   }
 
   return write;
+}
+
+function snapshotExistingIndexFiles(paths) {
+  const snapshot = new Map();
+  for (const filePath of paths) {
+    const stats = statSync(filePath);
+    snapshot.set(filePath, {
+      content: readFileSync(filePath, 'utf8'),
+      mtimeMs: stats.mtimeMs,
+    });
+  }
+  return snapshot;
+}
+
+function assertExistingIndexFilesUnchanged(snapshot) {
+  for (const [filePath, expected] of snapshot.entries()) {
+    if (!existsSync(filePath)) {
+      expectedFail(`existing-index dry-run must not delete ${filePath}`);
+    }
+    const actualContent = readFileSync(filePath, 'utf8');
+    const actualMtimeMs = statSync(filePath).mtimeMs;
+    if (actualContent !== expected.content) {
+      expectedFail(`existing-index dry-run must preserve Markdown/state content for ${filePath}`);
+    }
+    if (actualMtimeMs !== expected.mtimeMs) {
+      expectedFail(`existing-index dry-run must preserve mtime for ${filePath}; expected ${expected.mtimeMs}, got ${actualMtimeMs}`);
+    }
+  }
 }
 
 function parseFrontmatter(markdown) {
