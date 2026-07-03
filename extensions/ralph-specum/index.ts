@@ -5880,6 +5880,19 @@ type ImplementationSubagentDefinition = SubagentRunDefinition & {
 	completionSignal: CompletionSignal;
 };
 
+const taskCompletionHelpers = analyzeTaskWorkspace as typeof analyzeTaskWorkspace & {
+	assessTaskCompletionOutput: (output: string, workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>) => { ok: boolean; blocker?: string };
+	selectTaskCompletionBlocker: (selection: {
+		topologyBlocker?: string | null;
+		modificationBlocker?: string | null;
+		verificationBlocker?: string | null;
+		fallbackBlocker: string;
+	}) => string;
+};
+
+const assessTaskCompletionOutput = taskCompletionHelpers.assessTaskCompletionOutput;
+const selectTaskCompletionBlocker = taskCompletionHelpers.selectTaskCompletionBlocker;
+
 type CompletionValidation = {
 	ok: boolean;
 	signal: CompletionSignal;
@@ -6679,57 +6692,67 @@ function detectExplicitFailureReason(
 	if (!output.trim()) return null;
 
 	const topologyAssessment = assessTaskCompletionOutput(output, workspaceReport);
-	if (!topologyAssessment.ok && workspaceReport?.commitMode === "topology_relaxed") {
-		return topologyAssessment.blocker
-			?? `Workspace commit topology ${workspaceReport.topology} is topology_relaxed; non-single_repo completions should report commit: none with commit_reason: ${workspaceReport.commitReason ?? workspaceReport.topology} (split_repo_workspace evidence).`;
-	}
+	const topologyBlocker = !topologyAssessment.ok && workspaceReport?.commitMode === "topology_relaxed"
+		? topologyAssessment.blocker
+			?? `Workspace commit topology ${workspaceReport.topology} is topology_relaxed; non-single_repo completions should report commit: none with commit_reason: ${workspaceReport.commitReason ?? workspaceReport.topology} (split_repo_workspace evidence).`
+		: null;
 
+	let modificationBlocker: string | null = null;
 	if (/TASK_MODIFICATION_REQUEST/i.test(output)) {
 		try {
 			const request = parseTaskModificationRequest(output);
-			if (request) return `Task modification requested (${request.type}) for ${request.originalTaskId}: ${request.reasoning}`;
+			modificationBlocker = request
+				? `Task modification requested (${request.type}) for ${request.originalTaskId}: ${request.reasoning}`
+				: "Task modification requested.";
 		} catch (error) {
-			return `Task modification request is invalid: ${formatError(error)}`;
+			modificationBlocker = `Task modification request is invalid: ${formatError(error)}`;
 		}
-		return "Task modification requested.";
 	}
 
 	const relevantLines = extractRelevantFailureLines(output);
+	let verificationBlocker: string | null = null;
 	if (/USER_INPUT_REQUIRED/i.test(output)) {
-		return truncateFailureReason(formatQuestionBlockReason(relevantLines, "User input required."));
-	}
-	if (/VERIFICATION_FAIL/i.test(output)) {
+		verificationBlocker = truncateFailureReason(formatQuestionBlockReason(relevantLines, "User input required."));
+	} else if (/VERIFICATION_FAIL/i.test(output)) {
 		const failureLine = relevantLines.find((line) => /\bFAIL\b|\berror\b|\bblocked\b/i.test(line));
-		return truncateFailureReason(`Verification failed: ${failureLine ?? "qa-engineer reported VERIFICATION_FAIL."}`);
+		verificationBlocker = truncateFailureReason(`Verification failed: ${failureLine ?? "qa-engineer reported VERIFICATION_FAIL."}`);
+	} else {
+		const structuredFailure = relevantLines.find((line) => /^Task\s+\S+.*FAILED$/i.test(line));
+		const structuredError = relevantLines.find((line) => /^Error:\s*/i.test(line));
+		if (structuredFailure || structuredError) {
+			verificationBlocker = truncateFailureReason([structuredFailure, structuredError].filter(Boolean).join(" "));
+		} else {
+			const commandFailurePatterns = [
+				/command not found/i,
+				/no such file or directory/i,
+				/exited with code\s+\d+/i,
+				/returned non-zero exit status/i,
+				/traceback \(most recent call last\)/i,
+				/AssertionError/i,
+				/FAILED/i,
+				/Error:/i,
+				/Exception:/i,
+				/mypy:/i,
+				/black.*would reformat/i,
+				/ruff:/i,
+				/pytest/i,
+			];
+			const commandFailure = relevantLines.find((line) => commandFailurePatterns.some((pattern) => pattern.test(line)));
+			if (commandFailure) {
+				verificationBlocker = truncateFailureReason(commandFailure);
+			} else {
+				const summary = relevantLines.slice(0, 3).join(" ");
+				if (summary) verificationBlocker = truncateFailureReason(summary);
+			}
+		}
 	}
 
-	const structuredFailure = relevantLines.find((line) => /^Task\s+\S+.*FAILED$/i.test(line));
-	const structuredError = relevantLines.find((line) => /^Error:\s*/i.test(line));
-	if (structuredFailure || structuredError) {
-		return truncateFailureReason([structuredFailure, structuredError].filter(Boolean).join(" "));
-	}
-
-	const commandFailurePatterns = [
-		/command not found/i,
-		/no such file or directory/i,
-		/exited with code\s+\d+/i,
-		/returned non-zero exit status/i,
-		/traceback \(most recent call last\)/i,
-		/AssertionError/i,
-		/FAILED/i,
-		/Error:/i,
-		/Exception:/i,
-		/mypy:/i,
-		/black.*would reformat/i,
-		/ruff:/i,
-		/pytest/i,
-	];
-	const commandFailure = relevantLines.find((line) => commandFailurePatterns.some((pattern) => pattern.test(line)));
-	if (commandFailure) return truncateFailureReason(commandFailure);
-
-	const summary = relevantLines.slice(0, 3).join(" ");
-	if (summary) return truncateFailureReason(summary);
-	return `Missing completion signal ${definition.completionSignal}.`;
+	return selectTaskCompletionBlocker({
+		topologyBlocker,
+		modificationBlocker,
+		verificationBlocker,
+		fallbackBlocker: `Missing completion signal ${definition.completionSignal}.`,
+	});
 }
 
 function extractCompletionEvidence(output: string, signal: CompletionSignal): string | null {
@@ -6751,65 +6774,6 @@ function extractCompletionEvidence(output: string, signal: CompletionSignal): st
 		if (evidence) return evidence;
 	}
 	return null;
-}
-
-function parseTaskCompletionFields(output: string): { commit?: string; commitReason?: string } {
-	const completionFields: { commit?: string; commitReason?: string } = {};
-
-	for (const line of output.split(/\r?\n/)) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-
-		const commitMatch = trimmed.match(/^commit:\s*(.+)$/i);
-		if (commitMatch) {
-			completionFields.commit = String(commitMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
-			continue;
-		}
-
-		const commitReasonMatch = trimmed.match(/^commit_reason:\s*(.+)$/i);
-		if (commitReasonMatch) {
-			completionFields.commitReason = String(commitReasonMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
-		}
-	}
-
-	return completionFields;
-}
-
-function assessTaskCompletionOutput(
-	output: string,
-	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
-): { ok: boolean; blocker?: string } {
-	if (!workspaceReport || workspaceReport.commitMode !== "topology_relaxed") {
-		return { ok: true };
-	}
-
-	const completionFields = parseTaskCompletionFields(output);
-	if (completionFields.commit && completionFields.commit !== "none") {
-		return { ok: true };
-	}
-
-	if (completionFields.commit === "none" && completionFields.commitReason === workspaceReport.commitReason) {
-		return { ok: true };
-	}
-
-	const expectedCommitReason = workspaceReport.commitReason ?? workspaceReport.topology;
-	if (completionFields.commit === "none" && completionFields.commitReason && completionFields.commitReason !== expectedCommitReason) {
-		return {
-			ok: false,
-			blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so TASK_COMPLETE must report commit: none with commit_reason: ${expectedCommitReason}; received commit_reason: ${completionFields.commitReason}.`,
-		};
-	}
-	if (completionFields.commit === "none") {
-		return {
-			ok: false,
-			blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so TASK_COMPLETE must report commit: none with commit_reason: ${expectedCommitReason} (split_repo_workspace evidence).`,
-		};
-	}
-
-	return {
-		ok: false,
-		blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so a non-single_repo completion cannot rely on one combined commit across required files; report commit: none with commit_reason: ${expectedCommitReason} (split_repo_workspace evidence).`,
-	};
 }
 
 function validateSubagentCompletion(

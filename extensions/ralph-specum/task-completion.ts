@@ -35,6 +35,13 @@ export interface TaskCompletionAssessment {
   blocker?: string;
 }
 
+export interface TaskCompletionBlockerSelection {
+  topologyBlocker?: string | null;
+  modificationBlocker?: string | null;
+  verificationBlocker?: string | null;
+  fallbackBlocker: string;
+}
+
 export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorkspaceReport {
   const entries = buildWorkspaceEntries(input);
   const topology = classifyTaskWorkspace(entries);
@@ -136,6 +143,74 @@ function normalizeTaskFiles(taskFiles, filesDirective) {
     .filter((taskFile) => taskFile.length > 0 && !/^none$/i.test(taskFile))
     .map((taskFile) => resolve(taskFile));
 }
+
+function selectTaskCompletionBlocker(selection) {
+  return selection.topologyBlocker
+    ?? selection.modificationBlocker
+    ?? selection.verificationBlocker
+    ?? selection.fallbackBlocker;
+}
+
+function parseTaskCompletionFields(output) {
+  const completionFields = {};
+
+  for (const line of output.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const commitMatch = trimmed.match(/^commit:\s*(.+)$/i);
+    if (commitMatch) {
+      completionFields.commit = String(commitMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+      continue;
+    }
+
+    const commitReasonMatch = trimmed.match(/^commit_reason:\s*(.+)$/i);
+    if (commitReasonMatch) {
+      completionFields.commitReason = String(commitReasonMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+    }
+  }
+
+  return completionFields;
+}
+
+function assessTaskCompletionOutput(
+  output,
+  workspaceReport,
+) {
+  if (!workspaceReport || workspaceReport.commitMode !== 'topology_relaxed') {
+    return { ok: true };
+  }
+
+  const completionFields = parseTaskCompletionFields(output);
+  if (completionFields.commit && completionFields.commit !== 'none') {
+    return { ok: true };
+  }
+
+  if (completionFields.commit === 'none' && completionFields.commitReason === workspaceReport.commitReason) {
+    return { ok: true };
+  }
+
+  const expectedCommitReason = workspaceReport.commitReason ?? workspaceReport.topology;
+  if (completionFields.commit === 'none' && completionFields.commitReason && completionFields.commitReason !== expectedCommitReason) {
+    return {
+      ok: false,
+      blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so TASK_COMPLETE must report commit: none with commit_reason: ${expectedCommitReason}; received commit_reason: ${completionFields.commitReason}.`,
+    };
+  }
+  if (completionFields.commit === 'none') {
+    return {
+      ok: false,
+      blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so TASK_COMPLETE must report commit: none with commit_reason: ${expectedCommitReason} (split_repo_workspace evidence).`,
+    };
+  }
+
+  return {
+    ok: false,
+    blocker: `Workspace commit topology ${workspaceReport.topology} is topology_relaxed, so a non-single_repo completion cannot rely on one combined commit across required files; report commit: none with commit_reason: ${expectedCommitReason} (split_repo_workspace evidence).`,
+  };
+}
+
+Object.assign(analyzeTaskWorkspace, { assessTaskCompletionOutput, selectTaskCompletionBlocker });
 
 function deriveCommitGuidance(topology, commitDirective) {
   const normalizedDirective = normalizeCommitDirective(commitDirective);

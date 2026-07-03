@@ -230,7 +230,7 @@
   - _Requirements: FR-4, FR-9, FR-12, AC-1.3, AC-3.2_
   - _Design: Error Handling; `TaskCompletionAssessment`_
 
-- [ ] 3.3 [YELLOW] Refactor: isolate blocker-reason selection
+- [x] 3.3 [YELLOW] Refactor: isolate blocker-reason selection
   - **Do**:
     1. Extract one blocker-selection helper with the approved priority order.
     2. Keep fallback handling explicit for missing completion signals.
