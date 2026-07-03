@@ -403,7 +403,7 @@
   - _Requirements: FR-12, FR-13, FR-14, AC-4.1, AC-4.2, AC-4.3, AC-4.4_
   - _Design: coordinator state/progress layer_
 
-- [ ] Q9 [VERIFY] Quality check: state and progress verifier
+- [x] Q9 [VERIFY] Quality check: state and progress verifier
   - **Do**:
     1. Run the verifier implementing the research `fixture/state smoke` row for state merge, progress append, and task reset invariants.
   - **Files**: None
@@ -415,7 +415,7 @@
 
 ## Phase 10: Local commit-only behavior
 
-- [ ] 5.4 [RED] Failing verifier: `commitSpec` creates one local commit and never pushes
+- [x] 5.4 [RED] Failing verifier: `commitSpec` creates one local commit and never pushes
   - **Do**:
     1. Add a `commit-spec` case to `scripts/verify-refactor-parity.mjs` with a temp git fixture.
     2. Assert `commitSpec=true` creates exactly one local commit scoped to the selected spec directory and `commitSpec=false` creates no commit; assert `git push` is never invoked.

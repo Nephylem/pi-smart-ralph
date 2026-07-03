@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
@@ -20,6 +21,7 @@ const cases = new Map([
   ['audit-rollback', verifyAuditRollback],
   ['cascade-handling', verifyCascadeHandling],
   ['state-merge', verifyStateMerge],
+  ['commit-spec', verifyCommitSpec],
 ]);
 
 async function main() {
@@ -703,6 +705,104 @@ async function verifyStateMerge() {
   }
 }
 
+async function verifyCommitSpec() {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-commit-spec-'));
+
+  try {
+    const enabledFixture = createRefactorCommandFixture(join(tempRoot, 'enabled'));
+    initializeGitFixture(enabledFixture.projectRoot);
+    const enabledStub = createRefactorStateMergeStub();
+    const enabledCommand = await loadRefactorCommand({ events: enabledStub.events });
+    const enabledBeforeCount = gitCommitCount(enabledFixture.projectRoot);
+    const enabledSpecRelativeRoot = `${relative(enabledFixture.projectRoot, enabledFixture.specRoot).replace(/\\/g, '/')}/`;
+
+    await withLoggedGitWrapper(async (logPath) => {
+      await enabledCommand.handler('--file=requirements', {
+        cwd: enabledFixture.projectRoot,
+        hasUI: true,
+        waitForIdle: async () => {},
+        ui: {
+          notify() {},
+          select(_title, labels) {
+            return labels[0] ?? null;
+          },
+          confirm() {
+            return false;
+          },
+          input() {
+            return 'interactive-choice';
+          },
+          setStatus() {},
+          setWidget() {},
+        },
+      });
+
+      const enabledAfterCount = gitCommitCount(enabledFixture.projectRoot);
+      if (enabledAfterCount !== enabledBeforeCount + 1) {
+        expectedFail(`commitSpec=true must create exactly one local commit after a successful refactor run; expected ${enabledBeforeCount + 1} commits, got ${enabledAfterCount}.`);
+      }
+
+      const committedPaths = gitLastCommitPaths(enabledFixture.projectRoot);
+      if (committedPaths.length === 0) {
+        throw new Error('commitSpec=true must create a non-empty commit for selected spec updates.');
+      }
+
+      const outOfScopePaths = committedPaths.filter((filePath) => !filePath.startsWith(enabledSpecRelativeRoot));
+      if (outOfScopePaths.length > 0) {
+        throw new Error(`local refactor commit must stay scoped to the selected spec directory; got ${JSON.stringify(committedPaths)}`);
+      }
+
+      const gitLogLines = readLoggedGitInvocations(logPath);
+      if (gitLogLines.some((line) => /(^|\s)push(\s|$)/.test(line))) {
+        throw new Error(`refactor commit flow must never invoke git push; got ${JSON.stringify(gitLogLines)}`);
+      }
+    });
+
+    const disabledFixture = createRefactorCommandFixture(join(tempRoot, 'disabled'), { commitSpec: false });
+    initializeGitFixture(disabledFixture.projectRoot);
+    const disabledStub = createRefactorStateMergeStub();
+    const disabledCommand = await loadRefactorCommand({ events: disabledStub.events });
+    const disabledBeforeCount = gitCommitCount(disabledFixture.projectRoot);
+
+    await withLoggedGitWrapper(async (logPath) => {
+      await disabledCommand.handler('--file=requirements', {
+        cwd: disabledFixture.projectRoot,
+        hasUI: true,
+        waitForIdle: async () => {},
+        ui: {
+          notify() {},
+          select(_title, labels) {
+            return labels[0] ?? null;
+          },
+          confirm() {
+            return false;
+          },
+          input() {
+            return 'interactive-choice';
+          },
+          setStatus() {},
+          setWidget() {},
+        },
+      });
+
+      const disabledAfterCount = gitCommitCount(disabledFixture.projectRoot);
+      if (disabledAfterCount !== disabledBeforeCount) {
+        throw new Error(`commitSpec=false must not create a local git commit; expected ${disabledBeforeCount} commits, got ${disabledAfterCount}.`);
+      }
+
+      const gitLogLines = readLoggedGitInvocations(logPath);
+      if (gitLogLines.some((line) => /(^|\s)push(\s|$)/.test(line))) {
+        throw new Error(`commitSpec=false runs must never invoke git push; got ${JSON.stringify(gitLogLines)}`);
+      }
+    });
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -958,7 +1058,98 @@ function assertRequestHasKeys(value, keys) {
   }
 }
 
-function createRefactorCommandFixture(tempRoot) {
+function initializeGitFixture(cwd) {
+  runGitFixtureCommand(cwd, ['init']);
+  runGitFixtureCommand(cwd, ['config', 'user.name', 'Refactor Verifier']);
+  runGitFixtureCommand(cwd, ['config', 'user.email', 'refactor-verifier@example.com']);
+  runGitFixtureCommand(cwd, ['add', '.']);
+  runGitFixtureCommand(cwd, ['commit', '-m', 'baseline fixture']);
+}
+
+function runGitFixtureCommand(cwd, args) {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${result.stderr || result.stdout || `status ${result.status ?? 'unknown'}`}`);
+  }
+  return result.stdout.trim();
+}
+
+function gitCommitCount(cwd) {
+  return Number.parseInt(runGitFixtureCommand(cwd, ['rev-list', '--count', 'HEAD']), 10);
+}
+
+function gitLastCommitPaths(cwd) {
+  const output = runGitFixtureCommand(cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']);
+  return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+function readLoggedGitInvocations(logPath) {
+  return readFileSync(logPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+async function withLoggedGitWrapper(run) {
+  const wrapperRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-git-wrapper-'));
+  const binDir = join(wrapperRoot, 'bin');
+  const wrapperPath = join(binDir, 'git');
+  const logPath = join(wrapperRoot, 'git.log');
+  const originalPath = process.env.PATH ?? '';
+  const originalRealGit = process.env.RALPH_REAL_GIT;
+  const originalGitLog = process.env.RALPH_GIT_LOG;
+  const originalAuthorName = process.env.GIT_AUTHOR_NAME;
+  const originalAuthorEmail = process.env.GIT_AUTHOR_EMAIL;
+  const originalCommitterName = process.env.GIT_COMMITTER_NAME;
+  const originalCommitterEmail = process.env.GIT_COMMITTER_EMAIL;
+  const realGitLookup = spawnSync('bash', ['-lc', 'command -v git'], { cwd: root, encoding: 'utf8' });
+  const realGit = realGitLookup.status === 0 ? realGitLookup.stdout.trim() : '';
+
+  if (!realGit) {
+    throw new Error(`unable to locate real git binary for commit-spec verifier: ${realGitLookup.stderr || realGitLookup.stdout || `status ${realGitLookup.status ?? 'unknown'}`}`);
+  }
+
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(wrapperPath, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$RALPH_GIT_LOG"
+if [ "\${1:-}" = "push" ]; then
+  echo "git push blocked by verifier" >&2
+  exit 99
+fi
+exec "$RALPH_REAL_GIT" "$@"
+`, 'utf8');
+  chmodSync(wrapperPath, 0o755);
+  writeFileSync(logPath, '', 'utf8');
+
+  process.env.PATH = `${binDir}:${originalPath}`;
+  process.env.RALPH_REAL_GIT = realGit;
+  process.env.RALPH_GIT_LOG = logPath;
+  process.env.GIT_AUTHOR_NAME = process.env.GIT_AUTHOR_NAME ?? 'Refactor Verifier';
+  process.env.GIT_AUTHOR_EMAIL = process.env.GIT_AUTHOR_EMAIL ?? 'refactor-verifier@example.com';
+  process.env.GIT_COMMITTER_NAME = process.env.GIT_COMMITTER_NAME ?? process.env.GIT_AUTHOR_NAME;
+  process.env.GIT_COMMITTER_EMAIL = process.env.GIT_COMMITTER_EMAIL ?? process.env.GIT_AUTHOR_EMAIL;
+
+  try {
+    return await run(logPath);
+  } finally {
+    process.env.PATH = originalPath;
+    restoreEnvValue('RALPH_REAL_GIT', originalRealGit);
+    restoreEnvValue('RALPH_GIT_LOG', originalGitLog);
+    restoreEnvValue('GIT_AUTHOR_NAME', originalAuthorName);
+    restoreEnvValue('GIT_AUTHOR_EMAIL', originalAuthorEmail);
+    restoreEnvValue('GIT_COMMITTER_NAME', originalCommitterName);
+    restoreEnvValue('GIT_COMMITTER_EMAIL', originalCommitterEmail);
+    rmSync(wrapperRoot, { recursive: true, force: true });
+  }
+}
+
+function restoreEnvValue(name, value) {
+  if (typeof value === 'string') {
+    process.env[name] = value;
+    return;
+  }
+  delete process.env[name];
+}
+
+function createRefactorCommandFixture(tempRoot, options = {}) {
   const projectRoot = join(tempRoot, 'project');
   const configuredSpecRoot = join(projectRoot, 'custom-specs');
   const specRoot = join(configuredSpecRoot, 'interactive-target');
@@ -978,7 +1169,7 @@ function createRefactorCommandFixture(tempRoot) {
     phase: 'execution',
     taskIndex: 3,
     totalTasks: 7,
-    commitSpec: true,
+    commitSpec: options.commitSpec ?? true,
     relatedSpecs: [{ name: 'packaged-resource-parity', relevance: 'High' }],
     epicName: 'smart-ralph-parity-audit',
     epicSpecName: 'spec-refactor-command-parity',
