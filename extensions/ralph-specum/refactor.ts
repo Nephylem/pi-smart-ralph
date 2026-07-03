@@ -59,6 +59,7 @@ export type RefactorSelectedFilePlan = {
 };
 
 export type RefactorCascadePolicy = "detect-only" | "approved" | "skipped";
+export type RefactorCascadeDecision = "approved" | "rejected";
 
 export type RefactorRequestFile = {
 	kind: RefactorArtifact;
@@ -306,6 +307,59 @@ export function buildRefactorSpecialistPrompt(request: RefactorRequestV1): strin
 	].join("\n\n");
 }
 
+export function resolveRefactorCascadeTargets(
+	sourceFile: RefactorArtifact,
+	cascadeNeeded: string | undefined,
+	availableFiles: RefactorArtifact[],
+): RefactorArtifact[] {
+	const downstreamTargets = new Set(downstreamRefactorArtifacts(sourceFile));
+	if (downstreamTargets.size === 0) return [];
+	const available = new Set(availableFiles);
+	return tokenizeCascadeNeeded(cascadeNeeded).filter((artifact): artifact is RefactorArtifact => {
+		return REFACTOR_ALLOWED_FILES.includes(artifact as RefactorArtifact)
+			&& downstreamTargets.has(artifact as RefactorArtifact)
+			&& available.has(artifact as RefactorArtifact);
+	}) as RefactorArtifact[];
+}
+
+export function buildRefactorCascadePrompt(
+	sourceFile: RefactorArtifact,
+	targetFile: RefactorArtifact,
+	reason: string,
+): { title: string; message: string } {
+	return {
+		title: `Approve downstream ${targetFile} cascade?`,
+		message: [
+			`The ${sourceFile}.md refactor signaled a downstream cascade into ${targetFile}.md.`,
+			`Reason: ${reason}`,
+			"Approve a separate bounded downstream refactor step?",
+		].join("\n"),
+	};
+}
+
+export function buildApprovedRefactorCascadeRequest(
+	plan: RefactorSpecPlan,
+	targetFile: RefactorArtifact,
+	options: RalphPathOptions = {},
+): RefactorRequestV1 {
+	const selectedFilePlan = buildRefactorSelectedFilePlan(plan, targetFile);
+	const selectedSectionPlan = buildRefactorSelectedSectionPlan(selectedFilePlan, null);
+	return {
+		...buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, options),
+		cascadePolicy: "approved",
+	};
+}
+
+export function formatRefactorCascadeProgressEntry(
+	sourceFile: RefactorArtifact,
+	targetFile: RefactorArtifact,
+	decision: RefactorCascadeDecision,
+	reason: string,
+): string {
+	const outcome = decision === "approved" ? "approved" : "rejected/skipped";
+	return `- Refactor cascade ${outcome}: ${sourceFile} -> ${targetFile}. Reason: ${reason}`;
+}
+
 export function parseRefactorCompletion(output: string): RefactorCompletionParseResult {
 	const text = typeof output === "string" ? output : String(output ?? "");
 	const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -415,6 +469,25 @@ function extractProgressLearnings(progressContent: string): string[] {
 function readCompletionValue(lines: string[], marker: string): string {
 	const line = lines.find((entry) => entry.startsWith(`${marker}:`));
 	return line ? line.slice(marker.length + 1).trim() : "";
+}
+
+function downstreamRefactorArtifacts(sourceFile: RefactorArtifact): RefactorArtifact[] {
+	switch (sourceFile) {
+		case "requirements":
+			return ["design"];
+		case "design":
+			return ["tasks"];
+		default:
+			return [];
+	}
+}
+
+function tokenizeCascadeNeeded(cascadeNeeded: string | undefined): string[] {
+	if (!cascadeNeeded) return [];
+	return cascadeNeeded
+		.split(/[\s,]+/)
+		.map((token) => token.trim().toLowerCase())
+		.filter((token) => token && token !== "none");
 }
 
 function collectRefactorSpecFiles(specPath: string): Map<string, Buffer> {

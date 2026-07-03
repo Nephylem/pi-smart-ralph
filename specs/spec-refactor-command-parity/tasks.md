@@ -334,7 +334,7 @@
   - _Requirements: FR-11, AC-3.4, AC-3.5_
   - _Design: sequential cascade flow; coordinator prompts_
 
-- [ ] 4.5 [GREEN] Pass test: implement downstream approve/skip cascade flow
+- [x] 4.5 [GREEN] Pass test: implement downstream approve/skip cascade flow
   - **Do**:
     1. Prompt for downstream handling when the specialist signals a cascade.
     2. Run approved cascades as separate artifact-scoped refactor steps.

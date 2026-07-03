@@ -69,6 +69,8 @@ import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-bran
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import {
+	buildApprovedRefactorCascadeRequest,
+	buildRefactorCascadePrompt,
 	buildRefactorFilePromptPlan,
 	buildRefactorRequest,
 	buildRefactorSectionPromptPlan,
@@ -76,6 +78,7 @@ import {
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
 	auditRefactorSpecMutationScope,
+	formatRefactorCascadeProgressEntry,
 	formatRefactorCompletionValidationError,
 	formatRefactorExecutionError,
 	formatRefactorHeadlessDecisionError,
@@ -87,6 +90,7 @@ import {
 	parseRefactorArgs,
 	parseRefactorCompletion,
 	parseRefactorFilePromptSelection,
+	resolveRefactorCascadeTargets,
 	resolveRefactorSpecPlan,
 	restoreRefactorSpecDirectory,
 	snapshotRefactorSpecDirectory,
@@ -9050,6 +9054,46 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			const runRefactorStep = async (request: ReturnType<typeof buildRefactorRequest>) => {
+				const prompt = buildRefactorSpecialistPrompt(request);
+				const selectedKind = request.files[0]?.kind ?? "artifact";
+				const specSnapshot = snapshotRefactorSpecDirectory(plan.spec.absolutePath);
+
+				try {
+					const completion = await runRalphSubagent(
+						pi,
+						{
+							agentName: "ralph-refactor-specialist",
+							description: `Refactor ${selectedKind}.md for ${plan.spec.name}`,
+							maxTurns: 50,
+						},
+						prompt,
+					);
+					const completionOutput = subagentCompletionOutput(completion);
+					const completionValidation = parseRefactorCompletion(completionOutput);
+					const audit = auditRefactorSpecMutationScope(specSnapshot, request.allowedFiles);
+					if (!completionValidation.ok) {
+						restoreRefactorSpecDirectory(specSnapshot);
+						await notify(ctx, formatRefactorCompletionValidationError(completionValidation.error), "warning");
+						return null;
+					}
+					if (audit.unauthorizedFiles.length > 0) {
+						restoreRefactorSpecDirectory(specSnapshot);
+						await notify(
+							ctx,
+							formatRefactorUnauthorizedEditError(audit.unauthorizedFiles, (filePath) => formatProjectPath(filePath, ctx.cwd)),
+							"warning",
+						);
+						return null;
+					}
+					return completionValidation;
+				} catch (error) {
+					restoreRefactorSpecDirectory(specSnapshot);
+					await notify(ctx, formatRefactorExecutionError(error), "warning");
+					return null;
+				}
+			};
+
 			let selectedFilePlan = buildRefactorSelectedFilePlan(plan, parsed.options.file);
 			if (selectedFilePlan.requiresFileChoice) {
 				if (!ctx.hasUI) {
@@ -9077,41 +9121,64 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				selectedSectionPlan = buildRefactorSelectedSectionPlan(selectedFilePlan, selectedSection);
 			}
 
-			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
-			const prompt = buildRefactorSpecialistPrompt(request);
-			const specSnapshot = snapshotRefactorSpecDirectory(plan.spec.absolutePath);
+			if (!selectedFilePlan.selectedFile) {
+				await notify(ctx, "Rejected /ralph-refactor result: no artifact was selected for delegation.", "warning");
+				return;
+			}
 
-			try {
-				const completion = await runRalphSubagent(
-					pi,
-					{
-						agentName: "ralph-refactor-specialist",
-						description: `Refactor ${selectedFilePlan.selectedFile}.md for ${plan.spec.name}`,
-						maxTurns: 50,
-					},
-					prompt,
-				);
-				const completionOutput = subagentCompletionOutput(completion);
-				const completionValidation = parseRefactorCompletion(completionOutput);
-				const audit = auditRefactorSpecMutationScope(specSnapshot, request.allowedFiles);
-				if (!completionValidation.ok) {
-					restoreRefactorSpecDirectory(specSnapshot);
-					await notify(ctx, formatRefactorCompletionValidationError(completionValidation.error), "warning");
-					return;
-				}
-				if (audit.unauthorizedFiles.length > 0) {
-					restoreRefactorSpecDirectory(specSnapshot);
+			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
+			const pendingCascades: Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }> = [];
+			const primaryCompletion = await runRefactorStep(request);
+			if (!primaryCompletion) return;
+
+			for (const targetFile of resolveRefactorCascadeTargets(selectedFilePlan.selectedFile, primaryCompletion.cascadeNeeded, plan.availableFiles)) {
+				pendingCascades.push({
+					sourceFile: selectedFilePlan.selectedFile,
+					targetFile,
+					reason: primaryCompletion.cascadeReason ?? "Downstream refactor requested.",
+				});
+			}
+
+			while (pendingCascades.length > 0) {
+				const cascade = pendingCascades.shift();
+				if (!cascade) continue;
+
+				let approved = false;
+				if (ctx.hasUI) {
+					const promptPlan = buildRefactorCascadePrompt(cascade.sourceFile, cascade.targetFile, cascade.reason);
+					approved = await ctx.ui.confirm(promptPlan.title, promptPlan.message);
+				} else {
 					await notify(
 						ctx,
-						formatRefactorUnauthorizedEditError(audit.unauthorizedFiles, (filePath) => formatProjectPath(filePath, ctx.cwd)),
+						`Headless /ralph-refactor run skipped downstream cascade ${cascade.sourceFile} -> ${cascade.targetFile}: ${cascade.reason}`,
 						"warning",
 					);
-					return;
 				}
-			} catch (error) {
-				restoreRefactorSpecDirectory(specSnapshot);
-				await notify(ctx, formatRefactorExecutionError(error), "warning");
-				return;
+
+				if (!approved) {
+					appendProgress(
+						plan.spec,
+						[
+							"",
+							`### Refactor cascade decision (${new Date().toISOString()})`,
+							formatRefactorCascadeProgressEntry(cascade.sourceFile, cascade.targetFile, "rejected", cascade.reason),
+						].join("\n"),
+						{ cwd: ctx.cwd },
+					);
+					continue;
+				}
+
+				const cascadeRequest = buildApprovedRefactorCascadeRequest(plan, cascade.targetFile, { cwd: ctx.cwd });
+				const cascadeCompletion = await runRefactorStep(cascadeRequest);
+				if (!cascadeCompletion) return;
+
+				for (const nextTarget of resolveRefactorCascadeTargets(cascade.targetFile, cascadeCompletion.cascadeNeeded, plan.availableFiles)) {
+					pendingCascades.push({
+						sourceFile: cascade.targetFile,
+						targetFile: nextTarget,
+						reason: cascadeCompletion.cascadeReason ?? "Downstream refactor requested.",
+					});
+				}
 			}
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");
