@@ -18,6 +18,7 @@ const cases = new Map([
   ['specialist-contract', verifySpecialistContract],
   ['request-payload', verifyRequestPayload],
   ['audit-rollback', verifyAuditRollback],
+  ['cascade-handling', verifyCascadeHandling],
 ]);
 
 async function main() {
@@ -509,6 +510,111 @@ async function verifyAuditRollback() {
   }
 }
 
+async function verifyCascadeHandling() {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-cascade-handling-'));
+
+  try {
+    const approvedFixture = createRefactorCommandFixture(join(tempRoot, 'approved'));
+    const approvedStub = createRefactorCascadeHandlingStub();
+    const approvedConfirmPrompts = [];
+    const approvedCommand = await loadRefactorCommand({ events: approvedStub.events });
+
+    await approvedCommand.handler('--file=requirements', {
+      cwd: approvedFixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify() {},
+        select(_title, labels) {
+          return labels[0] ?? null;
+        },
+        confirm(title, message) {
+          approvedConfirmPrompts.push({ title, message });
+          return true;
+        },
+        input() {
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    if (approvedStub.requests.length === 0) {
+      expectedFail('coordinator did not dispatch the initial requirements refactor request for cascade handling.');
+    }
+
+    if (approvedStub.requests.length !== 2) {
+      throw new Error(`approved requirements→design cascades must run a second bounded specialist step after explicit approval; got ${approvedStub.requests.length} request(s)`);
+    }
+
+    if (!approvedConfirmPrompts.some((entry) => /cascade|downstream|design/i.test(`${entry.title} ${entry.message}`))) {
+      throw new Error(`approved cascades must prompt for downstream handling before editing design.md; got prompts ${JSON.stringify(approvedConfirmPrompts)}`);
+    }
+
+    const approvedRequests = approvedStub.requests.map(parseCapturedRefactorRequest);
+    assertArrayEqual(approvedRequests.map((request) => request.files?.[0]?.kind ?? null), ['requirements', 'design'], 'approved cascade request order');
+    assertArrayEqual(
+      approvedRequests.map((request) => request.allowedFiles?.[0] ?? null),
+      [join(approvedFixture.specRoot, 'requirements.md'), join(approvedFixture.specRoot, 'design.md')],
+      'approved cascade allowedFiles order',
+    );
+
+    const approvedDesign = readFileSync(join(approvedFixture.specRoot, 'design.md'), 'utf8');
+    if (!approvedDesign.includes('approved cascade mutation')) {
+      throw new Error('approved requirements→design cascades must update design.md during the second bounded step.');
+    }
+
+    const rejectedFixture = createRefactorCommandFixture(join(tempRoot, 'rejected'));
+    const rejectedStub = createRefactorCascadeHandlingStub();
+    const rejectedCommand = await loadRefactorCommand({ events: rejectedStub.events });
+    const rejectedProgressPath = join(rejectedFixture.specRoot, '.progress.md');
+    const rejectedDesignPath = join(rejectedFixture.specRoot, 'design.md');
+    const rejectedProgressBefore = hashFile(rejectedProgressPath);
+    const rejectedDesignBefore = hashFile(rejectedDesignPath);
+
+    await rejectedCommand.handler('--file=requirements', {
+      cwd: rejectedFixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify() {},
+        select(_title, labels) {
+          return labels[0] ?? null;
+        },
+        confirm() {
+          return false;
+        },
+        input() {
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    if (rejectedStub.requests.length !== 1) {
+      throw new Error(`rejected cascades must not spawn downstream specialist steps; got ${rejectedStub.requests.length} request(s)`);
+    }
+
+    const rejectedDesignAfter = hashFile(rejectedDesignPath);
+    if (rejectedDesignAfter !== rejectedDesignBefore) {
+      throw new Error('rejected cascades must leave downstream files byte-unchanged.');
+    }
+
+    const rejectedProgressAfter = hashFile(rejectedProgressPath);
+    const rejectedProgressText = readFileSync(rejectedProgressPath, 'utf8');
+    if (rejectedProgressAfter === rejectedProgressBefore || !/cascade|skipped|rejected|design/i.test(rejectedProgressText)) {
+      throw new Error(`rejected cascades must be logged in .progress.md without downstream edits; got ${JSON.stringify(rejectedProgressText)}`);
+    }
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -647,6 +753,51 @@ function createRefactorAuditRollbackStub() {
           'CASCADE_NEEDED: design',
           'EVIDENCE: malformed completion missing REFACTOR_COMPLETE and CASCADE_REASON',
         ].join('\n'),
+      });
+    });
+  });
+
+  return { events, requests };
+}
+
+function createRefactorCascadeHandlingStub() {
+  const events = new EventEmitter();
+  const requests = [];
+
+  events.on('subagents:rpc:ping', (payload) => {
+    events.emit(`subagents:rpc:ping:reply:${payload.requestId}`, { success: true, data: { version: 1 } });
+  });
+
+  events.on('subagents:rpc:spawn', (payload) => {
+    requests.push(payload);
+    const request = parseCapturedRefactorRequest(payload);
+    const selectedKind = request?.files?.[0]?.kind;
+    const allowedPath = request?.allowedFiles?.[0];
+    const agentId = `refactor-cascade-${requests.length}`;
+
+    if (allowedPath) {
+      const mutationLabel = selectedKind === 'design' ? 'approved cascade mutation' : 'primary requirements mutation';
+      writeFileSync(allowedPath, `${readFileSync(allowedPath, 'utf8')}\n<!-- ${mutationLabel} -->\n`, 'utf8');
+    }
+
+    events.emit(`subagents:rpc:spawn:reply:${payload.requestId}`, { success: true, data: { id: agentId } });
+    queueMicrotask(() => {
+      events.emit('subagents:completed', {
+        id: agentId,
+        status: 'completed',
+        result: selectedKind === 'design'
+          ? [
+              'REFACTOR_COMPLETE',
+              'CASCADE_NEEDED: none',
+              'CASCADE_REASON: downstream design update applied',
+              'EVIDENCE: design cascade stub completion',
+            ].join('\n')
+          : [
+              'REFACTOR_COMPLETE',
+              'CASCADE_NEEDED: design',
+              'CASCADE_REASON: requirements changes should cascade into architecture notes',
+              'EVIDENCE: requirements stub completion',
+            ].join('\n'),
       });
     });
   });

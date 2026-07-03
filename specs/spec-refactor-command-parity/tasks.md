@@ -311,7 +311,7 @@
   - _Requirements: FR-9, FR-10, AC-3.3, AC-3.6_
   - _Design: `extensions/ralph-specum/refactor.ts` audit helpers_
 
-- [ ] Q7 [VERIFY] Quality check: audit and rollback verifier
+- [x] Q7 [VERIFY] Quality check: audit and rollback verifier
   - **Do**:
     1. Run the verifier implementing the research `fixture/state smoke` row for unauthorized-edit detection and bounded recovery.
   - **Files**: None
@@ -323,7 +323,7 @@
 
 ## Phase 8: Cascade handling
 
-- [ ] 4.4 [RED] Failing verifier: approved and rejected cascades are handled deliberately
+- [x] 4.4 [RED] Failing verifier: approved and rejected cascades are handled deliberately
   - **Do**:
     1. Add a `cascade-handling` case to `scripts/verify-refactor-parity.mjs` with interactive approval and rejection fixtures.
     2. Assert approved requirements→design cascades run as a second bounded step and rejected cascades are logged without downstream edits.
