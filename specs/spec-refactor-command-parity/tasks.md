@@ -197,7 +197,7 @@
   - _Requirements: FR-9, FR-10, AC-3.1, AC-3.3, AC-3.6_
   - _Design: `agents/ralph-refactor-specialist.md`_
 
-- [ ] 3.2 [GREEN] Pass test: align specialist prompt with structured artifact-only completion
+- [x] 3.2 [GREEN] Pass test: align specialist prompt with structured artifact-only completion
   - **Do**:
     1. Update `agents/ralph-refactor-specialist.md` to limit edits to the selected artifact and to emit the structured completion markers.
     2. Update any coordinator parsing expectations in `refactor.ts` or `index.ts` to match the contract wording.

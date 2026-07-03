@@ -5812,8 +5812,9 @@ function agentSpecificImplementationInstructions(definition: ImplementationSubag
 		return [
 			"Refactor-task instructions:",
 			"- Apply only the requested refactor/spec update and preserve implementation learnings.",
+			"- Edit only the selected artifact path; do not update .progress.md, .ralph-state.json, or sibling artifacts in the same step.",
 			"- Run the task's Verify command when present.",
-			"- Successful output must include REFACTOR_COMPLETE, CASCADE_NEEDED, CASCADE_REASON, and evidence: <verification proof>.",
+			"- Successful output must include REFACTOR_COMPLETE, CASCADE_NEEDED, CASCADE_REASON, and EVIDENCE: <verification proof>.",
 		];
 	}
 	return [
