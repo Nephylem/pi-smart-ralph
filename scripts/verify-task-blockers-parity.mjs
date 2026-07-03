@@ -29,6 +29,7 @@ const cases = new Map([
   ['topology-blocker-priority-contract', verifyTopologyBlockerPriorityContract],
   ['red-pass-evidence-contract', verifyRedPassEvidenceContract],
   ['executor-topology-contract', verifyExecutorTopologyContract],
+  ['planner-template-contract', verifyPlannerTemplateContract],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -499,6 +500,20 @@ async function verifyExecutorTopologyContract() {
   });
 }
 
+async function verifyPlannerTemplateContract() {
+  const plannerAgentSource = readFileSync(join(root, 'agents', 'ralph-task-planner.md'), 'utf8');
+  const tasksTemplateSource = readFileSync(join(root, 'templates', 'tasks.md'), 'utf8');
+
+  assertPlannerSurfaceContract({
+    surfaceName: 'agents/ralph-task-planner.md',
+    source: plannerAgentSource,
+  });
+  assertTemplateSurfaceContract({
+    surfaceName: 'templates/tasks.md',
+    source: tasksTemplateSource,
+  });
+}
+
 function assertExecutorSurfaceContract({ surfaceName, source }) {
   if (!/topology preflight|preflight repo topology|repo-topology preflight/i.test(source)) {
     expectedFail(`${surfaceName} must require topology preflight before commit handling.`);
@@ -522,6 +537,34 @@ function assertExecutorSurfaceContract({ surfaceName, source }) {
 
   if (!/commit:\s*none`?\s+and\s+`?commit_reason:\s*<topology>/i.test(source) && !/commit:\s*none`?\s+plus\s+`?commit_reason:\s*<topology>/i.test(source)) {
     expectedFail(`${surfaceName} must keep the stable non-\`single_repo\` output-marker example \`commit: none\` + \`commit_reason: <topology>\`.`);
+  }
+}
+
+function assertPlannerSurfaceContract({ surfaceName, source }) {
+  if (!/Do not hardcode `\.\/specs\/`/i.test(source)) {
+    expectedFail(`${surfaceName} must forbid hardcoded \`./specs/\` assumptions.`);
+  }
+
+  if (!/Commit:\s*None/i.test(source)) {
+    expectedFail(`${surfaceName} must steer non-shared-repo tasks toward \`Commit: None\`.`);
+  }
+
+  if (!/one repo cannot contain both task files and required spec artifacts|cannot be committed together from one repo/i.test(source)) {
+    expectedFail(`${surfaceName} must describe the non-shared-repo condition that defaults tasks to \`Commit: None\`.`);
+  }
+}
+
+function assertTemplateSurfaceContract({ surfaceName, source }) {
+  if (/\.\/specs\//.test(source)) {
+    expectedFail(`${surfaceName} must avoid hardcoded \`./specs/\` examples so spec roots stay configurable.`);
+  }
+
+  if (!/Commit:\s*None/i.test(source)) {
+    expectedFail(`${surfaceName} must include a canonical \`Commit: None\` example for non-shared-repo tasks.`);
+  }
+
+  if (!/task files and required spec artifacts cannot share one repo|cannot be committed together from one repo|topology-aware/i.test(source)) {
+    expectedFail(`${surfaceName} must explain why non-shared-repo tasks use \`Commit: None\` instead of an impossible combined commit.`);
   }
 }
 

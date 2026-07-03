@@ -331,7 +331,7 @@
   - _Requirements: FR-7, FR-12, NFR-2_
   - _Design: Prompt contracts_
 
-- [ ] Q7 [VERIFY] Quality check: executor prompt contract
+- [x] Q7 [VERIFY] Quality check: executor prompt contract
   - **Do**:
     1. Run the discovered `verify:index` command after executor prompt updates.
   - **Files**: None
@@ -341,7 +341,7 @@
   - _Requirements: FR-7, FR-12, FR-11_
   - _Design: `scripts/verify-task-blockers-parity.mjs`_
 
-- [ ] 4.4 [RED] Failing test: planner and template default to feasible commit contracts
+- [x] 4.4 [RED] Failing test: planner and template default to feasible commit contracts
   - **Do**:
     1. Add prompt-inspection cases covering `agents/ralph-task-planner.md` and `templates/tasks.md`.
     2. Assert both surfaces steer non-shared-repo tasks toward `Commit: None` and avoid hardcoded `./specs/` assumptions.
