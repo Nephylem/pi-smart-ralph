@@ -357,7 +357,7 @@
   - _Requirements: FR-11, AC-3.4, AC-3.5_
   - _Design: `extensions/ralph-specum/refactor.ts`; coordinator cascade flow_
 
-- [ ] Q8 [VERIFY] Quality check: cascade verifier
+- [x] Q8 [VERIFY] Quality check: cascade verifier
   - **Do**:
     1. Run the verifier implementing the research `fixture/state smoke` tooling row for approved/rejected cascade behavior.
   - **Files**: None
@@ -369,7 +369,7 @@
 
 ## Phase 9: State, progress, and task-mirror invariants
 
-- [ ] 5.1 [RED] Failing verifier: state merge, progress summaries, and task-index reset rules
+- [x] 5.1 [RED] Failing verifier: state merge, progress summaries, and task-index reset rules
   - **Do**:
     1. Add a `state-merge` case to `scripts/verify-refactor-parity.mjs` using temp state/progress fixtures.
     2. Assert preserved metadata survives merges, direct updates and skipped cascades append progress summaries, and `taskIndex` resets only when `tasks.md` changes.

@@ -19,6 +19,7 @@ const cases = new Map([
   ['request-payload', verifyRequestPayload],
   ['audit-rollback', verifyAuditRollback],
   ['cascade-handling', verifyCascadeHandling],
+  ['state-merge', verifyStateMerge],
 ]);
 
 async function main() {
@@ -615,6 +616,93 @@ async function verifyCascadeHandling() {
   }
 }
 
+async function verifyStateMerge() {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-state-merge-'));
+
+  try {
+    const requirementsFixture = createRefactorCommandFixture(join(tempRoot, 'requirements'));
+    const requirementsStub = createRefactorStateMergeStub();
+    const requirementsCommand = await loadRefactorCommand({ events: requirementsStub.events });
+    const requirementsProgressPath = join(requirementsFixture.specRoot, '.progress.md');
+    const requirementsStatePath = join(requirementsFixture.specRoot, '.ralph-state.json');
+    const requirementsStateBefore = JSON.parse(readFileSync(requirementsStatePath, 'utf8'));
+    const requirementsTaskIndexBefore = requirementsStateBefore.taskIndex;
+
+    await requirementsCommand.handler('--file=requirements', {
+      cwd: requirementsFixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify() {},
+        select(_title, labels) {
+          return labels[0] ?? null;
+        },
+        confirm() {
+          return false;
+        },
+        input() {
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    const requirementsStateAfter = JSON.parse(readFileSync(requirementsStatePath, 'utf8'));
+    assertPreservedRefactorStateMetadata(requirementsStateAfter, requirementsStateBefore, requirementsFixture.specRoot, 'requirements-only refactor state merge');
+    assertEqual(requirementsStateAfter?.taskIndex, requirementsTaskIndexBefore, 'requirements-only refactor must preserve taskIndex when tasks.md is unchanged');
+
+    const requirementsProgress = readFileSync(requirementsProgressPath, 'utf8');
+    if (!/requirements/i.test(requirementsProgress) || !/updated|refactor/i.test(requirementsProgress)) {
+      throw new Error(`direct artifact updates must append a .progress.md summary entry for requirements.md; got ${JSON.stringify(requirementsProgress)}`);
+    }
+    if (!/cascade/i.test(requirementsProgress) || !/rejected|skipped/i.test(requirementsProgress) || !/design/i.test(requirementsProgress)) {
+      throw new Error(`skipped or rejected cascades must append a .progress.md summary entry; got ${JSON.stringify(requirementsProgress)}`);
+    }
+
+    const tasksFixture = createRefactorCommandFixture(join(tempRoot, 'tasks'));
+    const tasksStub = createRefactorStateMergeStub();
+    const tasksCommand = await loadRefactorCommand({ events: tasksStub.events });
+    const tasksProgressPath = join(tasksFixture.specRoot, '.progress.md');
+    const tasksStatePath = join(tasksFixture.specRoot, '.ralph-state.json');
+    const tasksStateBefore = JSON.parse(readFileSync(tasksStatePath, 'utf8'));
+
+    await tasksCommand.handler('--file=tasks', {
+      cwd: tasksFixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify() {},
+        select(_title, labels) {
+          return labels[0] ?? null;
+        },
+        confirm() {
+          return true;
+        },
+        input() {
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    const tasksStateAfter = JSON.parse(readFileSync(tasksStatePath, 'utf8'));
+    assertPreservedRefactorStateMetadata(tasksStateAfter, tasksStateBefore, tasksFixture.specRoot, 'tasks refactor state merge');
+    assertEqual(tasksStateAfter?.taskIndex, 0, 'tasks.md refactors must reset taskIndex to 0 for remirroring');
+
+    const tasksProgress = readFileSync(tasksProgressPath, 'utf8');
+    if (!/tasks/i.test(tasksProgress) || !/updated|refactor/i.test(tasksProgress)) {
+      throw new Error(`tasks.md updates must append a .progress.md summary entry; got ${JSON.stringify(tasksProgress)}`);
+    }
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -805,6 +893,50 @@ function createRefactorCascadeHandlingStub() {
   return { events, requests };
 }
 
+function createRefactorStateMergeStub() {
+  const events = new EventEmitter();
+  const requests = [];
+
+  events.on('subagents:rpc:ping', (payload) => {
+    events.emit(`subagents:rpc:ping:reply:${payload.requestId}`, { success: true, data: { version: 1 } });
+  });
+
+  events.on('subagents:rpc:spawn', (payload) => {
+    requests.push(payload);
+    const request = parseCapturedRefactorRequest(payload);
+    const selectedKind = request?.files?.[0]?.kind;
+    const allowedPath = request?.allowedFiles?.[0];
+    const agentId = `refactor-state-${requests.length}`;
+
+    if (allowedPath) {
+      writeFileSync(allowedPath, `${readFileSync(allowedPath, 'utf8')}\n<!-- ${selectedKind} state merge mutation -->\n`, 'utf8');
+    }
+
+    events.emit(`subagents:rpc:spawn:reply:${payload.requestId}`, { success: true, data: { id: agentId } });
+    queueMicrotask(() => {
+      events.emit('subagents:completed', {
+        id: agentId,
+        status: 'completed',
+        result: selectedKind === 'requirements'
+          ? [
+              'REFACTOR_COMPLETE',
+              'CASCADE_NEEDED: design',
+              'CASCADE_REASON: requirements state merge verifier requested a downstream design review',
+              'EVIDENCE: requirements state merge stub completion',
+            ].join('\n')
+          : [
+              'REFACTOR_COMPLETE',
+              'CASCADE_NEEDED: none',
+              `CASCADE_REASON: ${selectedKind} state merge stub completion`,
+              `EVIDENCE: ${selectedKind} state merge stub completion`,
+            ].join('\n'),
+      });
+    });
+  });
+
+  return { events, requests };
+}
+
 function parseCapturedRefactorRequest(spawnPayload) {
   const prompt = String(spawnPayload?.prompt ?? '');
   const match = prompt.match(/\{[\s\S]*\}/m);
@@ -839,7 +971,18 @@ function createRefactorCommandFixture(tempRoot) {
   writeFileSync(join(specRoot, 'design.md'), ['# Design', '', '## Architecture', 'Body', ''].join('\n'), 'utf8');
   writeFileSync(join(specRoot, 'tasks.md'), ['# Tasks', '', '- [ ] Demo task', ''].join('\n'), 'utf8');
   writeFileSync(join(specRoot, '.progress.md'), ['# Progress', '', '## Learnings', '- interactive planning should read this later', ''].join('\n'), 'utf8');
-  writeFileSync(join(specRoot, '.ralph-state.json'), `${JSON.stringify({ name: 'interactive-target', taskIndex: 3 }, null, 2)}\n`, 'utf8');
+  writeFileSync(join(specRoot, '.ralph-state.json'), `${JSON.stringify({
+    source: 'spec',
+    name: 'interactive-target',
+    basePath: specRoot,
+    phase: 'execution',
+    taskIndex: 3,
+    totalTasks: 7,
+    commitSpec: true,
+    relatedSpecs: [{ name: 'packaged-resource-parity', relevance: 'High' }],
+    epicName: 'smart-ralph-parity-audit',
+    epicSpecName: 'spec-refactor-command-parity',
+  }, null, 2)}\n`, 'utf8');
 
   return { projectRoot, configuredSpecRoot, specRoot };
 }
@@ -919,6 +1062,17 @@ function assertArrayEqual(actual, expected, label) {
   if (JSON.stringify(actualValue) !== JSON.stringify(expectedValue)) {
     throw new Error(`${label} mismatch: expected ${JSON.stringify(expectedValue)}, got ${JSON.stringify(actualValue)}`);
   }
+}
+
+function assertPreservedRefactorStateMetadata(actual, before, expectedBasePath, label) {
+  assertEqual(actual?.source, before?.source, `${label} source`);
+  assertEqual(actual?.name, before?.name, `${label} name`);
+  assertEqual(actual?.basePath, expectedBasePath, `${label} basePath`);
+  assertEqual(actual?.phase, before?.phase, `${label} phase`);
+  assertEqual(actual?.commitSpec, before?.commitSpec, `${label} commitSpec`);
+  assertArrayEqual(actual?.relatedSpecs, before?.relatedSpecs, `${label} relatedSpecs`);
+  assertEqual(actual?.epicName, before?.epicName, `${label} epicName`);
+  assertEqual(actual?.epicSpecName, before?.epicSpecName, `${label} epicSpecName`);
 }
 
 function isExpectedMissingHelperError(error) {
