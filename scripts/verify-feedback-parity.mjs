@@ -9,7 +9,7 @@ let activeCase = requestedCase;
 
 const acceptanceChecklistCaseKey = 'acceptance-checklist';
 const cleanupCaseKey = 'cleanup';
-const lifecycleCaseNames = ['acceptance-checklist', 'cleanup',];
+const verifierLifecycleCaseNames = ['acceptance-checklist', 'cleanup',];
 const acceptanceChecklistCases = [
   'command-registration',
   'draft-fallback',
@@ -28,7 +28,7 @@ const cases = new Map([
   ['package-wiring', verifyPackageWiring],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
-const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
+const supportedCaseNames = [...cases.keys(), ...verifierLifecycleCaseNames.filter((name) => name !== acceptanceChecklistCaseKey)];
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
@@ -59,9 +59,9 @@ async function main() {
   }
 
   if (requestedCase === cleanupCaseKey) {
-    const cleanupResult = await runVerifierCase(requestedCase, verifyCleanupCase);
-    if (!cleanupResult.ok) {
-      printCaseFailure(cleanupResult);
+    const result = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!result.ok) {
+      printCaseFailure(result);
       process.exitCode = 1;
       return;
     }

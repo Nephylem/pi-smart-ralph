@@ -256,7 +256,7 @@
   - _Requirements: FR-1, FR-9, NFR-3, AC-4.2_
   - _Design: docs update; package verification wiring_
 
-- [ ] 3.6 [YELLOW] Refactor: align feedback verifier runner with existing parity-script conventions
+- [x] 3.6 [YELLOW] Refactor: align feedback verifier runner with existing parity-script conventions
   - **Do**:
     1. Normalize case parsing, summaries, and cleanup handling to match existing `scripts/verify-*.mjs` structure.
     2. Keep case names stable for later `verify:index` and `verify:pack` usage.
