@@ -13,6 +13,7 @@ const cases = new Map([
   ['command-registration', verifyCommandRegistration],
   ['spec-resolution', verifySpecResolution],
   ['headless-prompts', verifyHeadlessPrompts],
+  ['file-narrowing', verifyFileNarrowing],
 ]);
 
 async function main() {
@@ -270,6 +271,68 @@ async function verifyHeadlessPrompts() {
   }
 }
 
+async function verifyFileNarrowing() {
+  const handler = await loadRefactorCommandHandler();
+  const buildRefactorSelectedFilePlan = await loadBuildRefactorSelectedFilePlan();
+  const resolveRefactorSpecPlan = await loadResolveRefactorSpecPlan();
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-file-narrowing-'));
+
+  try {
+    const fixture = createRefactorCommandFixture(tempRoot);
+    const prompts = [];
+    const notifications = [];
+
+    await handler('--file=requirements', {
+      cwd: fixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          notifications.push({ message, type });
+        },
+        select(title, labels) {
+          prompts.push({ kind: 'select', title, labels });
+          return labels[0] ?? null;
+        },
+        confirm(title, message) {
+          prompts.push({ kind: 'confirm', title, message });
+          return true;
+        },
+        input(title, placeholder) {
+          prompts.push({ kind: 'input', title, placeholder });
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    const selectTitles = prompts.filter((entry) => entry.kind === 'select').map((entry) => entry.title.toLowerCase());
+    const promptedForFile = selectTitles.some((title) => title.includes('file') || title.includes('artifact'));
+    const promptedForSection = selectTitles.some((title) => title.includes('section'));
+    if (promptedForFile || !promptedForSection) {
+      throw new Error(`--file=requirements must suppress unrelated file prompts while still allowing section choice; got prompts ${JSON.stringify(prompts)} and notifications ${JSON.stringify(notifications)}`);
+    }
+
+    const plan = resolveRefactorSpecPlan({ cwd: fixture.projectRoot, reference: null });
+    const selectedFilePlan = await buildRefactorSelectedFilePlan(plan, 'requirements');
+
+    assertEqual(selectedFilePlan?.selectedFile, 'requirements', 'selected file from --file narrowing');
+    assertArrayEqual(selectedFilePlan?.availableSections, ['Scope', 'Open Questions'], 'narrowed section inventory');
+
+    const progressLearnings = Array.isArray(selectedFilePlan?.progressLearnings) ? selectedFilePlan.progressLearnings : [];
+    const hasFixtureLearning = progressLearnings.some((entry) => String(entry).includes('interactive planning should read this later'));
+    if (!hasFixtureLearning) {
+      throw new Error(`selected-file refactor plans must load .progress.md learnings; got ${JSON.stringify(selectedFilePlan)}`);
+    }
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -290,6 +353,17 @@ async function loadResolveRefactorSpecPlan() {
   }
 
   return resolveRefactorSpecPlan;
+}
+
+async function loadBuildRefactorSelectedFilePlan() {
+  const helper = await loadRefactorHelper();
+  const buildRefactorSelectedFilePlan = helper?.buildRefactorSelectedFilePlan;
+
+  if (typeof buildRefactorSelectedFilePlan !== 'function') {
+    expectedFail('buildRefactorSelectedFilePlan is not exported from extensions/ralph-specum/refactor.ts yet.');
+  }
+
+  return buildRefactorSelectedFilePlan;
 }
 
 async function loadRefactorCommandHandler() {

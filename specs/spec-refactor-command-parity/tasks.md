@@ -128,7 +128,7 @@
   - _Requirements: FR-6, FR-7, AC-2.1, AC-2.2_
   - _Design: `extensions/ralph-specum/refactor.ts` deep module_
 
-- [ ] Q3 [VERIFY] Quality check: interactive and headless verifier
+- [x] Q3 [VERIFY] Quality check: interactive and headless verifier
   - **Do**:
     1. Run the verifier implementing the research `headless-failure smoke` tooling row.
   - **Files**: None
@@ -140,7 +140,7 @@
 
 ## Phase 4: Scope narrowing and progress-learnings input
 
-- [ ] 2.4 [RED] Failing verifier: `--file` narrowing and progress learnings ingestion
+- [x] 2.4 [RED] Failing verifier: `--file` narrowing and progress learnings ingestion
   - **Do**:
     1. Add a `file-narrowing` case to `scripts/verify-refactor-parity.mjs`.
     2. Assert `--file=<value>` suppresses unrelated file prompts and that `.progress.md` learnings are loaded into the refactor plan.
