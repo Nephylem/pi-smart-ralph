@@ -256,7 +256,7 @@
   - _Requirements: FR-6, FR-8, NFR-2, AC-3.2, AC-3.3, AC-4.1, AC-4.2, AC-4.3_
   - _Design: Template/frontmatter renderer; Atomic writer_
 
-- [ ] 1.18 [YELLOW] Refactor: align renderers with packaged templates and schema names
+- [x] 1.18 [YELLOW] Refactor: align renderers with packaged templates and schema names
   - **Do**:
     1. Read packaged template files when available and keep inline fallback minimal.
     2. Keep frontmatter key names aligned with `schemas/spec.schema.json`.

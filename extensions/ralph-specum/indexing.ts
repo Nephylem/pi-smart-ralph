@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export type IndexCategory = 'controllers' | 'services' | 'models' | 'helpers' | 'migrations' | 'other';
 
@@ -428,12 +429,87 @@ function createEmptyIndexState(paths: IndexPaths, options: IndexOptions, indexed
   };
 }
 
+const COMPONENT_FRONTMATTER_TYPE = 'component-spec';
+const SUMMARY_FRONTMATTER_TYPE = 'index-summary';
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
 function renderComponentSpec(component: ComponentEntry, indexedAt: string): string {
-  return `---\ntype: component\ngenerated: true\nsource: ${component.sourceDisplayPath}\nhash: ${component.hash}\ncategory: ${component.category}\nindexed: ${indexedAt}\n---\n\n# ${component.name}\n\n## Summary\n\nIndexed ${component.category} component from ${component.sourceDisplayPath}.\n\n## Source\n\n- Path: ${component.sourceDisplayPath}\n- Category: ${component.category}\n- Hash: ${component.hash}\n- Indexed: ${indexedAt}\n`;
+  const fallback = minimalComponentSpecTemplate();
+  return renderTemplate(readPackagedTemplate('component-spec.md') ?? fallback, {
+    SOURCE_PATH: component.sourceDisplayPath,
+    CONTENT_HASH: component.hash,
+    CATEGORY: component.category,
+    TIMESTAMP: indexedAt,
+    COMPONENT_NAME: component.name,
+    AUTO_GENERATED_SUMMARY: `Indexed ${component.category} component from ${component.sourceDisplayPath}.`,
+    EXPORTS: component.exports,
+    METHODS: component.methods,
+    DEPENDENCIES: component.dependencies,
+    KEYWORDS: [component.category, component.name].join(', '),
+    RELATED_FILES: component.sourceDisplayPath,
+  });
+}
+
+function minimalComponentSpecTemplate(): string {
+  return `---\ntype: ${COMPONENT_FRONTMATTER_TYPE}\ngenerated: true\nsource: {{SOURCE_PATH}}\nhash: {{CONTENT_HASH}}\ncategory: {{CATEGORY}}\nindexed: {{TIMESTAMP}}\n---\n\n# {{COMPONENT_NAME}}\n\n## Purpose\n{{AUTO_GENERATED_SUMMARY}}\n\n## Source\n- Path: {{SOURCE_PATH}}\n- Category: {{CATEGORY}}\n- Hash: {{CONTENT_HASH}}\n- Indexed: {{TIMESTAMP}}\n`;
 }
 
 function renderIndexSummary(state: IndexStateV1): string {
-  return `# Index Summary\n\n- generated-at: ${state.indexed}\n- component count: ${state.componentCount}\n- external count: ${state.externalCount}\n- created: ${state.created}\n- updated: ${state.updated}\n- skipped: ${state.skipped}\n`;
+  const template = readPackagedTemplate('index-summary.md') ?? minimalIndexSummaryTemplate();
+  const rendered = renderTemplate(template, {
+    TIMESTAMP: state.indexed,
+    CATEGORIES: Object.entries(state.categories).map(([name, count]) => ({ name, count, lastUpdated: state.indexed })),
+    TOTAL: String(state.componentCount),
+    CONTROLLERS: [],
+    SERVICES: [],
+    MODELS: [],
+    HELPERS: [],
+    MIGRATIONS: [],
+    EXTERNAL: [],
+    EXCLUDES: state.excludes.length > 0 ? state.excludes.join(', ') : 'None',
+    PATHS: state.paths.join(', '),
+  });
+
+  return `${rendered.trimEnd()}\n\n## Contract Stats\n\n- generated-at: ${state.indexed}\n- component count: ${state.componentCount}\n- external count: ${state.externalCount}\n- created: ${state.created}\n- updated: ${state.updated}\n- skipped: ${state.skipped}\n`;
+}
+
+function minimalIndexSummaryTemplate(): string {
+  return `---\ntype: ${SUMMARY_FRONTMATTER_TYPE}\ngenerated: true\nindexed: {{TIMESTAMP}}\n---\n\n# Codebase Index\n`;
+}
+
+function readPackagedTemplate(fileName: string): string | null {
+  const templatePath = resolve(PACKAGE_ROOT, 'templates', fileName);
+  if (!existsSync(templatePath)) return null;
+  return readFileSync(templatePath, 'utf8');
+}
+
+type TemplateValue = string | number | boolean | Array<string | Record<string, unknown>>;
+
+function renderTemplate(template: string, values: Record<string, TemplateValue>): string {
+  let rendered = template;
+  for (const [key, value] of Object.entries(values)) {
+    if (Array.isArray(value)) {
+      rendered = renderEachBlock(rendered, key, value);
+    }
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (Array.isArray(value)) continue;
+    rendered = rendered.replaceAll(`{{${key}}}`, String(value));
+  }
+  return rendered.replace(/{{[^}]+}}/g, '');
+}
+
+function renderEachBlock(template: string, key: string, values: Array<string | Record<string, unknown>>): string {
+  const blockPattern = new RegExp(`{{#each ${escapeRegex(key)}}}([\\s\\S]*?){{/each}}`, 'g');
+  return template.replace(blockPattern, (_match, block: string) =>
+    values
+      .map((value) => {
+        if (typeof value === 'string') return block.replaceAll('{{this}}', value).trimEnd();
+        return block.replace(/{{([^}]+)}}/g, (_placeholder, rawName: string) => String(value[rawName.trim()] ?? '')).trimEnd();
+      })
+      .filter(Boolean)
+      .join('\n'),
+  );
 }
 
 export interface WriteIndexPlanOptions {

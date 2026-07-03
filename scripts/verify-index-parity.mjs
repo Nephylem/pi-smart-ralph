@@ -366,8 +366,13 @@ async function verifyRenderContract() {
     mkdirSync(specRoot, { recursive: true });
 
     const servicePath = join(servicesRoot, 'accounts.service.ts');
+    const duplicateServiceRoot = join(servicesRoot, 'billing');
+    mkdirSync(duplicateServiceRoot, { recursive: true });
+    const duplicateServicePath = join(duplicateServiceRoot, 'accounts.service.ts');
     const serviceSource = 'export class AccountsService { list() { return []; } }\n';
+    const duplicateServiceSource = 'export class BillingAccountsService { list() { return []; } }\n';
     writeFileSync(servicePath, serviceSource, 'utf8');
+    writeFileSync(duplicateServicePath, duplicateServiceSource, 'utf8');
 
     const result = await runRalphIndex({
       cwd: projectRoot,
@@ -381,17 +386,32 @@ async function verifyRenderContract() {
 
     const componentDir = join(specRoot, '.index', 'components');
     const componentFiles = readdirSync(componentDir).filter((entry) => entry.endsWith('.md'));
-    assertEqual(componentFiles.length, 1, 'component artifact count');
+    assertEqual(componentFiles.length, 2, 'component artifact count for duplicate basenames');
+    assertEqual(new Set(componentFiles).size, 2, 'duplicate basenames produce unique component artifact filenames');
+    if (!componentFiles.every((file) => file.startsWith('services-accounts-service-'))) {
+      expectedFail(`duplicate basename artifact filenames must keep stable category/base prefixes; got ${componentFiles.join(', ')}`);
+    }
 
-    const componentPath = join(componentDir, componentFiles[0]);
-    const componentMarkdown = readFileSync(componentPath, 'utf8');
-    const frontmatter = parseFrontmatter(componentMarkdown);
-    assertRequiredFrontmatter(frontmatter, ['type', 'generated', 'source', 'hash', 'category', 'indexed'], componentPath);
-    assertEqual(frontmatter.type, 'component', 'component frontmatter type');
+    const frontmatters = componentFiles.map((file) => {
+      const componentPath = join(componentDir, file);
+      const componentMarkdown = readFileSync(componentPath, 'utf8');
+      const frontmatter = parseFrontmatter(componentMarkdown);
+      assertRequiredFrontmatter(frontmatter, ['type', 'generated', 'source', 'hash', 'category', 'indexed'], componentPath);
+      return { path: componentPath, markdown: componentMarkdown, frontmatter };
+    });
+    const primaryComponent = frontmatters.find((entry) => entry.frontmatter.source === 'src/services/accounts.service.ts');
+    if (!primaryComponent) {
+      expectedFail(`component frontmatter source must include primary service; got ${JSON.stringify(frontmatters.map((entry) => entry.frontmatter))}`);
+    }
+    const { frontmatter } = primaryComponent;
+    assertEqual(frontmatter.type, 'component-spec', 'component frontmatter type follows packaged schema');
     assertEqual(frontmatter.generated, 'true', 'component frontmatter generated flag');
     assertEqual(frontmatter.source, 'src/services/accounts.service.ts', 'component frontmatter source');
     assertEqual(frontmatter.hash, sha256(serviceSource), 'component frontmatter source hash');
     assertEqual(frontmatter.category, 'services', 'component frontmatter category');
+    if (!primaryComponent.markdown.includes('## Purpose') || !primaryComponent.markdown.includes('## Location')) {
+      expectedFail(`component renderer must use packaged template structure or explicit fallback sections; got ${primaryComponent.markdown}`);
+    }
 
     const statePath = join(specRoot, '.index', 'index-state.json');
     const summaryPath = join(specRoot, '.index', 'index.md');
@@ -400,9 +420,9 @@ async function verifyRenderContract() {
     }
 
     const state = JSON.parse(readFileSync(statePath, 'utf8'));
-    assertEqual(state.componentCount, 1, 'state component count');
+    assertEqual(state.componentCount, 2, 'state component count');
     assertEqual(state.externalCount, 0, 'state external count');
-    assertEqual(state.created, 3, 'state created count for component, summary, and state');
+    assertEqual(state.created, 4, 'state created count for components, summary, and state');
     assertEqual(state.updated, 0, 'state updated count');
     assertEqual(state.skipped, 0, 'state skipped count');
     assertEqual(state.components?.[0]?.source, frontmatter.source, 'state component source matches frontmatter');
