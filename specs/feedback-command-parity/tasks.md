@@ -221,7 +221,7 @@
   - _Requirements: FR-4, FR-6, FR-8, AC-2.3, AC-3.3_
   - _Design: `feedback.ts` GitHub execution helpers_
 
-- [ ] Q5 [VERIFY] Quality check: GitHub execution verifier
+- [x] Q5 [VERIFY] Quality check: GitHub execution verifier
   - **Do**:
     1. Run the dedicated GitHub execution verifier.
     2. Run the research `source inspection` row for helper reuse in `extensions/ralph-specum/github.ts`.
@@ -232,7 +232,7 @@
   - _Requirements: FR-4, FR-6, FR-8, AC-2.3, AC-3.3_
   - _Design: shared GitHub adapter reuse_
 
-- [ ] 3.4 [RED] Failing verifier: README, package wiring, acceptance, and cleanup cases
+- [x] 3.4 [RED] Failing verifier: README, package wiring, acceptance, and cleanup cases
   - **Do**:
     1. Add a `package-wiring` case to `scripts/verify-feedback-parity.mjs`.
     2. Assert `README.md` documents confirmation, `--yes`, manual fallback, fixed repo, and archived-original behavior.

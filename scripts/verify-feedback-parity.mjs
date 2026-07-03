@@ -13,6 +13,7 @@ const cases = new Map([
   ['headless-input', verifyHeadlessInput],
   ['confirmation-flow', verifyConfirmationFlow],
   ['github-execution', verifyGithubExecution],
+  ['package-wiring', verifyPackageWiring],
 ]);
 
 async function main() {
@@ -531,6 +532,74 @@ async function verifyGithubExecution() {
 
   if (failures.length > 0) {
     expectedFail(`github execution verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function verifyPackageWiring() {
+  const readmePath = join(root, 'README.md');
+  const packageJsonPath = join(root, 'package.json');
+  const verifierPath = join(root, 'scripts', 'verify-feedback-parity.mjs');
+  const readme = readFileSync(readmePath, 'utf8');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const verifierSource = readFileSync(verifierPath, 'utf8');
+  const failures = [];
+
+  const readmeExpectations = [
+    {
+      label: 'confirmation requirement',
+      ok: /ralph-feedback[\s\S]{0,300}(confirm|confirmation)/i.test(readme),
+    },
+    {
+      label: '--yes behavior',
+      ok: /ralph-feedback[\s\S]{0,300}--yes/i.test(readme),
+    },
+    {
+      label: 'manual fallback path',
+      ok: /ralph-feedback[\s\S]{0,400}(manual|fallback|issues\/new)/i.test(readme),
+    },
+    {
+      label: 'fixed repo targeting',
+      ok: /ralph-feedback[\s\S]{0,400}Nephylem\/pi-smart-ralph/i.test(readme),
+    },
+    {
+      label: 'archived original behavior',
+      ok: /ralph-feedback[\s\S]{0,500}(archived|original)[\s\S]{0,200}tzachbon\/smart-ralph/i.test(readme),
+    },
+  ];
+
+  const missingReadmeCoverage = readmeExpectations
+    .filter((entry) => !entry.ok)
+    .map((entry) => entry.label);
+  if (missingReadmeCoverage.length > 0) {
+    failures.push(`README.md must document ${missingReadmeCoverage.join(', ')} for /ralph-feedback`);
+  }
+
+  const verifyIndex = packageJson?.scripts?.['verify:index'] ?? '';
+  const verifyPack = packageJson?.scripts?.['verify:pack'] ?? '';
+  const prepack = packageJson?.scripts?.prepack ?? '';
+
+  if (!verifyIndex.includes('node scripts/verify-feedback-parity.mjs --case acceptance-checklist')) {
+    failures.push('package.json scripts.verify:index must run feedback acceptance-checklist coverage');
+  }
+
+  if (!verifyPack.includes('node scripts/verify-feedback-parity.mjs --case cleanup')) {
+    failures.push('package.json scripts.verify:pack must run feedback cleanup coverage');
+  }
+
+  if (!prepack.includes('npm run verify:index') || !prepack.includes('npm run verify:pack')) {
+    failures.push('package.json scripts.prepack must continue routing package verification through npm run verify:index and npm run verify:pack');
+  }
+
+  const requiredCaseNames = ['acceptance-checklist', 'cleanup'];
+  const missingCaseNames = requiredCaseNames.filter(
+    (caseName) => !new RegExp(`['\"]${caseName}['\"]\\s*,`).test(verifierSource),
+  );
+  if (missingCaseNames.length > 0) {
+    failures.push(`verify-feedback-parity.mjs must define cases for ${missingCaseNames.join(', ')}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`package wiring verification failed for ${readmePath} and ${packageJsonPath}: ${failures.join('; ')}`);
   }
 }
 
