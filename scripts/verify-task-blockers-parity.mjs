@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
@@ -189,6 +190,7 @@ function loadTaskCompletionHelper() {
   const context = {
     module: { exports: {} },
     exports: {},
+    require: createRequire(import.meta.url),
   };
 
   vm.runInNewContext(executableSource, context, { filename: helperPath });
@@ -197,6 +199,7 @@ function loadTaskCompletionHelper() {
 
 function transpileTaskCompletionSource(source) {
   return source
+    .replace(/import\s+\{([^}]+)\}\s+from\s+'([^']+)';/g, 'const {$1} = require("$2");')
     .replace(/export\s+type\s+[\s\S]*?;\n/g, '')
     .replace(/export\s+interface\s+[\s\S]*?\n}\n/g, '')
     .replace(/export\s+function\s+analyzeTaskWorkspace\(([^)]*)\)\s*:\s*TaskWorkspaceReport\s*{/m, 'function analyzeTaskWorkspace($1) {')

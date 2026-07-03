@@ -81,7 +81,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1_
   - _Design: `TaskWorkspaceInput`; `TaskWorkspaceReport`_
 
-- [ ] 1.5 [GREEN] Pass test: implement topology probing across task and spec artifacts
+- [x] 1.5 [GREEN] Pass test: implement topology probing across task and spec artifacts
   - **Do**:
     1. Probe repo roots for task files, `tasks.md`, and `.progress.md`.
     2. Return the correct enum for all four topology fixture cases.
