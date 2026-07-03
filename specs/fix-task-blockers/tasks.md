@@ -93,7 +93,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1_
   - _Design: `extensions/ralph-specum/task-completion.ts`; Edge Cases_
 
-- [ ] 1.6 [YELLOW] Refactor: normalize path parsing and repo-root memoization
+- [x] 1.6 [YELLOW] Refactor: normalize path parsing and repo-root memoization
   - **Do**:
     1. Normalize `Files` parsing for `None`, comma lists, backticks, and newlines.
     2. Add per-path memoization so repeated git probes stay local and deterministic.

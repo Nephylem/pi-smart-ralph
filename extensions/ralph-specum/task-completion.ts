@@ -13,6 +13,7 @@ export interface TaskWorkspaceEntry {
 export interface TaskWorkspaceInput {
   basePath?: string;
   taskFiles?: string[];
+  filesDirective?: string | string[];
   tasksPath?: string;
   progressPath?: string;
   entries?: TaskWorkspaceEntry[];
@@ -63,8 +64,9 @@ function buildWorkspaceEntries(input) {
   }
 
   const probeEntries = [];
+  const repoRootByPath = new Map();
 
-  for (const taskFile of input.taskFiles ?? []) {
+  for (const taskFile of normalizeTaskFiles(input.taskFiles, input.filesDirective)) {
     probeEntries.push({ kind: 'task_file', path: resolve(taskFile) });
   }
 
@@ -78,22 +80,59 @@ function buildWorkspaceEntries(input) {
 
   return probeEntries.map((entry) => ({
     ...entry,
-    repoRoot: probeRepoRoot(entry.path),
+    repoRoot: probeRepoRoot(entry.path, repoRootByPath),
   }));
 }
 
-function probeRepoRoot(targetPath) {
-  const probePath = getProbePath(targetPath);
+function normalizeTaskFiles(taskFiles, filesDirective) {
+  if (Array.isArray(taskFiles) && taskFiles.length > 0) {
+    return taskFiles.map((taskFile) => resolve(String(taskFile).trim())).filter(Boolean);
+  }
+
+  if (Array.isArray(filesDirective)) {
+    return filesDirective.map((taskFile) => resolve(String(taskFile).trim())).filter(Boolean);
+  }
+
+  const normalizedDirective = String(filesDirective ?? '')
+    .replace(/`/g, '')
+    .replace(/\r/g, '\n')
+    .replace(/\n+/g, ',');
+
+  if (!normalizedDirective.trim() || /^none$/i.test(normalizedDirective.trim())) {
+    return [];
+  }
+
+  return normalizedDirective
+    .split(',')
+    .map((taskFile) => taskFile.trim())
+    .filter((taskFile) => taskFile.length > 0 && !/^none$/i.test(taskFile))
+    .map((taskFile) => resolve(taskFile));
+}
+
+function probeRepoRoot(targetPath, repoRootByPath) {
+  const resolvedTargetPath = resolve(targetPath);
+  const cachedRepoRoot = repoRootByPath.get(resolvedTargetPath);
+  if (cachedRepoRoot !== undefined) {
+    return cachedRepoRoot;
+  }
+
+  const probePath = getProbePath(resolvedTargetPath);
+  const cachedProbeRoot = repoRootByPath.get(probePath);
+  if (cachedProbeRoot !== undefined) {
+    repoRootByPath.set(resolvedTargetPath, cachedProbeRoot);
+    return cachedProbeRoot;
+  }
+
   const result = spawnSync('git', ['-C', probePath, 'rev-parse', '--show-toplevel'], {
     encoding: 'utf8',
   });
 
-  if (result.status !== 0) {
-    return null;
-  }
+  const repoRoot = result.status === 0 ? resolve(result.stdout.trim()) : null;
+  const normalizedRepoRoot = repoRoot || null;
 
-  const repoRoot = result.stdout.trim();
-  return repoRoot ? resolve(repoRoot) : null;
+  repoRootByPath.set(probePath, normalizedRepoRoot);
+  repoRootByPath.set(resolvedTargetPath, normalizedRepoRoot);
+  return normalizedRepoRoot;
 }
 
 function getProbePath(targetPath) {

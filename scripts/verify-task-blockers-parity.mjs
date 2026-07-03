@@ -22,6 +22,7 @@ const cleanupCaseKey = 'cleanup';
 const cases = new Map([
   ['topology-helper-contract', verifyTopologyHelperContract],
   ['topology-classification-fixtures', verifyTopologyClassificationFixtures],
+  ['topology-input-normalization', verifyTopologyInputNormalization],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -177,6 +178,81 @@ async function verifyTopologyClassificationFixtures() {
       const report = helper.analyzeTaskWorkspace(testCase.input);
       assertTopologyCase(testCase, report);
       assertClassificationKinds(testCase, report);
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyTopologyInputNormalization() {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-normalization-'));
+
+  try {
+    const repoRoot = createGitFixture(join(fixtureRoot, 'repo'));
+    const specDir = join(repoRoot, 'specs', 'normalize');
+    const sharedTaskFile = join(repoRoot, 'src', 'shared.ts');
+    const alternateTaskFile = join(repoRoot, 'src', 'alternate.ts');
+
+    const inputs = [
+      {
+        name: 'none-directive',
+        input: createWorkspaceInput({ specDir, taskFiles: [] }),
+        filesDirective: 'None',
+        expectedTaskFiles: [],
+      },
+      {
+        name: 'comma-backtick-directive',
+        input: createWorkspaceInput({ specDir, taskFiles: [] }),
+        filesDirective: `\`${sharedTaskFile}\`, \`${alternateTaskFile}\``,
+        expectedTaskFiles: [sharedTaskFile, alternateTaskFile],
+      },
+      {
+        name: 'newline-directive',
+        input: createWorkspaceInput({ specDir, taskFiles: [] }),
+        filesDirective: `\`${sharedTaskFile}\`\n\`${alternateTaskFile}\``,
+        expectedTaskFiles: [sharedTaskFile, alternateTaskFile],
+      },
+    ];
+
+    for (const testCase of inputs) {
+      testCase.input.filesDirective = testCase.filesDirective;
+      materializeWorkspaceInput(testCase.input);
+      const helper = loadTaskCompletionHelper();
+      const report = helper.analyzeTaskWorkspace(testCase.input);
+      const taskFileEntries = (report.entries ?? [])
+        .filter((entry) => entry.kind === 'task_file')
+        .map((entry) => resolve(entry.path))
+        .sort();
+      const expectedTaskFiles = testCase.expectedTaskFiles.map((taskFile) => resolve(taskFile)).sort();
+
+      if (JSON.stringify(taskFileEntries) !== JSON.stringify(expectedTaskFiles)) {
+        expectedFail(`normalization fixture ${testCase.name} expected task files ${expectedTaskFiles.join(', ')} but received ${taskFileEntries.join(', ')}`);
+      }
+    }
+
+    const memoizedInput = createWorkspaceInput({
+      specDir: join(repoRoot, 'specs', 'memoized'),
+      taskFiles: [sharedTaskFile, sharedTaskFile],
+    });
+    materializeWorkspaceInput(memoizedInput);
+
+    const spawnCalls = [];
+    const childProcess = createRequire(import.meta.url)('node:child_process');
+    const originalSpawnSync = childProcess.spawnSync;
+    childProcess.spawnSync = (...args) => {
+      spawnCalls.push(args[1]?.join(' ') ?? '');
+      return originalSpawnSync(...args);
+    };
+
+    try {
+      const helper = loadTaskCompletionHelper();
+      helper.analyzeTaskWorkspace(memoizedInput);
+    } finally {
+      childProcess.spawnSync = originalSpawnSync;
+    }
+
+    if (spawnCalls.length !== 2) {
+      expectedFail(`memoization fixture expected 2 git probes for duplicate task/spec directories but received ${spawnCalls.length}`);
     }
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
