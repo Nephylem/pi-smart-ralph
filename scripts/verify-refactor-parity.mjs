@@ -22,6 +22,7 @@ const cases = new Map([
   ['cascade-handling', verifyCascadeHandling],
   ['state-merge', verifyStateMerge],
   ['commit-spec', verifyCommitSpec],
+  ['package-wiring', verifyPackageWiring],
 ]);
 
 async function main() {
@@ -803,6 +804,24 @@ async function verifyCommitSpec() {
   }
 }
 
+async function verifyPackageWiring() {
+  const packageJsonPath = join(root, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const scripts = packageJson?.scripts ?? {};
+  const failures = [];
+  const requiredEntryPoints = ['prepack', 'verify:index', 'verify:pack'];
+
+  for (const scriptName of requiredEntryPoints) {
+    if (!scriptEventuallyRunsRefactorVerifier(scriptName, scripts)) {
+      failures.push(`package.json script "${scriptName}" must reach scripts/verify-refactor-parity.mjs through existing npm script wiring`);
+    }
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`package wiring inspection failed for ${packageJsonPath}: ${failures.join('; ')}`);
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -1213,6 +1232,18 @@ function stringifyParseResult(result) {
     if (value instanceof Error) return { message: value.message };
     return value;
   });
+}
+
+function scriptEventuallyRunsRefactorVerifier(scriptName, scripts, seen = new Set()) {
+  if (seen.has(scriptName)) return false;
+  seen.add(scriptName);
+
+  const command = String(scripts?.[scriptName] ?? '');
+  if (!command) return false;
+  if (command.includes('scripts/verify-refactor-parity.mjs')) return true;
+
+  const nestedScripts = [...command.matchAll(/npm run\s+([^\s&;|]+)/g)].map((match) => match[1]);
+  return nestedScripts.some((nestedScriptName) => scriptEventuallyRunsRefactorVerifier(nestedScriptName, scripts, seen));
 }
 
 function hashDirectory(directoryPath) {

@@ -449,7 +449,7 @@
   - _Requirements: FR-16, FR-17, AC-4.5, AC-4.6_
   - _Design: local git helper surface_
 
-- [ ] Q10 [VERIFY] Quality check: commitSpec verifier
+- [x] Q10 [VERIFY] Quality check: commitSpec verifier
   - **Do**:
     1. Run the temp-git verifier implementing the research `fixture/state smoke` recommendation for local commit/no-push behavior.
   - **Files**: None
@@ -461,7 +461,7 @@
 
 ## Phase 11: Package verification wiring
 
-- [ ] 6.1 [RED] Failing verifier: package entrypoints do not yet enforce refactor parity coverage
+- [x] 6.1 [RED] Failing verifier: package entrypoints do not yet enforce refactor parity coverage
   - **Do**:
     1. Add a `package-wiring` case to `scripts/verify-refactor-parity.mjs`.
     2. Assert `package.json` wires the refactor verifier into the discovered package verification entrypoints without inventing a new framework.
