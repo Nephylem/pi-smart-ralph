@@ -3786,6 +3786,173 @@ type SubagentCompletion = {
 	status?: string;
 };
 
+type RalphSubagentManager = {
+	getRecord(
+		id: string,
+	): {
+		id: string;
+		startedAt: number;
+		completedAt?: number;
+		status: string;
+		toolUses: number;
+		lifetimeUsage: {
+			input: number;
+			output: number;
+			cacheWrite: number;
+		};
+		session?: {
+			getSessionStats?: () => {
+				tokens?: {
+					total?: number;
+				};
+				contextUsage?: {
+					contextWindow?: number;
+					percent?: number | null;
+				};
+			};
+		};
+	} | undefined;
+};
+
+const RALPH_SUBAGENT_STATUS_INTERVAL_MS = 250;
+const RALPH_TOKEN_BAR_WIDTH = 16;
+
+function getRalphSubagentManager(): RalphSubagentManager | undefined {
+	const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
+	return manager && typeof manager.getRecord === "function" ? (manager as RalphSubagentManager) : undefined;
+}
+
+function formatTokenCount(tokens: number): string {
+	if (!Number.isFinite(tokens) || tokens < 0) return "0";
+	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+	if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+	return `${Math.round(tokens)}`;
+}
+
+function formatTokenUsageBar(current: number, max: number, width = RALPH_TOKEN_BAR_WIDTH): string {
+	if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
+		return `${formatTokenCount(current)} / unknown`;
+	}
+	const percent = Math.max(0, Math.min(1, current / max));
+	const filled = percent >= 1 ? width : Math.max(0, Math.floor(percent * width));
+	let bar: string;
+	if (filled <= 0) {
+		bar = ">" + "-".repeat(Math.max(0, width - 1));
+	} else if (filled >= width) {
+		bar = "=".repeat(width);
+	} else {
+		bar = "=".repeat(filled) + ">" + "-".repeat(Math.max(0, width - filled - 1));
+	}
+	return `${(percent * 100).toFixed(1)}% [${bar}] ${formatTokenCount(current)}/${formatTokenCount(max)}`;
+}
+
+function getSubagentLifetimeUsageTokens(record: { lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number } }): number {
+	const usage = record.lifetimeUsage;
+	if (!usage) return 0;
+	return Math.max(0, (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheWrite ?? 0));
+}
+
+function getSubagentUsageText(record?: {
+	lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
+	session?: {
+		getSessionStats?: () => {
+			tokens?: { total?: number };
+			contextUsage?: { contextWindow?: number; percent?: number | null };
+		};
+	};
+}): string {
+	if (!record) return "";
+
+	const session = record.session;
+	const stats = typeof session?.getSessionStats === "function" ? session.getSessionStats() : undefined;
+	const sessionTokens = typeof stats?.tokens?.total === "number" ? stats.tokens.total : undefined;
+	const contextWindow = typeof stats?.contextUsage?.contextWindow === "number" ? stats.contextUsage.contextWindow : undefined;
+	const contextPercent =
+		typeof stats?.contextUsage?.percent === "number" && Number.isFinite(stats.contextUsage.percent)
+			? stats.contextUsage.percent
+			: undefined;
+
+	if (contextWindow !== undefined && Number.isFinite(contextWindow) && contextWindow > 0 && typeof sessionTokens === "number" && Number.isFinite(sessionTokens)) {
+		const percent = contextPercent === undefined ? (sessionTokens / contextWindow) * 100 : contextPercent;
+		const safePercent = Math.max(0, Math.min(100, percent));
+		if (Number.isFinite(safePercent)) {
+			return formatTokenUsageBar(Math.max(0, sessionTokens), contextWindow, RALPH_TOKEN_BAR_WIDTH).replace(
+				/^.*?% /,
+				`${safePercent.toFixed(1)}% `,
+			);
+		}
+	}
+
+	const lifetime = getSubagentLifetimeUsageTokens(record);
+	return `${formatTokenCount(lifetime)} tokens`;
+}
+
+function setSubagentStatusSurfaces(ctx: ExtensionCommandContext, message: string): void {
+	setRalphStatus(ctx, message);
+	if (ctx.hasUI) ctx.ui.setStatus("subagents", message);
+}
+
+function clearSubagentStatusSurfaces(ctx: ExtensionCommandContext): void {
+	if (ctx.hasUI) ctx.ui.setStatus("subagents", undefined);
+}
+
+function ralphSubagentStatusMessage(
+	phase: string,
+	agentId: string,
+	agentName: string,
+	record?: {
+		startedAt: number;
+		status?: string;
+		toolUses?: number;
+		lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
+		session?: {
+			getSessionStats?: () => {
+				tokens?: { total?: number };
+				contextUsage?: { contextWindow?: number; percent?: number | null };
+			};
+		};
+	},
+): string {
+	const statusBits: string[] = [];
+	const status = record?.status ? `(${record.status})` : "(running)";
+	statusBits.push(status);
+	const usage = getSubagentUsageText(record);
+	if (usage) statusBits.push(usage);
+	if ((record?.toolUses ?? 0) > 0) statusBits.push(`${record?.toolUses} tool use${(record?.toolUses ?? 0) === 1 ? "" : "s"}`);
+	if (record?.startedAt) statusBits.push(formatRalphElapsed(record.startedAt));
+
+	return `Ralph ${phase}: ${agentId} ${agentName} · ${statusBits.join(" · ")}`;
+}
+
+function startRalphSubagentStatusTicker(
+	ctx: ExtensionCommandContext,
+	phase: string,
+	agentName: string,
+	agentId: string,
+): () => void {
+	if (!ctx.hasUI) return () => {};
+	const manager = getRalphSubagentManager();
+	if (!manager) {
+		setSubagentStatusSurfaces(ctx, `Ralph ${phase}: ${agentId} ${agentName}`);
+		return () => {
+			clearSubagentStatusSurfaces(ctx);
+		};
+	}
+
+	const update = () => {
+		const record = manager.getRecord(agentId);
+		setSubagentStatusSurfaces(ctx, ralphSubagentStatusMessage(phase, agentId, agentName, record));
+	};
+
+	const timer = setInterval(update, RALPH_SUBAGENT_STATUS_INTERVAL_MS);
+	(timer as { unref?: () => void }).unref?.();
+	update();
+	return () => {
+		clearInterval(timer);
+		clearSubagentStatusSurfaces(ctx);
+	};
+}
+
 type SubagentRunDefinition = {
 	agentName: string;
 	description: string;
@@ -4147,7 +4314,7 @@ type SubagentCompletionWaiter = {
 	dispose(): void;
 };
 
-type SubagentSpawnCallback = (agentId: string) => void | Promise<void>;
+type SubagentSpawnCallback = (agentId: string) => void | (() => void) | Promise<void | (() => void)>;
 
 function createSubagentCompletionWaiter(pi: ExtensionAPI, timeoutMs: number): SubagentCompletionWaiter {
 	let targetAgentId: string | null = null;
@@ -4253,13 +4420,19 @@ async function runRalphSubagent(
 					// Leave isBackground undefined so pi-subagents treats the record as RPC
 					// managed and keeps it visible in the default background-only widget.
 					maxTurns: definition.maxTurns,
+					inheritContext: false,
 				},
 			},
 			10000,
 		);
 		if (!spawned?.id) throw new Error("pi-subagents spawn returned no agent id.");
-		await onSpawned?.(spawned.id);
-		return await completionWaiter.waitFor(spawned.id);
+		const onSpawnedResult = await onSpawned?.(spawned.id);
+		const stopSpawnStatus = typeof onSpawnedResult === "function" ? onSpawnedResult : () => {};
+		try {
+			return await completionWaiter.waitFor(spawned.id);
+		} finally {
+			stopSpawnStatus();
+		}
 	} catch (error) {
 		completionWaiter.dispose();
 		throw error;
@@ -4350,6 +4523,7 @@ async function runArtifactReview(
 				maxTurns: 40,
 			},
 			prompt,
+			(agentId) => startRalphSubagentStatusTicker(ctx, `review ${definition.phase}`, ARTIFACT_REVIEWER_AGENT, agentId),
 		);
 		return validateArtifactReviewCompletion(completion);
 	} catch (error) {
@@ -4719,7 +4893,7 @@ async function generatePhaseArtifact(
 		const iterationSuffix = reviewContext ? ` (${reviewContext.iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})` : "";
 		await notify(ctx, `Running ${definition.agentName} for ${spec.name}${iterationSuffix}...`);
 		await runRalphSubagent(pi, definition, prompt, (agentId) => {
-			setRalphStatus(ctx, `Ralph ${definition.phase}: ${agentId} running ${definition.agentName}`);
+			return startRalphSubagentStatusTicker(ctx, definition.phase, definition.agentName, agentId);
 		});
 	} catch (error) {
 		try {
@@ -4979,6 +5153,23 @@ type CompletionValidation = {
 	output: string;
 };
 
+type TaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
+
+type TaskModificationRequest = {
+	type: TaskModificationType;
+	originalTaskId: string;
+	reasoning: string;
+	proposedTasks: string[];
+};
+
+type TaskModificationProcessResult = {
+	present: boolean;
+	applied: boolean;
+	state?: RalphState;
+	summary?: string;
+	error?: string;
+};
+
 type NextTaskResult =
 	| { kind: "complete" }
 	| { kind: "runnable"; task: ParsedNativeTask }
@@ -5168,6 +5359,279 @@ function setTaskCheckboxStatus(spec: SpecEntry, taskIndex: number, completed: bo
 	}
 
 	throw new Error(`Unable to locate task index ${taskIndex} in ${tasksPath}.`);
+}
+
+function countTaskIdDots(taskId: string): number {
+	return (taskId.match(/\./g) ?? []).length;
+}
+
+function taskModificationDepth(taskId: string): number {
+	return Math.max(0, countTaskIdDots(taskId) - 1);
+}
+
+function extractBalancedJsonObject(content: string): string | null {
+	const start = content.indexOf("{");
+	if (start < 0) return null;
+
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < content.length; index += 1) {
+		const character = content[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (character === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (character === '"') inString = false;
+			continue;
+		}
+
+		if (character === '"') {
+			inString = true;
+			continue;
+		}
+		if (character === "{") {
+			depth += 1;
+			continue;
+		}
+		if (character === "}") {
+			depth -= 1;
+			if (depth === 0) return content.slice(start, index + 1);
+		}
+	}
+
+	return null;
+}
+
+function extractTaggedJsonPayload(output: string, marker: string): string | null {
+	const markerMatch = new RegExp(marker, "i").exec(output);
+	if (!markerMatch || markerMatch.index < 0) return null;
+	const tail = output.slice(markerMatch.index + markerMatch[0].length);
+	const fenced = tail.match(/(?:```|~~~)\s*(?:json)?\s*\n?([\s\S]*?)\n?(?:```|~~~)/i);
+	if (fenced?.[1]) return fenced[1].trim();
+	return extractBalancedJsonObject(tail)?.trim() ?? null;
+}
+
+function parseTaskModificationRequest(output: string): TaskModificationRequest | null {
+	if (!/TASK_MODIFICATION_REQUEST/i.test(output)) return null;
+
+	const payloadText = extractTaggedJsonPayload(output, "TASK_MODIFICATION_REQUEST");
+	if (!payloadText) throw new Error("TASK_MODIFICATION_REQUEST was present but no JSON payload was found.");
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(payloadText) as unknown;
+	} catch (error) {
+		throw new Error(`TASK_MODIFICATION_REQUEST payload is not valid JSON: ${formatError(error)}`);
+	}
+	if (!isRecordValue(parsed)) throw new Error("TASK_MODIFICATION_REQUEST payload must be a JSON object.");
+
+	const typeValue = typeof parsed.type === "string" ? parsed.type.trim().toUpperCase() : "";
+	if (typeValue !== "SPLIT_TASK" && typeValue !== "ADD_PREREQUISITE" && typeValue !== "ADD_FOLLOWUP") {
+		throw new Error(`Unsupported TASK_MODIFICATION_REQUEST type: ${String(parsed.type ?? "")}.`);
+	}
+
+	const originalTaskId = typeof parsed.originalTaskId === "string" ? parsed.originalTaskId.trim() : "";
+	if (!originalTaskId) throw new Error("TASK_MODIFICATION_REQUEST must include originalTaskId.");
+
+	const reasoningSource = typeof parsed.reasoning === "string"
+		? parsed.reasoning
+		: typeof parsed.reason === "string"
+			? parsed.reason
+			: "";
+	const reasoning = normalizeWhitespace(reasoningSource);
+	if (!reasoning) throw new Error("TASK_MODIFICATION_REQUEST must include reasoning.");
+
+	const proposedTasks = Array.isArray(parsed.proposedTasks)
+		? parsed.proposedTasks.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean)
+		: [];
+	if (proposedTasks.length === 0) throw new Error("TASK_MODIFICATION_REQUEST must include at least one proposed task block.");
+	if ((typeValue === "ADD_PREREQUISITE" || typeValue === "ADD_FOLLOWUP") && proposedTasks.length !== 1) {
+		throw new Error(`${typeValue} must propose exactly one task block.`);
+	}
+
+	return {
+		type: typeValue,
+		originalTaskId,
+		reasoning,
+		proposedTasks,
+	};
+}
+
+function insertTaskBlocks(spec: SpecEntry, anchorTask: ParsedNativeTask, blocks: string[], position: "before" | "after"): void {
+	const tasksPath = artifactPath(spec, "tasks");
+	const lines = readFileSync(tasksPath, "utf8").replace(/\r\n/g, "\n").split("\n");
+	const insertionLines = [...blocks.join("\n\n").split("\n"), ""];
+	const insertAt = position === "before" ? anchorTask.startLine : anchorTask.endLine;
+	lines.splice(insertAt, 0, ...insertionLines);
+	atomicWriteCoordinatorText(tasksPath, `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`);
+}
+
+function appendTaskModificationProgress(
+	spec: SpecEntry,
+	task: ParsedNativeTask,
+	request: TaskModificationRequest,
+	proposedTaskIds: string[],
+	options: RalphPathOptions,
+): CoordinatorProgressCommitResult {
+	const progressPath = appendProgress(
+		spec,
+		[
+			"",
+			`### Task modification applied (${new Date().toISOString()})`,
+			`- Type: ${request.type}`,
+			`- Original task: ${task.subject}`,
+			`- Original task id: ${request.originalTaskId}`,
+			`- Proposed tasks: ${proposedTaskIds.join(", ")}`,
+			`- Reason: ${request.reasoning}`,
+			"",
+		].join("\n"),
+		options,
+	);
+
+	return commitTrackedProgressIfDirty(
+		progressPath,
+		`chore(ralph): record task modification for ${spec.name} task ${task.taskNumber ?? task.index + 1}`,
+	);
+}
+
+function handleTaskModificationRequest(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	task: ParsedNativeTask,
+	state: RalphState | null,
+	output: string,
+	options: RalphPathOptions,
+): TaskModificationProcessResult {
+	let request: TaskModificationRequest | null;
+	try {
+		request = parseTaskModificationRequest(output);
+	} catch (error) {
+		return { present: true, applied: false, error: formatError(error) };
+	}
+	if (!request) return { present: false, applied: false };
+
+	try {
+		const currentTaskId = task.taskNumber ?? task.stableKey;
+		if (request.originalTaskId !== currentTaskId) {
+			throw new Error(`TASK_MODIFICATION_REQUEST targeted ${request.originalTaskId}, but the active task is ${currentTaskId}.`);
+		}
+
+		const maxModificationsPerTask = numberField(state, "maxModificationsPerTask") ?? 3;
+		const maxModificationDepth = numberField(state, "maxModificationDepth") ?? 2;
+		const modificationMap = stateRecordField(state, "modificationMap");
+		const existingEntry = isRecordValue(modificationMap[request.originalTaskId]) ? modificationMap[request.originalTaskId] : {};
+		const priorCount = isRecordValue(existingEntry) && typeof existingEntry.count === "number" && Number.isFinite(existingEntry.count)
+			? existingEntry.count
+			: 0;
+		if (priorCount >= maxModificationsPerTask) {
+			throw new Error(`Max modifications (${maxModificationsPerTask}) reached for task ${request.originalTaskId}.`);
+		}
+
+		const taskData = readImplementationTasks(spec);
+		const existingTaskIds = new Set(taskData.tasks.map((entry) => entry.taskNumber).filter((value): value is string => typeof value === "string" && value.trim().length > 0));
+		const requiredFields = ["Do", "Files", "Done when", "Verify", "Commit"];
+		const proposedParsed = request.proposedTasks.map((block, index) => {
+			const parsedTasks = parseTasksForNativeCards(block.trim());
+			if (parsedTasks.length !== 1) throw new Error(`Proposed task ${index + 1} must be a single checkbox task block.`);
+			const parsedTask = parsedTasks[0];
+			if (parsedTask.status === "completed") throw new Error(`Proposed task ${index + 1} must be unchecked.`);
+			if (!parsedTask.taskNumber) throw new Error(`Proposed task ${index + 1} must start with a numeric task id.`);
+			if (existingTaskIds.has(parsedTask.taskNumber)) throw new Error(`Proposed task id ${parsedTask.taskNumber} already exists in tasks.md.`);
+			if (taskModificationDepth(parsedTask.taskNumber) > maxModificationDepth) {
+				throw new Error(`Proposed task id ${parsedTask.taskNumber} exceeds max modification depth ${maxModificationDepth}.`);
+			}
+			for (const field of requiredFields) {
+				if (!parsedTask.fields[field]) throw new Error(`Proposed task ${parsedTask.taskNumber} is missing required field: ${field}.`);
+			}
+			return parsedTask;
+		});
+
+		const proposedTaskIds = proposedParsed.map((entry) => entry.taskNumber ?? entry.stableKey);
+		if (new Set(proposedTaskIds).size !== proposedTaskIds.length) {
+			throw new Error(`TASK_MODIFICATION_REQUEST proposed duplicate task ids: ${proposedTaskIds.join(", ")}.`);
+		}
+
+		let refreshedTaskData = taskData;
+		let anchorTask = refreshedTaskData.tasks.find((entry) => entry.stableKey === task.stableKey) ?? refreshedTaskData.tasks[task.index];
+		if (!anchorTask) throw new Error(`Unable to locate active task ${currentTaskId} in tasks.md.`);
+
+		if (request.type !== "ADD_PREREQUISITE") {
+			setTaskCheckboxStatus(spec, anchorTask.index, true);
+			refreshedTaskData = readImplementationTasks(spec);
+			anchorTask = refreshedTaskData.tasks.find((entry) => entry.stableKey === task.stableKey) ?? refreshedTaskData.tasks[task.index];
+			if (!anchorTask) throw new Error(`Unable to relocate task ${currentTaskId} after updating completion state.`);
+		}
+
+		insertTaskBlocks(spec, anchorTask, request.proposedTasks.map((block) => block.trim()), request.type === "ADD_PREREQUISITE" ? "before" : "after");
+
+		const updatedTasks = readImplementationTasks(spec).tasks;
+		const next = nextImplementationTask(updatedTasks);
+		const mirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
+		const existingModifications = isRecordValue(existingEntry) && Array.isArray(existingEntry.modifications) ? [...existingEntry.modifications] : [];
+		const modificationRecord = {
+			id: proposedTaskIds[0] ?? request.originalTaskId,
+			ids: proposedTaskIds,
+			type: request.type,
+			reason: request.reasoning,
+			appliedAt: new Date().toISOString(),
+		};
+		const modificationStatePatch = {
+			...modificationMap,
+			[request.originalTaskId]: {
+				...(isRecordValue(existingEntry) ? existingEntry : {}),
+				count: priorCount + 1,
+				modifications: [...existingModifications, modificationRecord],
+			},
+		};
+		const progressCommit = appendTaskModificationProgress(spec, task, request, proposedTaskIds, options);
+		const progressCommitSummary = progressCommit.committed
+			? `; coordinator progress commit ${progressCommit.hash ?? "unknown"}`
+			: progressCommit.error
+				? `; coordinator progress commit failed: ${progressCommit.error}`
+				: "";
+		const summary = `- Applied ${request.type} to task ${request.originalTaskId} -> ${proposedTaskIds.join(", ")} (${request.reasoning}${progressCommitSummary})`;
+
+		return {
+			present: true,
+			applied: true,
+			state: mergeRalphState(
+				spec,
+				{
+					...nativeTaskMirrorStatePatch(mirror),
+					phase: next.kind === "complete" ? "completed" : "execution",
+					taskIndex: next.kind === "complete" ? updatedTasks.length : next.task.index,
+					totalTasks: updatedTasks.length,
+					taskIteration: 1,
+					globalIteration: (numberField(state, "globalIteration") ?? 1) + 1,
+					blocked: false,
+					validationError: null,
+					activeTaskPendingEvidence: null,
+					modificationMap: modificationStatePatch,
+					maxModificationsPerTask,
+					maxModificationDepth,
+					lastSubagentOutput: truncateForPrompt(output, 6000),
+					lastTaskModification: {
+						type: request.type,
+						originalTaskId: request.originalTaskId,
+						proposedTaskIds,
+						reasoning: request.reasoning,
+						appliedAt: new Date().toISOString(),
+					},
+				},
+				options,
+			),
+			summary,
+		};
+	} catch (error) {
+		return { present: true, applied: false, error: formatError(error) };
+	}
 }
 
 function restoreUnverifiedActiveTaskIfNeeded(
@@ -5606,6 +6070,9 @@ function implementationAttemptPatch(
 		recoveryMode: parsed.recoveryMode,
 		globalIteration,
 		maxGlobalIterations: parsed.maxGlobalIterations,
+		modificationMap: stateRecordField(state, "modificationMap"),
+		maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? 3,
+		maxModificationDepth: numberField(state, "maxModificationDepth") ?? 2,
 		awaitingApproval: false,
 		blocked: false,
 		validationError: null,
@@ -5831,6 +6298,9 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 				recoveryMode: parsed.recoveryMode,
 				globalIteration: numberField(state, "globalIteration") ?? 1,
 				taskIteration: numberField(state, "taskIteration") ?? 1,
+				modificationMap: stateRecordField(state, "modificationMap"),
+				maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? 3,
+				maxModificationDepth: numberField(state, "maxModificationDepth") ?? 2,
 				awaitingApproval: false,
 				blocked: false,
 				validationError: null,
@@ -5929,10 +6399,12 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 			setRalphStatus(ctx, `Ralph implement: ${task.activeForm}`);
 			const prompt = buildImplementationPrompt(task, definition, spec, state, options);
 			let validation: CompletionValidation;
+			let completionOutput = "";
 			try {
 				const completion = await runRalphSubagent(pi, definition, prompt, (agentId) => {
-					setRalphStatus(ctx, `Ralph implement: ${agentId} ${task.activeForm}`);
+					return startRalphSubagentStatusTicker(ctx, `implement ${task.activeForm}`, definition.agentName, agentId);
 				});
+				completionOutput = subagentCompletionOutput(completion);
 				validation = validateSubagentCompletion(completion, definition);
 			} catch (error) {
 				validation = {
@@ -5944,10 +6416,39 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 			}
 
 			if (!validation.ok) {
+				const modificationResult = definition.completionSignal === "TASK_COMPLETE"
+					? handleTaskModificationRequest(pi, ctx, spec, task, state, completionOutput || validation.output, options)
+					: { present: false, applied: false };
+				if (modificationResult.present) {
+					if (!modificationResult.applied) {
+						const reason = modificationResult.error ?? validation.error ?? "Task modification request could not be applied.";
+						appendImplementationBlocker(spec, task, reason, options);
+						state = mergeRalphState(
+							spec,
+							{
+								phase: "execution",
+								taskIndex: task.index,
+								totalTasks: tasks.length,
+								taskIteration,
+								globalIteration: globalIteration + 1,
+								blocked: true,
+								validationError: reason,
+								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+							},
+							options,
+						);
+						await notify(ctx, formatBlockerMessage(spec, task, reason), "warning");
+						return;
+					}
+					state = modificationResult.state ?? state;
+					if (modificationResult.summary) completedSummaries.push(modificationResult.summary);
+					continue;
+				}
+
 				setTaskCheckboxStatus(spec, task.index, false);
 				const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
 				appendImplementationBlocker(spec, task, reason, options);
-				const exhausted = taskIteration >= parsed.maxTaskIterations || /TASK_MODIFICATION_REQUEST|USER_INPUT_REQUIRED/.test(validation.output);
+				const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
 				state = mergeRalphState(
 					spec,
 					{
@@ -8055,7 +8556,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 				pi,
 				{ agentName: TRIAGE_AGENT, description: `Triage epic ${epic.name}`, maxTurns: 80 },
 				buildTriagePrompt(epic, parsed, goal, files),
-				(agentId) => setRalphStatus(ctx, `Ralph triage: ${agentId} running ${TRIAGE_AGENT}`),
+				(agentId) => startRalphSubagentStatusTicker(ctx, "triage", TRIAGE_AGENT, agentId),
 			);
 			const output = subagentCompletionOutput(completion);
 			if (/USER_INPUT_REQUIRED/i.test(output)) {

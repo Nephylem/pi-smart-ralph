@@ -13,6 +13,8 @@ pnpm-debug.log*
 tasks/
 subagents.json
 specs/
+scripts/
+tmp/
 
 # OS/editor noise
 .DS_Store
