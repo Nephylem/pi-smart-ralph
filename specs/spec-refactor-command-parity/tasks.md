@@ -82,7 +82,7 @@
   - _Requirements: FR-2, FR-5, AC-1.2, AC-1.5_
   - _Design: `extensions/ralph-specum/refactor.ts`_
 
-- [ ] Q2 [VERIFY] Quality check: resolution and artifact verifier
+- [x] Q2 [VERIFY] Quality check: resolution and artifact verifier
   - **Do**:
     1. Run the temp-root verifier implementing the research `fixture/state smoke` tooling row for configured-root resolution and empty-artifact safety.
   - **Files**: None
@@ -94,7 +94,7 @@
 
 ## Phase 3: Interactive planning and headless safety
 
-- [ ] 2.1 [RED] Failing verifier: file/section prompts and headless safe-stop
+- [x] 2.1 [RED] Failing verifier: file/section prompts and headless safe-stop
   - **Do**:
     1. Add a `headless-prompts` case to `scripts/verify-refactor-parity.mjs` with stubbed UI and headless fixtures.
     2. Assert interactive runs prompt for file/section choices and headless runs stop before any artifact, progress, or state writes.

@@ -12,6 +12,7 @@ let activeCase = requestedCase;
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
   ['spec-resolution', verifySpecResolution],
+  ['headless-prompts', verifyHeadlessPrompts],
 ]);
 
 async function main() {
@@ -184,6 +185,91 @@ async function verifySpecResolution() {
   }
 }
 
+async function verifyHeadlessPrompts() {
+  const handler = await loadRefactorCommandHandler();
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-headless-prompts-'));
+
+  try {
+    const fixture = createRefactorCommandFixture(tempRoot);
+    const trackedPaths = [
+      join(fixture.specRoot, 'requirements.md'),
+      join(fixture.specRoot, 'design.md'),
+      join(fixture.specRoot, 'tasks.md'),
+      join(fixture.specRoot, '.progress.md'),
+      join(fixture.specRoot, '.ralph-state.json'),
+    ];
+
+    const interactivePrompts = [];
+    const interactiveNotifications = [];
+    await handler('', {
+      cwd: fixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          interactiveNotifications.push({ message, type });
+        },
+        select(title, labels) {
+          interactivePrompts.push({ kind: 'select', title, labels });
+          return labels[0] ?? null;
+        },
+        confirm(title, message) {
+          interactivePrompts.push({ kind: 'confirm', title, message });
+          return true;
+        },
+        input(title, placeholder) {
+          interactivePrompts.push({ kind: 'input', title, placeholder });
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    const selectTitles = interactivePrompts.filter((entry) => entry.kind === 'select').map((entry) => entry.title.toLowerCase());
+    const promptedForFile = selectTitles.some((title) => title.includes('file') || title.includes('artifact'));
+    const promptedForSection = selectTitles.some((title) => title.includes('section'));
+    if (!promptedForFile || !promptedForSection) {
+      throw new Error(`interactive runs must prompt for file and section choices before delegation; got prompts ${JSON.stringify(interactivePrompts)} and notifications ${JSON.stringify(interactiveNotifications)}`);
+    }
+
+    const beforeHeadlessHashes = hashFiles(trackedPaths);
+    const headlessOutput = await captureConsoleLogs(async () => {
+      await handler('', {
+        cwd: fixture.projectRoot,
+        hasUI: false,
+        waitForIdle: async () => {},
+        ui: {
+          notify() {},
+          select() {
+            throw new Error('headless ctx.ui.select must not be called');
+          },
+          confirm() {
+            throw new Error('headless ctx.ui.confirm must not be called');
+          },
+          input() {
+            throw new Error('headless ctx.ui.input must not be called');
+          },
+          setStatus() {},
+          setWidget() {},
+        },
+      });
+    });
+    const afterHeadlessHashes = hashFiles(trackedPaths);
+    assertEqual(afterHeadlessHashes, beforeHeadlessHashes, 'headless stop must leave artifacts, progress, and state unchanged');
+
+    const headlessMessage = headlessOutput.join('\n');
+    if (!/(headless|non-interactive|re-run|rerun|choose|selection|section)/i.test(headlessMessage) || !/--file|ui|interactive/i.test(headlessMessage)) {
+      throw new Error(`headless runs needing file/section decisions must stop with actionable guidance; got ${JSON.stringify(headlessMessage)}`);
+    }
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -206,6 +292,30 @@ async function loadResolveRefactorSpecPlan() {
   return resolveRefactorSpecPlan;
 }
 
+async function loadRefactorCommandHandler() {
+  const extensionUrl = new URL('../extensions/ralph-specum/index.ts', import.meta.url);
+  const extensionModule = await import(extensionUrl.href);
+  const activate = extensionModule?.default;
+  if (typeof activate !== 'function') {
+    expectedFail('default export from extensions/ralph-specum/index.ts is not a command registrar.');
+  }
+
+  const commands = new Map();
+  activate({
+    on() {},
+    registerCommand(name, definition) {
+      commands.set(name, definition);
+    },
+  });
+
+  const handler = commands.get('ralph-refactor')?.handler;
+  if (typeof handler !== 'function') {
+    expectedFail('ralph-refactor command handler is not registered from extensions/ralph-specum/index.ts.');
+  }
+
+  return handler;
+}
+
 async function loadRefactorHelper() {
   const helperUrl = new URL('../extensions/ralph-specum/refactor.ts', import.meta.url);
   try {
@@ -214,6 +324,48 @@ async function loadRefactorHelper() {
     if (isExpectedMissingHelperError(error)) return null;
     throw error;
   }
+}
+
+function createRefactorCommandFixture(tempRoot) {
+  const projectRoot = join(tempRoot, 'project');
+  const configuredSpecRoot = join(projectRoot, 'custom-specs');
+  const specRoot = join(configuredSpecRoot, 'interactive-target');
+
+  mkdirSync(join(projectRoot, '.pi'), { recursive: true });
+  mkdirSync(specRoot, { recursive: true });
+  writeFileSync(join(projectRoot, '.pi', 'ralph-specum.local.md'), ['---', 'specs_dirs:', '  - ./custom-specs', '---', ''].join('\n'), 'utf8');
+  writeFileSync(join(configuredSpecRoot, '.current-spec'), 'interactive-target\n', 'utf8');
+  writeFileSync(join(specRoot, 'requirements.md'), ['# Requirements', '', '## Scope', 'Body', '', '## Open Questions', 'Body', ''].join('\n'), 'utf8');
+  writeFileSync(join(specRoot, 'design.md'), ['# Design', '', '## Architecture', 'Body', ''].join('\n'), 'utf8');
+  writeFileSync(join(specRoot, 'tasks.md'), ['# Tasks', '', '- [ ] Demo task', ''].join('\n'), 'utf8');
+  writeFileSync(join(specRoot, '.progress.md'), ['# Progress', '', '## Learnings', '- interactive planning should read this later', ''].join('\n'), 'utf8');
+  writeFileSync(join(specRoot, '.ralph-state.json'), `${JSON.stringify({ name: 'interactive-target', taskIndex: 3 }, null, 2)}\n`, 'utf8');
+
+  return { projectRoot, configuredSpecRoot, specRoot };
+}
+
+async function captureConsoleLogs(run) {
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => {
+    lines.push(args.map((value) => String(value)).join(' '));
+  };
+
+  try {
+    await run();
+    return lines;
+  } finally {
+    console.log = originalLog;
+  }
+}
+
+function hashFiles(filePaths) {
+  const hash = createHash('sha256');
+  for (const filePath of filePaths) {
+    hash.update(`${filePath}\n`);
+    hash.update(readFileSync(filePath));
+  }
+  return hash.digest('hex');
 }
 
 function stringifyParseResult(result) {
