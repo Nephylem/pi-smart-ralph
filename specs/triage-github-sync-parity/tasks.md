@@ -56,7 +56,7 @@
   - _Requirements: FR-2, AC-1.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] 1.5 [GREEN] Pass test: repair/write rich epic state without destructive migration
+- [x] 1.5 [GREEN] Pass test: repair/write rich epic state without destructive migration
   - **Do**:
     1. Update repair/write paths to persist Pi-required fields only on save/repair.
     2. Preserve original-compatible fields, child statuses, and dependency lists.

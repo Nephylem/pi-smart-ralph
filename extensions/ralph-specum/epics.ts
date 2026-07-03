@@ -277,8 +277,10 @@ export function writeEpicState(
 	state: EpicState,
 	options: RalphPathOptions = {},
 ): string {
+	const epic = resolveEpicReference(reference, options);
+	const normalized = normalizeCompatibleEpicState(epic, state, options).state;
 	const statePath = getEpicStatePath(reference, options);
-	atomicWriteText(statePath, `${JSON.stringify(state, null, 2)}\n`);
+	atomicWriteText(statePath, `${JSON.stringify(normalized, null, 2)}\n`);
 	return statePath;
 }
 
@@ -287,10 +289,10 @@ export function mergeEpicState(
 	patch: EpicStatePatch,
 	options: RalphPathOptions = {},
 ): EpicState {
-	const existing = readEpicState(reference, options) ?? {};
+	const existing = readCompatibleEpicState(reference, options).state ?? {};
 	const merged = deepMerge(existing, patch) as EpicState;
 	writeEpicState(reference, merged, options);
-	return merged;
+	return readCompatibleEpicState(reference, options).state ?? merged;
 }
 
 export function readEpicProgress(reference: EpicStateReference, options: RalphPathOptions = {}): string {
@@ -647,6 +649,7 @@ function normalizeCompatibleEpicState(
 		} as EpicChildSpec;
 	});
 
+	const validation = isPlainObject(state.validation) ? state.validation : {};
 	const normalizedState: EpicState = {
 		...state,
 		schemaVersion: Number.isFinite(state.schemaVersion) ? state.schemaVersion : EPIC_SCHEMA_VERSION,
@@ -666,12 +669,14 @@ function normalizeCompatibleEpicState(
 			: [...specs].reverse().find((spec) => spec.status === "completed")?.name ?? null,
 		specs,
 		validation: {
-			...(isPlainObject(state.validation) ? state.validation : {}),
-			warnings: [],
+			...validation,
+			warnings: Array.isArray(validation.warnings)
+				? validation.warnings.filter((warning): warning is string => typeof warning === "string")
+				: [],
 			compatibilityWarnings,
 			lastValidatedAt:
-				isPlainObject(state.validation) && typeof state.validation.lastValidatedAt === "string" && state.validation.lastValidatedAt.trim()
-					? state.validation.lastValidatedAt
+				typeof validation.lastValidatedAt === "string" && validation.lastValidatedAt.trim()
+					? validation.lastValidatedAt
 					: now,
 		},
 	};

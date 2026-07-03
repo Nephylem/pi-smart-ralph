@@ -1478,18 +1478,19 @@ function formatFooterBar(current: number, max: number, width = 16): string {
 	return `[${bar}]`;
 }
 
-function formatFooterProgress(current: number, max: number): string {
+function formatFooterProgress(current: number, max: number, width = 16): string {
 	if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
-		return `0.0% ${formatFooterBar(0, 1)} 0/0`;
+		return `0.0% ${formatFooterBar(0, 1, width)} 0/0`;
 	}
 	const safeCurrent = Math.max(0, current);
 	const safeMax = Math.max(1, max);
 	const percent = Math.max(0, Math.min(100, (safeCurrent / safeMax) * 100));
-	return `${percent.toFixed(1)}% ${formatFooterBar(safeCurrent, safeMax)} ${formatTokenCount(safeCurrent)}/${formatTokenCount(safeMax)}`;
+	return `${percent.toFixed(1)}% ${formatFooterBar(safeCurrent, safeMax, width)} ${formatTokenCount(safeCurrent)}/${formatTokenCount(safeMax)}`;
 }
 
-function formatFooterElapsed(startedAt: number): string {
-	const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+function formatFooterElapsed(startedAt: number, endedAt?: number): string {
+	const end = typeof endedAt === "number" && Number.isFinite(endedAt) ? endedAt : Date.now();
+	const totalSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
 	const hours = Math.floor(totalSeconds / 3600);
 	const minutes = Math.floor((totalSeconds % 3600) / 60);
 	const seconds = totalSeconds % 60;
@@ -4155,7 +4156,6 @@ async function runStartCommand(
 		await runQuickFlow(pi, ctx, spec, parsed, options, { preserveCurrentSpecMarker });
 	}
 }
-}
 
 function parseCancelArgs(args: string): CancelArguments {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
@@ -4338,6 +4338,8 @@ type RalphSubagentRecord = {
 				cacheWrite?: number;
 			};
 			contextUsage?: {
+				tokens?: number | null;
+				contextWindow?: number;
 				percent?: number | null;
 			};
 		};
@@ -4364,6 +4366,8 @@ const RALPH_TOKEN_BAR_WIDTH = 16;
 const RALPH_SUBAGENT_WIDGET_KEY = "ralph-subagents";
 const RALPH_SUBAGENT_WIDGET_BAR_WIDTH = 10;
 const RALPH_SUBAGENT_WIDGET_MAX_LINES = 6;
+const RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS = 4_000;
+const RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS = 8_000;
 const RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const ralphSubagentWidgetState: {
 	tracked: Map<string, RalphTrackedSubagentEntry>;
@@ -4420,16 +4424,25 @@ function getSubagentSessionTokens(record?: {
 	return Number.isFinite(total) ? Math.max(0, total) : null;
 }
 
-function getSubagentContextPercent(record?: {
+function getSubagentContextUsage(record?: {
 	session?: {
 		getSessionStats?: () => {
-			contextUsage?: { percent?: number | null };
+			contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null };
 		};
 	};
-}): number | null {
+}): { current: number | null; max: number | null; percent: number | null } {
 	const stats = typeof record?.session?.getSessionStats === "function" ? record.session.getSessionStats() : undefined;
-	const percent = stats?.contextUsage?.percent;
-	return typeof percent === "number" && Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+	const usage = stats?.contextUsage;
+	const current = typeof usage?.tokens === "number" && Number.isFinite(usage.tokens) ? Math.max(0, usage.tokens) : null;
+	const max = typeof usage?.contextWindow === "number" && Number.isFinite(usage.contextWindow) && usage.contextWindow > 0
+		? usage.contextWindow
+		: null;
+	const percent = typeof usage?.percent === "number" && Number.isFinite(usage.percent)
+		? Math.max(0, Math.min(100, usage.percent))
+		: current !== null && max !== null
+			? Math.max(0, Math.min(100, (current / max) * 100))
+			: null;
+	return { current, max, percent };
 }
 
 function getSubagentUsageText(record?: {
@@ -4437,17 +4450,18 @@ function getSubagentUsageText(record?: {
 	session?: {
 		getSessionStats?: () => {
 			tokens?: { input?: number; output?: number; cacheWrite?: number };
-			contextUsage?: { percent?: number | null };
+			contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null };
 		};
 	};
 }): string {
 	if (!record) return "";
 
-	const sessionTokens = getSubagentSessionTokens(record);
-	const contextPercent = getSubagentContextPercent(record);
-	if (sessionTokens !== null && contextPercent !== null) {
-		return `${formatTokenCount(sessionTokens)} tokens (${Math.round(contextPercent)}%)`;
+	const contextUsage = getSubagentContextUsage(record);
+	if (contextUsage.current !== null && contextUsage.max !== null) {
+		return `${formatTokenCount(contextUsage.current)}/${formatTokenCount(contextUsage.max)} ctx${contextUsage.percent !== null ? ` (${Math.round(contextUsage.percent)}%)` : ""}`;
 	}
+
+	const sessionTokens = getSubagentSessionTokens(record);
 	if (sessionTokens !== null) return `${formatTokenCount(sessionTokens)} tokens`;
 
 	const lifetime = getSubagentLifetimeUsageTokens(record);
@@ -4463,18 +4477,27 @@ function formatSubagentWidgetName(type?: string): string {
 		.join(" ") || "Agent";
 }
 
-function getSubagentWidgetProgress(record: RalphSubagentRecord): { current: number; percent: number | null } {
-	const current = getSubagentSessionTokens(record) ?? getSubagentLifetimeUsageTokens(record);
-	const percent = getSubagentContextPercent(record);
-	return { current, percent };
+function getSubagentWidgetProgress(record: RalphSubagentRecord): { current: number; max: number | null; percent: number | null; source: "context" | "session" | "lifetime" } {
+	const contextUsage = getSubagentContextUsage(record);
+	if (contextUsage.current !== null && contextUsage.max !== null) {
+		return { current: contextUsage.current, max: contextUsage.max, percent: contextUsage.percent, source: "context" };
+	}
+	const sessionTokens = getSubagentSessionTokens(record);
+	if (sessionTokens !== null) {
+		return { current: sessionTokens, max: null, percent: contextUsage.percent, source: "session" };
+	}
+	return { current: getSubagentLifetimeUsageTokens(record), max: null, percent: contextUsage.percent, source: "lifetime" };
 }
 
 function formatSubagentWidgetProgress(record: RalphSubagentRecord): string {
-	const { current, percent } = getSubagentWidgetProgress(record);
-	if (percent === null) {
-		return `${formatTokenCount(current)} tokens`;
+	const { current, max, percent, source } = getSubagentWidgetProgress(record);
+	if (source === "context" && max !== null) {
+		return `🪟 ${formatFooterProgress(current, max, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)}`;
 	}
-	return `${percent.toFixed(1)}% ${formatFooterBar(percent, 100, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)} ${formatTokenCount(current)} tokens`;
+	if (percent !== null) {
+		return `${percent.toFixed(1)}% ${formatFooterBar(percent, 100, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)} ${formatTokenCount(current)} tokens`;
+	}
+	return `${formatTokenCount(current)} tokens`;
 }
 
 function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
@@ -4544,7 +4567,28 @@ function readActiveSubagentRecords(): RalphSubagentRecord[] {
 		.sort((left, right) => left.startedAt - right.startedAt);
 }
 
-function readLingeringSubagentRecords(_now = Date.now()): RalphSubagentRecord[] {
+function subagentWidgetLingerMs(status: string): number {
+	return status === "error" || status === "aborted" || status === "steered" || status === "stopped"
+		? RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS
+		: RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS;
+}
+
+function pruneExpiredTrackedSubagents(now = Date.now()): void {
+	for (const [id, entry] of ralphSubagentWidgetState.tracked.entries()) {
+		const record = resolveTrackedSubagentRecord(entry);
+		if (record.status === "running" || record.status === "queued") continue;
+		if (!record.completedAt) {
+			ralphSubagentWidgetState.tracked.delete(id);
+			continue;
+		}
+		if (now - record.completedAt > subagentWidgetLingerMs(record.status)) {
+			ralphSubagentWidgetState.tracked.delete(id);
+		}
+	}
+}
+
+function readLingeringSubagentRecords(now = Date.now()): RalphSubagentRecord[] {
+	pruneExpiredTrackedSubagents(now);
 	const finished: RalphSubagentRecord[] = [];
 	for (const entry of ralphSubagentWidgetState.tracked.values()) {
 		const record = resolveTrackedSubagentRecord(entry);
@@ -4586,13 +4630,15 @@ function formatSubagentWidgetLine(
 	if (record.status !== "running") {
 		const finished = formatSubagentWidgetFinishedState(record, theme);
 		const progress = formatSubagentWidgetProgress(record);
-		const tools = `${record.toolUses} tool${record.toolUses === 1 ? "" : "s"}`;
-		const elapsed = formatFooterElapsed(record.startedAt);
+		const toolUses = record.toolUses ?? 0;
+		const tools = `${toolUses} tool${toolUses === 1 ? "" : "s"}`;
+		const elapsed = formatFooterElapsed(record.startedAt, record.completedAt);
 		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "·")} ${theme.fg("dim", tools)} ${theme.fg("dim", "·")} ${theme.fg("dim", elapsed)} ${theme.fg("dim", "]")}`;
 	}
 	const icon = theme.fg("accent", frame);
 	const progress = formatSubagentWidgetProgress(record);
-	const tools = `${record.toolUses} tool${record.toolUses === 1 ? "" : "s"}`;
+	const toolUses = record.toolUses ?? 0;
+	const tools = `${toolUses} tool${toolUses === 1 ? "" : "s"}`;
 	const elapsed = formatFooterElapsed(record.startedAt);
 	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 ")}${theme.fg("text", progress)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("accent", "]")}`;
 }
@@ -8059,6 +8105,9 @@ function repairEpicStateMetadata(epic: CurrentEpic, state: EpicState, summary: R
 	let nextState = state;
 	const now = new Date().toISOString();
 	const specs = Array.isArray(nextState.specs) ? nextState.specs : [];
+	const compatibilityWarnings = isRecordValue(state.validation) && Array.isArray(state.validation.compatibilityWarnings)
+		? state.validation.compatibilityWarnings.filter((warning): warning is string => typeof warning === "string")
+		: [];
 	let pathMetadataChanged = false;
 	const normalizedSpecs = specs.map((spec) => {
 		if (!isRecordValue(spec) || typeof spec.name !== "string" || !isValidSpecName(spec.name)) return spec;
@@ -8102,7 +8151,11 @@ function repairEpicStateMetadata(epic: CurrentEpic, state: EpicState, summary: R
 		changes.push(`Updated dependency validation (${validationWarnings.length} warning${validationWarnings.length === 1 ? "" : "s"})`);
 	}
 
-	if (nextState !== state) {
+	if (compatibilityWarnings.length > 0) {
+		changes.push(`Persisted compatibility repair into EpicStateV1 (${compatibilityWarnings.length} compatibility warning${compatibilityWarnings.length === 1 ? "" : "s"})`);
+	}
+
+	if (nextState !== state || compatibilityWarnings.length > 0) {
 		writeEpicState(epic, nextState, options);
 	}
 	return nextState;
