@@ -12,11 +12,14 @@ export type ResolveRefactorSpecPlanOptions = RalphPathOptions & {
 	reference?: string | null;
 };
 
-export type RefactorSpecPlan = {
-	spec: SpecEntry;
+export type RefactorArtifactInventory = {
 	availableFiles: RefactorArtifact[];
 	artifactPaths: Record<RefactorArtifact, string>;
 };
+
+export type RefactorSpecPlan = {
+	spec: SpecEntry;
+} & RefactorArtifactInventory;
 
 function emptyRefactorOptions() {
 	return {
@@ -72,23 +75,42 @@ export function formatPendingRefactorMessage(options, plan) {
 	if (!plan) {
 		return `Ralph refactor command registered${target}${scope}. Artifact update flow is not implemented yet.`;
 	}
-	return `Ralph refactor command registered${target}${scope}. Resolved spec '${plan.spec.name}' with refactorable artifacts: ${plan.availableFiles.join(", ")}. Artifact update flow is not implemented yet.`;
+	return `Ralph refactor command registered${target}${scope}. Resolved spec '${plan.spec.name}' with refactorable artifacts: ${formatRefactorArtifactList(plan.availableFiles)}. Artifact update flow is not implemented yet.`;
+}
+
+export function formatRefactorResolutionError(error) {
+	return error instanceof Error ? error.message : String(error ?? "Unknown /ralph-refactor resolution error");
 }
 
 export function resolveRefactorSpecPlan(options = {}) {
 	const spec = options.reference ? findSpec(options.reference, options) : requireCurrentSpec(options);
-	const artifactPaths = getRefactorArtifactPaths(spec.absolutePath);
-	const availableFiles = REFACTOR_ALLOWED_FILES.filter((artifact) => existsSync(artifactPaths[artifact]));
-	if (availableFiles.length === 0) {
-		throw new Error(
-			`Spec '${spec.name}' has no refactorable artifacts. Expected one or more of requirements.md, design.md, or tasks.md in ${spec.path}.`,
-		);
+	const inventory = inventoryRefactorArtifacts(spec.absolutePath);
+	if (inventory.availableFiles.length === 0) {
+		throw buildNoRefactorableArtifactsError(spec);
 	}
 	return {
 		spec,
+		...inventory,
+	};
+}
+
+export function inventoryRefactorArtifacts(specPath): RefactorArtifactInventory {
+	const artifactPaths = getRefactorArtifactPaths(specPath);
+	const availableFiles = REFACTOR_ALLOWED_FILES.filter((artifact) => existsSync(artifactPaths[artifact]));
+	return {
 		availableFiles,
 		artifactPaths,
 	};
+}
+
+export function formatRefactorArtifactList(artifacts) {
+	return artifacts.join(", ");
+}
+
+function buildNoRefactorableArtifactsError(spec: SpecEntry) {
+	return new Error(
+		`Spec '${spec.name}' has no refactorable artifacts. Expected one or more of requirements.md, design.md, or tasks.md in ${spec.path}.`,
+	);
 }
 
 function getRefactorArtifactPaths(specPath) {

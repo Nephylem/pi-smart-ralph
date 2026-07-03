@@ -68,7 +68,7 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
-import { REFACTOR_COMMAND_DESCRIPTION, formatPendingRefactorMessage, formatRefactorParseError, parseRefactorArgs, resolveRefactorSpecPlan } from "./refactor.ts";
+import { REFACTOR_COMMAND_DESCRIPTION, formatPendingRefactorMessage, formatRefactorParseError, formatRefactorResolutionError, parseRefactorArgs, resolveRefactorSpecPlan } from "./refactor.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -9023,7 +9023,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 			try {
 				plan = resolveRefactorSpecPlan({ cwd: ctx.cwd, reference: parsed.options.reference });
 			} catch (error) {
-				await notify(ctx, formatError(error), "warning");
+				await notify(ctx, formatRefactorResolutionError(error), "warning");
 				return;
 			}
 

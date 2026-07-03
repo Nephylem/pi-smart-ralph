@@ -71,7 +71,7 @@
   - _Requirements: FR-2, FR-5, AC-1.2, AC-1.5_
   - _Design: `extensions/ralph-specum/refactor.ts`; `extensions/ralph-specum/paths.ts`_
 
-- [ ] 1.6 [YELLOW] Refactor: isolate artifact inventory and resolution errors
+- [x] 1.6 [YELLOW] Refactor: isolate artifact inventory and resolution errors
   - **Do**:
     1. Extract artifact-inventory and error-formatting helpers so `index.ts` only orchestrates the flow.
     2. Reuse the same helper outputs for later verifier cases.
