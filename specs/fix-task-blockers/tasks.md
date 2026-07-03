@@ -104,7 +104,7 @@
   - _Requirements: FR-1, FR-2, NFR-2_
   - _Design: Performance Considerations; Edge Cases_
 
-- [ ] Q2 [VERIFY] Quality check: topology classification
+- [x] Q2 [VERIFY] Quality check: topology classification
   - **Do**:
     1. Run the discovered `verify:index` command after topology helper changes.
   - **Files**: None
@@ -116,7 +116,7 @@
 
 ## Phase 2: Commit-mode derivation and coordinator preflight
 
-- [ ] 2.1 [RED] Failing test: derive commit mode from topology and `Commit: None`
+- [x] 2.1 [RED] Failing test: derive commit mode from topology and `Commit: None`
   - **Do**:
     1. Add verifier cases for `Commit: None`, commit message directives, and `Files: None`.
     2. Assert reports distinguish `required`, `none`, and `topology_relaxed` commit modes.

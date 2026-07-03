@@ -23,6 +23,7 @@ const cases = new Map([
   ['topology-helper-contract', verifyTopologyHelperContract],
   ['topology-classification-fixtures', verifyTopologyClassificationFixtures],
   ['topology-input-normalization', verifyTopologyInputNormalization],
+  ['commit-mode-derivation', verifyCommitModeDerivation],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -259,6 +260,76 @@ async function verifyTopologyInputNormalization() {
   }
 }
 
+async function verifyCommitModeDerivation() {
+  const helper = loadTaskCompletionHelper();
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-commit-mode-'));
+
+  try {
+    const singleRepo = createGitFixture(join(fixtureRoot, 'single-repo'));
+    const multiRepoOuter = createGitFixture(join(fixtureRoot, 'multi-repo', 'outer'));
+    const multiRepoInner = createGitFixture(join(fixtureRoot, 'multi-repo', 'outer', 'nested-repo'));
+    const noRepoSpecRoot = join(fixtureRoot, 'no-repo-spec');
+    mkdirSync(noRepoSpecRoot, { recursive: true });
+
+    const casesToVerify = [
+      {
+        name: 'commit-none-single-repo',
+        expectedTopology: 'single_repo',
+        expectedCommitMode: 'none',
+        expectedCommitReason: undefined,
+        input: createWorkspaceInput({
+          specDir: join(singleRepo, 'specs', 'commit-none'),
+          taskFiles: [join(singleRepo, 'src', 'task.ts')],
+          commitDirective: 'None',
+        }),
+      },
+      {
+        name: 'commit-message-single-repo',
+        expectedTopology: 'single_repo',
+        expectedCommitMode: 'required',
+        expectedCommitReason: undefined,
+        input: createWorkspaceInput({
+          specDir: join(singleRepo, 'specs', 'commit-required'),
+          taskFiles: [join(singleRepo, 'src', 'task-required.ts')],
+          commitDirective: '`feat(task-blockers): fixture`',
+        }),
+      },
+      {
+        name: 'commit-message-multi-repo',
+        expectedTopology: 'multi_repo',
+        expectedCommitMode: 'topology_relaxed',
+        expectedCommitReason: 'multi_repo',
+        input: createWorkspaceInput({
+          specDir: join(multiRepoOuter, 'specs', 'commit-relaxed'),
+          taskFiles: [join(multiRepoInner, 'src', 'task.ts')],
+          commitDirective: '`feat(task-blockers): split repo fixture`',
+        }),
+      },
+      {
+        name: 'files-none-no-repo',
+        expectedTopology: 'no_repo',
+        expectedCommitMode: 'topology_relaxed',
+        expectedCommitReason: 'no_repo',
+        input: createWorkspaceInput({
+          specDir: join(noRepoSpecRoot, 'specs', 'files-none'),
+          taskFiles: [],
+          filesDirective: 'None',
+          commitDirective: '`feat(task-blockers): spec-only fixture`',
+        }),
+      },
+    ];
+
+    for (const testCase of casesToVerify) {
+      materializeWorkspaceInput(testCase.input);
+      const report = helper.analyzeTaskWorkspace(testCase.input);
+      assertTopologyCase(testCase, report);
+      assertCommitModeCase(testCase, report);
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 function loadTaskCompletionHelper() {
   const helperPath = join(root, 'extensions', 'ralph-specum', 'task-completion.ts');
   const helperSource = readFileSync(helperPath, 'utf8');
@@ -292,13 +363,14 @@ function createGitFixture(dirPath) {
   return dirPath;
 }
 
-function createWorkspaceInput({ specDir, taskFiles }) {
+function createWorkspaceInput({ specDir, taskFiles, filesDirective, commitDirective }) {
   return {
     basePath: specDir,
     taskFiles,
+    filesDirective,
     tasksPath: join(specDir, 'tasks.md'),
     progressPath: join(specDir, '.progress.md'),
-    commitDirective: '`test(task-blockers): fixture`',
+    commitDirective: commitDirective ?? '`test(task-blockers): fixture`',
   };
 }
 
@@ -333,6 +405,23 @@ function assertClassificationKinds(testCase, report) {
     if (normalizedPaths.get(expectedPath) !== expectedKind) {
       expectedFail(`topology fixture ${testCase.name} must classify ${expectedKind} input ${expectedPath}`);
     }
+  }
+}
+
+function assertCommitModeCase(testCase, report) {
+  if (report.commitMode !== testCase.expectedCommitMode) {
+    expectedFail(`commit-mode fixture ${testCase.name} expected ${testCase.expectedCommitMode} but received ${String(report.commitMode)}`);
+  }
+
+  if (testCase.expectedCommitReason === undefined) {
+    if (report.commitReason !== undefined) {
+      expectedFail(`commit-mode fixture ${testCase.name} expected no commit reason but received ${String(report.commitReason)}`);
+    }
+    return;
+  }
+
+  if (report.commitReason !== testCase.expectedCommitReason) {
+    expectedFail(`commit-mode fixture ${testCase.name} expected commit reason ${testCase.expectedCommitReason} but received ${String(report.commitReason)}`);
   }
 }
 
