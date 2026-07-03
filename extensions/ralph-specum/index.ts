@@ -49,6 +49,7 @@ import {
 	EPIC_SCHEMA_VERSION,
 	getEpicStatePath,
 	listEpics,
+	readCompatibleEpicState,
 	readCurrentEpic,
 	readCurrentEpicName,
 	resolveEpicDirectory,
@@ -9606,7 +9607,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	mkdirSync(epic.absolutePath, { recursive: true });
 	writeCurrentEpic(epic.name, options);
 
-	const existingStateRead = safeReadEpicState(epic, options);
+	const existingStateRead = readCompatibleEpicState(epic, options);
 	const stateFileExists = existsSync(epic.statePath);
 	if (stateFileExists && !existingStateRead.state && !parsed.fresh) {
 		await notify(ctx, [`Cannot resume epic '${epic.name}' because .epic-state.json is invalid:`, ...existingStateRead.warnings.map((warning) => `- ${warning}`), "", "Rerun with /ralph-triage --fresh <epic-name> <goal> to regenerate."].join("\n"), "warning");
@@ -9655,7 +9656,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 		}
 	}
 
-	const postRunRead = safeReadEpicState(epic, options);
+	const postRunRead = readCompatibleEpicState(epic, options);
 	let state = normalizeTriageEpicState(epic, postRunRead.state, parsed, goal, options);
 	let validationErrors = collectTriageValidationErrors(epic, state);
 	state = applyTriageValidation(state, validationErrors);
@@ -9698,7 +9699,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 		}
 	}
 	validationErrors = materialized?.warnings.length ? materialized.warnings : [];
-	const warnings = [...parsed.warnings, ...postRunRead.warnings, ...(githubSync?.warnings ?? []), ...validationErrors];
+	const warnings = [...parsed.warnings, ...postRunRead.warnings, ...postRunRead.compatibilityWarnings, ...(githubSync?.warnings ?? []), ...validationErrors];
 	const warningOutput = validationErrors.length > 0 || githubSync?.status === "failed" || githubSync?.status === "skipped";
 	await notify(ctx, formatTriageSummary(epic, state, materialized, warnings, shouldDelegate === false, githubSync), warningOutput ? "warning" : "info");
 }

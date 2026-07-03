@@ -324,7 +324,15 @@ export function validateEpicState(state: EpicState): EpicValidationResult {
 	const warnings: string[] = [];
 	const missingDependencies: MissingEpicDependency[] = [];
 	const duplicateOrders: EpicOrderCollision[] = [];
-	const specs = getEpicSpecs(state);
+	const compatibility = resolveEpicCompatibilityContract(state);
+	const suppressCompatibilitySubsetWarnings = compatibility.isCompatibilitySubset;
+	const specs = getEpicSpecs(state).map((spec, index) => ({
+		...spec,
+		order: typeof spec.order === "number" && Number.isFinite(spec.order) ? spec.order : index,
+		dependencies: Array.isArray(spec.dependencies)
+			? spec.dependencies.filter((dependency): dependency is string => typeof dependency === "string")
+			: [],
+	}));
 
 	if (typeof state.name !== "string" || !state.name.trim()) {
 		warnings.push("Epic state is missing required field 'name'.");
@@ -383,7 +391,9 @@ export function validateEpicState(state: EpicState): EpicValidationResult {
 			}
 			if (!specNames.has(dependency)) {
 				missingDependencies.push({ specName: spec.name, dependency });
-				warnings.push(`Epic child spec '${spec.name}' depends on missing spec '${dependency}'.`);
+				if (!suppressCompatibilitySubsetWarnings) {
+					warnings.push(`Epic child spec '${spec.name}' depends on missing spec '${dependency}'.`);
+				}
 			}
 		}
 	}

@@ -99,7 +99,7 @@
   - _Requirements: FR-1, AC-1.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] 1.8 [GREEN] Pass test: validate normalized epic state with compatibility warnings
+- [x] 1.8 [GREEN] Pass test: validate normalized epic state with compatibility warnings
   - **Do**:
     1. Route triage reads through the compatible-read helper before strict validation.
     2. Persist compatibility warnings under `validation.compatibilityWarnings`.
