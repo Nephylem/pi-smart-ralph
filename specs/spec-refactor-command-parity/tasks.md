@@ -472,7 +472,7 @@
   - _Requirements: FR-15, AC-5.1, AC-5.2_
   - _Design: `scripts/verify-refactor-parity.mjs`; `package.json`_
 
-- [ ] 6.2 [GREEN] Pass test: wire refactor verifier into discovered package verification commands
+- [x] 6.2 [GREEN] Pass test: wire refactor verifier into discovered package verification commands
   - **Do**:
     1. Update `package.json` so the dedicated refactor verifier runs through the discovered verification entrypoints.
     2. Add acceptance and cleanup cases to `scripts/verify-refactor-parity.mjs` for final bundle coverage.

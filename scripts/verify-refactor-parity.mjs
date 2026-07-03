@@ -11,6 +11,32 @@ const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
 let activeCase = requestedCase;
 
+const acceptanceChecklistCaseKey = 'acceptance-checklist';
+const cleanupCaseKey = 'cleanup';
+const acceptanceChecklistCases = [
+  'command-registration',
+  'spec-resolution',
+  'headless-prompts',
+  'file-narrowing',
+  'specialist-contract',
+  'request-payload',
+  'audit-rollback',
+  'cascade-handling',
+  'state-merge',
+  'commit-spec',
+];
+const verifierTempPrefixes = [
+  'ralph-refactor-spec-resolution-',
+  'ralph-refactor-headless-prompts-',
+  'ralph-refactor-file-narrowing-',
+  'ralph-refactor-request-payload-',
+  'ralph-refactor-audit-rollback-',
+  'ralph-refactor-cascade-handling-',
+  'ralph-refactor-state-merge-',
+  'ralph-refactor-commit-spec-',
+  'ralph-refactor-git-wrapper-',
+];
+
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
   ['spec-resolution', verifySpecResolution],
@@ -22,6 +48,8 @@ const cases = new Map([
   ['cascade-handling', verifyCascadeHandling],
   ['state-merge', verifyStateMerge],
   ['commit-spec', verifyCommitSpec],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
+  [cleanupCaseKey, verifyCleanup],
   ['package-wiring', verifyPackageWiring],
 ]);
 
@@ -804,6 +832,31 @@ async function verifyCommitSpec() {
   }
 }
 
+async function verifyAcceptanceChecklist() {
+  for (const caseName of acceptanceChecklistCases) {
+    const verifyCase = cases.get(caseName);
+    if (typeof verifyCase !== 'function') {
+      throw new Error(`acceptance checklist is missing verifier case ${caseName}`);
+    }
+
+    const result = await runVerifierCase(caseName, verifyCase);
+    if (!result.ok) {
+      throw result.error;
+    }
+  }
+}
+
+async function verifyCleanup() {
+  const beforeEntries = listVerifierTempEntries();
+  await verifyAcceptanceChecklist();
+  const afterEntries = listVerifierTempEntries();
+  const newEntries = afterEntries.filter((entry) => !beforeEntries.includes(entry));
+
+  if (newEntries.length > 0) {
+    throw new Error(`verifier cleanup left temp artifacts behind: ${JSON.stringify(newEntries)}`);
+  }
+}
+
 async function verifyPackageWiring() {
   const packageJsonPath = join(root, 'package.json');
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
@@ -814,6 +867,12 @@ async function verifyPackageWiring() {
   for (const scriptName of requiredEntryPoints) {
     if (!scriptEventuallyRunsRefactorVerifier(scriptName, scripts)) {
       failures.push(`package.json script "${scriptName}" must reach scripts/verify-refactor-parity.mjs through existing npm script wiring`);
+    }
+  }
+
+  for (const caseName of [acceptanceChecklistCaseKey, cleanupCaseKey]) {
+    if (!cases.has(caseName)) {
+      failures.push(`scripts/verify-refactor-parity.mjs must expose the "${caseName}" case`);
     }
   }
 
@@ -1244,6 +1303,13 @@ function scriptEventuallyRunsRefactorVerifier(scriptName, scripts, seen = new Se
 
   const nestedScripts = [...command.matchAll(/npm run\s+([^\s&;|]+)/g)].map((match) => match[1]);
   return nestedScripts.some((nestedScriptName) => scriptEventuallyRunsRefactorVerifier(nestedScriptName, scripts, seen));
+}
+
+function listVerifierTempEntries() {
+  return readDirectoryEntries(tmpdir())
+    .map((entry) => entry.name)
+    .filter((entryName) => verifierTempPrefixes.some((prefix) => entryName.startsWith(prefix)))
+    .sort();
 }
 
 function hashDirectory(directoryPath) {
