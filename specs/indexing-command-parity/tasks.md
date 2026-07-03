@@ -474,7 +474,7 @@
   - _Requirements: FR-14, AC-7.1, AC-7.2_
   - _Design: Smoke verifier; Technical Decisions_
 
-- [ ] 1.32 [GREEN] Pass test: add `verify:index` and wire it into `prepack`
+- [x] 1.32 [GREEN] Pass test: add `verify:index` and wire it into `prepack`
   - **Do**:
     1. Add a `verify:index` package script that runs the index verifier.
     2. Update `prepack` to execute the index verifier with existing verifiers.
