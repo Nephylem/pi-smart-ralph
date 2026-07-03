@@ -1414,22 +1414,69 @@ function stopRalphStatusAnimation(ctx?: ExtensionCommandContext): void {
 	if (statusCtx?.hasUI) statusCtx.ui.setStatus("ralph", undefined);
 }
 
-function formatFooterBadge(text: string): string {
-	return `[${text}]`;
+function footerThinkingColor(level: ReturnType<ExtensionAPI["getThinkingLevel"]>): "thinkingOff" | "thinkingMinimal" | "thinkingLow" | "thinkingMedium" | "thinkingHigh" | "thinkingXhigh" {
+	switch (level) {
+		case "minimal":
+			return "thinkingMinimal";
+		case "low":
+			return "thinkingLow";
+		case "medium":
+			return "thinkingMedium";
+		case "high":
+			return "thinkingHigh";
+		case "xhigh":
+			return "thinkingXhigh";
+		case "off":
+		default:
+			return "thinkingOff";
+	}
+}
+
+function formatFooterBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, content: string, color: string = "text"): string {
+	return `${theme.fg("accent", "【")}${theme.fg(color as any, theme.bold(content))}${theme.fg("accent", "】")}`;
+}
+
+function formatFooterBar(current: number, max: number, width = 11): string {
+	if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
+		return `【>${"―".repeat(Math.max(0, width - 1))}】`;
+	}
+	const percent = Math.max(0, Math.min(1, current / max));
+	const filled = percent >= 1 ? width : Math.max(0, Math.floor(percent * width));
+	let bar: string;
+	if (filled <= 0) {
+		bar = `>${"―".repeat(Math.max(0, width - 1))}`;
+	} else if (filled >= width) {
+		bar = "═".repeat(width);
+	} else {
+		bar = `${"═".repeat(filled)}>${"―".repeat(Math.max(0, width - filled - 1))}`;
+	}
+	return `【${bar}】`;
+}
+
+function formatFooterProgress(current: number, max: number): string {
+	if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
+		return `0.0% ${formatFooterBar(0, 1)} 0/0`;
+	}
+	const safeCurrent = Math.max(0, current);
+	const safeMax = Math.max(1, max);
+	const percent = Math.max(0, Math.min(100, (safeCurrent / safeMax) * 100));
+	return `${percent.toFixed(1)}% ${formatFooterBar(safeCurrent, safeMax)} ${formatTokenCount(safeCurrent)}/${formatTokenCount(safeMax)}`;
+}
+
+function formatFooterElapsed(startedAt: number): string {
+	const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = totalSeconds % 60;
+	return hours > 0 ? `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}` : `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function formatMainContextUsage(ctx: ExtensionCommandContext): string {
 	const usage = ctx.getContextUsage();
-	if (!usage) return "Main 🪟 unknown";
-	if (usage.tokens !== null && Number.isFinite(usage.tokens) && usage.contextWindow > 0) {
-		const percent = usage.percent ?? (usage.tokens / usage.contextWindow) * 100;
-		const rendered = formatTokenUsageBar(usage.tokens, usage.contextWindow, RALPH_TOKEN_BAR_WIDTH).replace(
-			/^.*?% /,
-			`${Math.max(0, Math.min(100, percent)).toFixed(1)}% `,
-		);
-		return `Main 🪟 ${rendered}`;
-	}
-	return `Main 🪟 ? [${"-".repeat(RALPH_TOKEN_BAR_WIDTH)}] ?/${formatTokenCount(usage.contextWindow)}`;
+	if (!usage) return `Main 🪟 ${formatFooterProgress(0, 0)}`;
+	const current = usage.tokens !== null && Number.isFinite(usage.tokens) ? usage.tokens : 0;
+	const max = Number.isFinite(usage.contextWindow) ? usage.contextWindow : 0;
+	return `Main 🪟 ${formatFooterProgress(current, max)}`;
 }
 
 function ralphFooterProjectDirectory(ctx: ExtensionCommandContext): string {
@@ -1463,50 +1510,66 @@ function detectGitWorkspaceInfo(cwd: string): RalphGitWorkspaceInfo {
 function readRalphFooterSpecSummary(ctx: ExtensionCommandContext): {
 	epicName: string;
 	specName: string;
-	inProgress: number;
-	pending: number;
-	completed: number;
 } {
 	const options = pathOptions(ctx);
 	const epicName = readCurrentEpicName(options) ?? "no epic";
 	const currentSpecValue = readCurrentSpecValue(options);
 	const spec = currentSpecValue ? resolveCurrentSpec(options) : null;
-	if (!spec) {
-		return { epicName, specName: currentSpecValue ?? "no spec", inProgress: 0, pending: 0, completed: 0 };
-	}
-
-	const counts = countTasks(spec);
-	let inProgress = 0;
-	try {
-		const state = readRalphState(spec, options);
-		inProgress = activePendingEvidenceIndex(state) !== null && booleanField(state, "blocked") !== true ? 1 : 0;
-	} catch {
-		inProgress = 0;
-	}
-	const pending = Math.max(0, counts.pending - inProgress);
-	return { epicName, specName: spec.name, inProgress, pending, completed: counts.completed };
+	return { epicName, specName: spec?.name ?? currentSpecValue ?? "no spec" };
 }
 
-function formatRalphFooterProgress(summary: { inProgress: number; pending: number; completed: number }): string {
-	return `⏳ ${summary.inProgress} in progress | • ${summary.pending} pending | ✔ ${summary.completed} completed`;
+function readFooterConversationUsage(ctx: ExtensionCommandContext): { input: number; output: number; cost: number } {
+	let input = 0;
+	let output = 0;
+	let cost = 0;
+	for (const entry of ctx.sessionManager.getBranch()) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const usage = (entry.message as { usage?: { input?: number; output?: number; cost?: { total?: number } } }).usage;
+		input += usage?.input ?? 0;
+		output += usage?.output ?? 0;
+		cost += usage?.cost?.total ?? 0;
+	}
+	return { input, output, cost };
 }
 
-function formatRalphFooterNativeInfo(ctx: ExtensionCommandContext, footerData: {
-	getAvailableProviderCount(): number;
-	getExtensionStatuses(): ReadonlyMap<string, string>;
+function formatFooterIoBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, usage: { input: number; output: number; cost: number }): string {
+	const content = [
+		theme.fg("muted", "╰┈➤ "),
+		theme.fg("syntaxFunction", `▼I ${formatTokenCount(usage.input)}`),
+		theme.fg("muted", " "),
+		theme.fg("syntaxString", `▲O ${formatTokenCount(usage.output)}`),
+		theme.fg("muted", " "),
+		theme.fg("syntaxNumber", `$${usage.cost.toFixed(3)}`),
+	].join("");
+	return `${theme.fg("accent", "【")}${content}${theme.fg("accent", "】")}`;
+}
+
+function formatFooterMcpBadge(
+	theme: { fg(color: any, text: string): string; bold(text: string): string },
+	registry: ToolRegistryState,
+): string {
+	const total = registry.allToolNames.has("mcp") ? 1 : 0;
+	const active = registry.activeToolNames.has("mcp") ? 1 : 0;
+	return formatFooterBadge(theme, `⚙️ mcp ${active}/${total || 1}`, active > 0 ? "success" : "warning");
+}
+
+function formatSubagentFooterUsage(record?: {
+	lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
+	session?: {
+		getSessionStats?: () => {
+			tokens?: { total?: number };
+			contextUsage?: { contextWindow?: number; percent?: number | null };
+		};
+	};
 }): string {
-	const providerCount = footerData.getAvailableProviderCount();
-	const branchEntries = ctx.sessionManager.getBranch().length;
-	const mode = ctx.hasPendingMessages() ? "queued" : ctx.isIdle() ? "idle" : "streaming";
-	const extraStatuses = [...footerData.getExtensionStatuses().entries()]
-		.filter(([key, value]) => key !== "ralph" && key !== "subagents" && typeof value === "string" && value.trim().length > 0)
-		.slice(0, 2)
-		.map(([key]) => key);
-	const suffix = extraStatuses.length > 0 ? ` · ext:${extraStatuses.join(",")}` : "";
-	return `📈 ${providerCount} providers · ${branchEntries} entries · ${mode}${suffix}`;
+	if (!record) return formatFooterProgress(0, 0);
+	const stats = typeof record.session?.getSessionStats === "function" ? record.session.getSessionStats() : undefined;
+	const current = typeof stats?.tokens?.total === "number" ? stats.tokens.total : getSubagentLifetimeUsageTokens(record);
+	const max = typeof stats?.contextUsage?.contextWindow === "number" ? stats.contextUsage.contextWindow : 0;
+	return formatFooterProgress(current, max);
 }
 
-function installRalphFooter(ctx: ExtensionCommandContext): void {
+function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
 	if (!ctx.hasUI) return;
 	ralphFooterState.ctx = ctx;
 	ctx.ui.setFooter((tui, theme, footerData) => {
@@ -1526,24 +1589,36 @@ function installRalphFooter(ctx: ExtensionCommandContext): void {
 				const branch = footerData.getGitBranch() ?? "no git";
 				const gitInfo = detectGitWorkspaceInfo(ctx.cwd);
 				const summary = readRalphFooterSpecSummary(ctx);
+				const thinking = pi.getThinkingLevel();
+				const thinkingColor = footerThinkingColor(thinking);
 				const modelLabel = ctx.model?.id ?? "no-model";
 				const topLine = [
-					formatFooterBadge(`📁 ${ralphFooterProjectDirectory(ctx)}`),
-					formatFooterBadge(`𖣂 ${gitInfo.worktreeName ?? "no worktree"}`),
-					formatFooterBadge(`𖦥 ${branch}`),
-					formatFooterBadge(`👾 ${modelLabel}`),
-					formatFooterBadge(`📋 ${summary.epicName}`),
-					formatFooterBadge(`🎯 ${summary.specName}`),
-					formatFooterBadge(formatRalphFooterProgress(summary)),
-				].join("");
-				const nativeInfo = formatRalphFooterNativeInfo(ctx, footerData);
+					formatFooterBadge(theme, `${theme.fg("muted", "📁 ")}${theme.fg("syntaxFunction", ralphFooterProjectDirectory(ctx))}`),
+					formatFooterBadge(theme, `${theme.fg("muted", "𖣂 worktree ")}${theme.fg("syntaxVariable", gitInfo.worktreeName ?? "no worktree")}`),
+					formatFooterBadge(theme, `${theme.fg("muted", "𖦥 ")}${theme.fg("syntaxString", branch)}`),
+					formatFooterBadge(theme, `${theme.fg("muted", "👾 ")}${theme.fg("syntaxType", modelLabel)} ${theme.fg("muted", "💭 ")}${theme.fg(thinkingColor, thinking)}`),
+					formatFooterBadge(theme, `${theme.fg("muted", "📋 ")}${theme.fg("mdHeading", summary.epicName)}`),
+					formatFooterBadge(theme, `${theme.fg("muted", "🎯 ")}${theme.fg("success", summary.specName)}`),
+				].join(" ");
+				const registry = getToolRegistryState(pi);
+				const mainUsage = readFooterConversationUsage(ctx);
 				const active = ralphFooterState.subagent;
 				const manager = active ? getRalphSubagentManager() : undefined;
 				const record = active ? manager?.getRecord(active.agentId) : undefined;
-				const subLine = active
-					? `${formatMainContextUsage(ctx)} [${nativeInfo}] | ${active.agentName} 🤖 ${getSubagentUsageText(record) || `${formatTokenCount(0)} tokens`} · 🔨 ${record?.toolUses ?? 0} tools · ⏰ ${formatRalphElapsed(record?.startedAt ?? active.startedAt)}`
-					: `${formatMainContextUsage(ctx)} [${nativeInfo}] | ${theme.fg("dim", "No subagent 🤖 idle")}`;
-				return [truncateToWidth(topLine, width, "…"), truncateToWidth(subLine, width, "…")];
+				const subagentName = active?.agentName ?? "No subagent";
+				const subagentUsage = formatSubagentFooterUsage(record);
+				const subagentTools = record?.toolUses ?? 0;
+				const subagentStartedAt = record?.startedAt ?? active?.startedAt ?? Date.now();
+				const bottomLine = [
+					theme.fg("text", formatMainContextUsage(ctx)),
+					formatFooterIoBadge(theme, mainUsage),
+					formatFooterMcpBadge(theme, registry),
+					theme.fg("muted", "|"),
+					`${theme.fg("toolTitle", theme.bold(subagentName))} ${theme.fg("muted", "🤖")} ${theme.fg("text", subagentUsage)}`,
+					theme.fg("dim", `· 🔨 ${subagentTools} tools`),
+					theme.fg("dim", `· ⏰ ${formatFooterElapsed(subagentStartedAt)}`),
+				].join(" ");
+				return [truncateToWidth(topLine, width, "…"), truncateToWidth(bottomLine, width, "…")];
 			},
 		};
 	});
@@ -1846,6 +1921,52 @@ function completeOptionValues(argumentText: string, optionName: string, values: 
 	return filtered.length > 0 ? filtered.map((item) => ({ ...item, value: `${head}${item.value}` })) : null;
 }
 
+function directoryPathCompletionItems(pathPrefix: string): RalphCompletionItem[] {
+	const normalizedPrefix = pathPrefix.replace(/\\/g, "/");
+	const lastSlash = normalizedPrefix.lastIndexOf("/");
+	const dirPrefix = lastSlash === -1 ? "" : normalizedPrefix.slice(0, lastSlash + 1);
+	const entryPrefix = lastSlash === -1 ? normalizedPrefix : normalizedPrefix.slice(lastSlash + 1);
+	const basePath = normalizedPrefix.startsWith("~/")
+		? resolve(homedir(), dirPrefix.slice(2) || ".")
+		: normalizedPrefix.startsWith("/")
+			? resolve(dirPrefix || "/")
+			: resolve(process.cwd(), dirPrefix || ".");
+
+	let entries: ReturnType<typeof readdirSync>;
+	try {
+		entries = readdirSync(basePath, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+
+	return entries
+		.filter((entry) => entry.isDirectory() && (!entryPrefix || entry.name.toLowerCase().startsWith(entryPrefix.toLowerCase())))
+		.map((entry) => {
+			const value = `${dirPrefix}${entry.name}/`;
+			return { value, label: value, description: "directory" };
+		})
+		.sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function completeDirectoryOptionValues(argumentText: string, optionNames: string | string[]): RalphCompletionItem[] | null {
+	const names = Array.isArray(optionNames) ? optionNames : [optionNames];
+	const { head, token } = argumentTail(argumentText);
+
+	for (const optionName of names) {
+		if (!token.startsWith(`${optionName}=`)) continue;
+		const pathPrefix = token.slice(optionName.length + 1);
+		const suggestions = directoryPathCompletionItems(pathPrefix);
+		return suggestions.length > 0
+			? suggestions.map((item) => ({ ...item, value: `${head}${optionName}=${item.value}` }))
+			: null;
+	}
+
+	const previous = previousArgumentToken(argumentText);
+	if (!previous || !names.includes(previous)) return null;
+	const suggestions = directoryPathCompletionItems(token);
+	return suggestions.length > 0 ? suggestions.map((item) => ({ ...item, value: `${head}${item.value}` })) : null;
+}
+
 function flagItem(value: string, description: string): RalphCompletionItem {
 	return { value: `${value} `, label: value, description };
 }
@@ -1880,20 +2001,56 @@ function specArgumentCompletions(prefix: string) {
 	}
 }
 
+const TASK_SIZE_COMPLETIONS: RalphCompletionItem[] = [
+	{ value: "fine", label: "fine", description: "40-60+ smaller tasks with verification checkpoints" },
+	{ value: "coarse", label: "coarse", description: "10-20 larger tasks" },
+];
+
+const INDEX_TYPE_COMPLETIONS: RalphCompletionItem[] = [
+	{ value: "controllers", label: "controllers", description: "Index controller/route entrypoints" },
+	{ value: "services", label: "services", description: "Index service and use-case modules" },
+	{ value: "models", label: "models", description: "Index schemas, entities, and data models" },
+	{ value: "helpers", label: "helpers", description: "Index shared utilities and helper modules" },
+	{ value: "migrations", label: "migrations", description: "Index migration and schema change files" },
+	{ value: "other", label: "other", description: "Index uncategorized code artifacts" },
+];
+
+const INDEX_EXCLUDE_COMPLETIONS: RalphCompletionItem[] = [
+	{ value: "node_modules/", label: "node_modules/", description: "Skip installed dependencies" },
+	{ value: "dist/", label: "dist/", description: "Skip build output" },
+	{ value: "build/", label: "build/", description: "Skip build artifacts" },
+	{ value: "coverage/", label: "coverage/", description: "Skip test coverage output" },
+	{ value: ".git/", label: ".git/", description: "Skip Git metadata" },
+	{ value: "specs/", label: "specs/", description: "Skip generated spec artifacts" },
+];
+
+const IMPLEMENT_ITERATION_COMPLETIONS: RalphCompletionItem[] = [
+	{ value: "3", label: "3", description: "Tighter retry cap" },
+	{ value: "5", label: "5", description: "Default per-task retry cap" },
+	{ value: "10", label: "10", description: "More retries before blocking" },
+	{ value: "25", label: "25", description: "Conservative global loop cap" },
+	{ value: "50", label: "50", description: "Medium global loop cap" },
+	{ value: "100", label: "100", description: "Default global loop cap" },
+];
+
 function startArgumentCompletions(prefix: string) {
 	try {
-		return completeOptionValues(prefix, "--tasks-size", [
-			{ value: "fine", label: "fine", description: "40-60+ smaller tasks with verification checkpoints" },
-			{ value: "coarse", label: "coarse", description: "10-20 larger tasks" },
-		]) ?? completeArgumentToken(prefix, [
-			flagItem("--fresh", "Reinitialize the target spec before starting"),
-			flagItem("--quick", "Generate artifacts and implement without approval prompts"),
-			flagItem("--autonomous", "Alias for autonomous quick flow"),
-			flagItem("--skip-research", "Start a new spec at requirements"),
-			flagItem("--next-epic-spec", "Select the active epic's next unblocked child spec"),
-			flagItem("--tasks-size", "Set generated task granularity"),
-			...specCompletionCandidates(),
-		]);
+		return completeDirectoryOptionValues(prefix, "--specs-dir")
+			?? completeOptionValues(prefix, "--tasks-size", TASK_SIZE_COMPLETIONS)
+			?? completeArgumentToken(prefix, [
+				flagItem("--fresh", "Reinitialize the target spec before starting"),
+				flagItem("--quick", "Generate artifacts and implement without approval prompts"),
+				flagItem("--autonomous", "Alias for autonomous quick flow"),
+				flagItem("--auto", "Alias for autonomous quick flow"),
+				flagItem("--skip-research", "Start a new spec at requirements"),
+				flagItem("--next-epic-spec", "Select the active epic's next unblocked child spec"),
+				flagItem("--epic-next", "Alias for --next-epic-spec"),
+				flagItem("--commit-spec", "Commit generated spec artifacts before implementation"),
+				flagItem("--no-commit-spec", "Do not commit generated spec artifacts"),
+				flagItem("--specs-dir", "Write the spec under a custom specs root"),
+				flagItem("--tasks-size", "Set generated task granularity"),
+				...specCompletionCandidates(),
+			]);
 	} catch {
 		return null;
 	}
@@ -1901,15 +2058,11 @@ function startArgumentCompletions(prefix: string) {
 
 function phaseArgumentCompletions(prefix: string, includeTasksSize = false) {
 	try {
-		const taskSizeCompletions = includeTasksSize
-			? completeOptionValues(prefix, "--tasks-size", [
-				{ value: "fine", label: "fine", description: "40-60+ smaller tasks with verification checkpoints" },
-				{ value: "coarse", label: "coarse", description: "10-20 larger tasks" },
-			])
-			: null;
+		const taskSizeCompletions = includeTasksSize ? completeOptionValues(prefix, "--tasks-size", TASK_SIZE_COMPLETIONS) : null;
 		return taskSizeCompletions ?? completeArgumentToken(prefix, [
 			flagItem("--quick", "Skip approval prompts for this artifact"),
 			flagItem("--autonomous", "Alias for quick artifact flow"),
+			flagItem("--auto", "Alias for quick artifact flow"),
 			...(includeTasksSize ? [flagItem("--tasks-size", "Set generated task granularity")] : []),
 			...specCompletionCandidates(),
 		]);
@@ -1918,9 +2071,108 @@ function phaseArgumentCompletions(prefix: string, includeTasksSize = false) {
 	}
 }
 
+function implementArgumentCompletions(prefix: string) {
+	try {
+		return completeOptionValues(prefix, "--max-task-iterations", IMPLEMENT_ITERATION_COMPLETIONS)
+			?? completeOptionValues(prefix, "--max-global-iterations", IMPLEMENT_ITERATION_COMPLETIONS)
+			?? completeArgumentToken(prefix, [
+				flagItem("--recovery-mode", "Resume with extra blocker-tolerant recovery behavior"),
+				flagItem("--max-task-iterations", "Set the per-task retry cap"),
+				flagItem("--max-global-iterations", "Set the overall coordinator loop cap"),
+				...specCompletionCandidates(),
+			]);
+	} catch {
+		return null;
+	}
+}
+
 function cancelArgumentCompletions(prefix: string) {
 	try {
-		return completeArgumentToken(prefix, [flagItem("--delete", "Also request spec directory deletion after confirmation"), ...specCompletionCandidates()]);
+		return completeArgumentToken(prefix, [
+			flagItem("--delete", "Also request spec directory deletion after confirmation"),
+			flagItem("--delete-spec", "Alias for --delete"),
+			...specCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function refactorArgumentCompletions(prefix: string) {
+	try {
+		return completeOptionValues(prefix, "--file", REFACTOR_ALLOWED_FILES.map((value) => ({
+			value,
+			label: value,
+			description: `Refactor ${value}.md`,
+		}))) ?? completeArgumentToken(prefix, [
+			flagItem("--file", "Choose one artifact to refactor"),
+			...specCompletionCandidates(),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function modelArgumentCompletions(prefix: string) {
+	try {
+		const providerModels = RALPH_SUPPORTED_MODEL_PROVIDERS.flatMap((profile) => profile.preferredModels.map((modelId) => ({
+			value: `${profile.provider}/${modelId}`,
+			label: `${profile.provider}/${modelId}`,
+			description: `Preferred ${profile.provider} model`,
+		})));
+		return completeArgumentToken(prefix, [
+			{ value: "auto", label: "auto", description: "Pick the best supported provider automatically" },
+			{ value: "inherit", label: "inherit", description: "Refresh Ralph agents to inherit the active Pi model" },
+			{ value: "current", label: "current", description: "Alias for inherit/current status refresh" },
+			...RALPH_SUPPORTED_MODEL_PROVIDERS.map((profile) => ({
+				value: profile.provider,
+				label: profile.provider,
+				description: profile.label,
+			})),
+			...providerModels,
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function statusArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, [
+			flagItem("--bootstrap", "Show bootstrap/runtime diagnostics"),
+			flagItem("--diagnostics", "Alias for --bootstrap"),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function initArgumentCompletions(prefix: string) {
+	try {
+		return completeArgumentToken(prefix, [
+			flagItem("--refresh-agents", "Overwrite conflicting bundled ralph-*.md subagent files"),
+			flagItem("--refresh", "Alias for --refresh-agents"),
+			flagItem("--no-runtime-config", "Skip writing runtime default configuration files"),
+		]);
+	} catch {
+		return null;
+	}
+}
+
+function indexArgumentCompletions(prefix: string) {
+	try {
+		return completeDirectoryOptionValues(prefix, "--path")
+			?? completeOptionValues(prefix, "--type", INDEX_TYPE_COMPLETIONS)
+			?? completeOptionValues(prefix, "--exclude", INDEX_EXCLUDE_COMPLETIONS)
+			?? completeArgumentToken(prefix, [
+				flagItem("--path", "Scan only the provided directory or subtree"),
+				flagItem("--type", "Filter indexed component categories"),
+				flagItem("--exclude", "Skip paths matching the provided pattern"),
+				flagItem("--dry-run", "Preview index writes without modifying files"),
+				flagItem("--force", "Rewrite all index artifacts even when unchanged"),
+				flagItem("--changed", "Index only changed files in the current Git worktree"),
+				flagItem("--quick", "Skip confirmation prompts where applicable"),
+			]);
 	} catch {
 		return null;
 	}
@@ -7026,6 +7278,7 @@ function triageArgumentCompletions(prefix: string) {
 			flagItem("--fresh", "Regenerate epic artifacts and state"),
 			flagItem("--output", "Choose spec-files, github-issues, or both"),
 			flagItem("--yes", "Confirm GitHub issue writes for noninteractive runs"),
+			flagItem("-y", "Alias for --yes"),
 			...epicCompletionCandidates(),
 		]);
 	} catch {
@@ -7049,7 +7302,10 @@ function epicNextArgumentCompletions(prefix: string) {
 	try {
 		return completeArgumentToken(prefix, [
 			flagItem("--peek", "Preview the next child without changing state"),
+			flagItem("--dry-run", "Alias for --peek"),
 			flagItem("--switch", "Also set .current-spec after selecting"),
+			flagItem("--switch-spec", "Alias for --switch"),
+			flagItem("--no-switch", "Keep the current spec marker unchanged"),
 			flagItem("--start", "Delegate directly to /ralph-start --next-epic-spec"),
 			...epicCompletionCandidates(),
 		]);
@@ -7062,6 +7318,8 @@ function epicCancelArgumentCompletions(prefix: string) {
 	try {
 		return completeArgumentToken(prefix, [
 			flagItem("--delete-child-specs", "Also request child spec directory deletion after typed confirmation"),
+			flagItem("--delete-children", "Alias for --delete-child-specs"),
+			flagItem("--delete-specs", "Alias for --delete-child-specs"),
 			...epicCompletionCandidates(),
 		]);
 	} catch {
@@ -8992,7 +9250,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		await bootstrapBundledRuntimes(pi);
-		installRalphFooter(ctx);
+		installRalphFooter(pi, ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -9043,6 +9301,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("ralph-model", {
 		description: "Show or switch Ralph's inherited Pi model profile across anthropic, openai-codex, and github-copilot",
+		getArgumentCompletions: modelArgumentCompletions,
 		handler: async (args, ctx) => switchRalphModel(pi, args, ctx),
 	});
 
@@ -9330,12 +9589,13 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("ralph-implement", {
 		description: "Execute tasks.md through Ralph subagents",
-		getArgumentCompletions: specArgumentCompletions,
+		getArgumentCompletions: implementArgumentCompletions,
 		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "implement", () => runImplementCommand(pi, args, ctx)),
 	});
 
 	pi.registerCommand("ralph-refactor", {
 		description: REFACTOR_COMMAND_DESCRIPTION,
+		getArgumentCompletions: refactorArgumentCompletions,
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
 			const tokenized = tokenizeCommandArgs(args);
@@ -9528,6 +9788,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("ralph-index", {
 		description: "Generate searchable component and external index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, and --quick",
+		getArgumentCompletions: indexArgumentCompletions,
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
 			const tokenized = tokenizeCommandArgs(args);
@@ -9542,6 +9803,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("ralph-status", {
 		description: "Show Ralph specs across configured roots",
+		getArgumentCompletions: statusArgumentCompletions,
 		handler: async (args, ctx) => {
 			const trimmedArgs = args.trim();
 			if (trimmedArgs === "--bootstrap" || trimmedArgs === "--diagnostics") {
@@ -9660,6 +9922,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.registerCommand("ralph-init", {
 		description: "Bootstrap and validate Smart Ralph dependencies, runtime defaults, and project Ralph subagents; use --refresh-agents to overwrite conflicting ralph-*.md files",
+		getArgumentCompletions: initArgumentCompletions,
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
 			const parsed = parseInitArgs(args);

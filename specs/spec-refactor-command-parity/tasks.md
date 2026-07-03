@@ -494,7 +494,7 @@
   - _Requirements: FR-15, AC-5.1, AC-5.2_
   - _Design: `scripts/verify-refactor-parity.mjs`_
 
-- [ ] Q11 [VERIFY] Quality check: package wiring verifier
+- [x] Q11 [VERIFY] Quality check: package wiring verifier
   - **Do**:
     1. Run the verifier implementing the research `fixture/state smoke` tooling row plus the discovered package verification wiring check.
   - **Files**: None
@@ -506,7 +506,7 @@
 
 ## Phase 12: End-to-end verification and final gates
 
-- [ ] VE1 [VERIFY] Package verification startup/build proxy
+- [x] VE1 [VERIFY] Package verification startup/build proxy
   - **Do**:
     1. Use the research `Quality Commands` row `verify = npm run prepack` as the library-package startup/build proxy because no separate build or E2E runner was discovered.
   - **Files**: None
@@ -516,7 +516,7 @@
   - _Requirements: FR-15, AC-5.2_
   - _Design: package verification wiring_
 
-- [ ] VE2 [VERIFY] Refactor parity fixture acceptance flow
+- [x] VE2 [VERIFY] Refactor parity fixture acceptance flow
   - **Do**:
     1. Run the dedicated Node verifier implementing the research `fixture/state smoke` and `headless-failure smoke` tooling rows to exercise configured-root resolution, headless stop, bounded delegation, cascades, state merge, and commit behavior together.
   - **Files**: None
@@ -526,7 +526,7 @@
   - _Requirements: FR-15, AC-5.1, AC-5.2_
   - _Design: `scripts/verify-refactor-parity.mjs` acceptance bundle_
 
-- [ ] VE3 [VERIFY] Refactor parity fixture cleanup
+- [x] VE3 [VERIFY] Refactor parity fixture cleanup
   - **Do**:
     1. Run the verifier cleanup case so temp spec roots and temp git fixtures prove they are removed after acceptance coverage.
   - **Files**: None
@@ -536,7 +536,7 @@
   - _Requirements: FR-15, AC-5.1_
   - _Design: `scripts/verify-refactor-parity.mjs` cleanup path_
 
-- [ ] V4 [VERIFY] Full local CI
+- [x] V4 [VERIFY] Full local CI
   - **Do**:
     1. Run all discovered package verification commands after the refactor verifier is wired into the package bundle.
   - **Files**: None
@@ -546,7 +546,7 @@
   - _Requirements: FR-15, AC-5.2_
   - _Design: package verification wiring_
 
-- [ ] V5 [VERIFY] CI pipeline passes
+- [x] V5 [VERIFY] CI pipeline passes
   - **Do**:
     1. Re-run the discovered package verification bundle as the repo's CI-equivalent gate because research found no `.github/workflows` pipeline to invoke separately.
   - **Files**: None
@@ -556,7 +556,7 @@
   - _Requirements: FR-15, AC-5.2_
   - _Design: package verification wiring; repo verification policy_
 
-- [ ] V6 [VERIFY] AC checklist
+- [x] V6 [VERIFY] AC checklist
   - **Do**:
     1. Run the acceptance-case verifier that bundles the command registration, scope, headless, cascade, state, and git assertions mapped to the approved acceptance criteria.
   - **Files**: None
