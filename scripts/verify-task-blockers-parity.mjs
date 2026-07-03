@@ -122,8 +122,8 @@ async function verifyTopologyHelperContract() {
     expectedFail('task-completion helper must declare the TaskTopology contract for parity coverage.');
   }
 
-  if (!/return\s*{\s*topology,\s*entries\s*,?\s*}/s.test(helperSource)) {
-    expectedFail('task-completion helper must return a minimal workspace report containing topology and entries.');
+  if (!/return\s*{[\s\S]*topology,[\s\S]*entries,[\s\S]*commitMode,[\s\S]*}/s.test(helperSource)) {
+    expectedFail('task-completion helper must return a workspace report containing topology, entries, and commit guidance.');
   }
 }
 

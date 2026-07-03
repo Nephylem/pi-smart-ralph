@@ -127,7 +127,7 @@
   - _Requirements: FR-4, FR-5, FR-12, AC-1.3, AC-2.1_
   - _Design: `TaskWorkspaceReport.commitMode`; `commit_reason`_
 
-- [ ] 2.2 [GREEN] Pass test: implement topology-aware commit guidance
+- [x] 2.2 [GREEN] Pass test: implement topology-aware commit guidance
   - **Do**:
     1. Parse the task `Commit` directive alongside normalized file inputs.
     2. Return `none` for `Commit: None` in every topology.

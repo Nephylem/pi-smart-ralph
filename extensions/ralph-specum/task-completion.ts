@@ -16,21 +16,27 @@ export interface TaskWorkspaceInput {
   filesDirective?: string | string[];
   tasksPath?: string;
   progressPath?: string;
+  commitDirective?: string;
   entries?: TaskWorkspaceEntry[];
 }
 
 export interface TaskWorkspaceReport {
   topology: TaskTopology;
   entries: TaskWorkspaceEntry[];
+  commitMode: 'required' | 'none' | 'topology_relaxed';
+  commitReason?: TaskTopology;
 }
 
 export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorkspaceReport {
   const entries = buildWorkspaceEntries(input);
   const topology = classifyTaskWorkspace(entries);
+  const { commitMode, commitReason } = deriveCommitGuidance(topology, input.commitDirective);
 
   return {
     topology,
     entries,
+    commitMode,
+    commitReason,
   };
 }
 
@@ -107,6 +113,41 @@ function normalizeTaskFiles(taskFiles, filesDirective) {
     .map((taskFile) => taskFile.trim())
     .filter((taskFile) => taskFile.length > 0 && !/^none$/i.test(taskFile))
     .map((taskFile) => resolve(taskFile));
+}
+
+function deriveCommitGuidance(topology, commitDirective) {
+  const normalizedDirective = normalizeCommitDirective(commitDirective);
+
+  if (normalizedDirective === 'none') {
+    return {
+      commitMode: 'none',
+      commitReason: undefined,
+    };
+  }
+
+  if (topology !== 'single_repo') {
+    return {
+      commitMode: 'topology_relaxed',
+      commitReason: topology,
+    };
+  }
+
+  return {
+    commitMode: 'required',
+    commitReason: undefined,
+  };
+}
+
+function normalizeCommitDirective(commitDirective) {
+  const normalizedDirective = String(commitDirective ?? '')
+    .replace(/`/g, '')
+    .trim();
+
+  if (!normalizedDirective || /^none$/i.test(normalizedDirective)) {
+    return 'none';
+  }
+
+  return normalizedDirective;
 }
 
 function probeRepoRoot(targetPath, repoRootByPath) {
