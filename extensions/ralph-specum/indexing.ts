@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type IndexCategory = 'controllers' | 'services' | 'models' | 'helpers' | 'migrations' | 'other';
@@ -48,6 +49,28 @@ export interface ResolveIndexPathsInput {
 export interface PriorIndexStateResult {
   state: unknown | null;
   path: string | null;
+}
+
+export interface ComponentEntry {
+  sourcePath: string;
+  sourceDisplayPath: string;
+  artifactPath: string;
+  category: IndexCategory;
+  hash: string;
+  name: string;
+  exports: string[];
+  methods: Array<{ name: string; params: string; description: string }>;
+  dependencies: string[];
+}
+
+export interface ScanComponentFilesInput {
+  paths: IndexPaths;
+  options?: Partial<IndexOptions>;
+}
+
+export interface ScanComponentFilesResult {
+  components: ComponentEntry[];
+  skipped: Array<{ path: string; reason: string }>;
 }
 
 const DEFAULT_INDEX_OPTIONS: IndexOptions = {
@@ -114,6 +137,42 @@ export function getExternalIndexPath(paths: IndexPaths, sourceId: string): strin
   return resolveIndexOutputPath(paths.indexRoot, join('external', `${artifactSlug(sourceId)}.md`), 'external artifact path');
 }
 
+export function scanComponentFiles(input: ScanComponentFilesInput): ScanComponentFilesResult {
+  const options = { ...createDefaultIndexOptions(), ...(input.options ?? {}) };
+  const categories = new Set(options.categories ?? []);
+  const excludes = [...DEFAULT_EXCLUDES, ...(options.excludes ?? [])];
+  const components: ComponentEntry[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
+
+  for (const sourcePath of walkReadableFiles(input.paths.scanPath, input.paths.scanPath, excludes, skipped)) {
+    const category = classifyComponentFile(sourcePath);
+    if (categories.size > 0 && !categories.has(category)) continue;
+
+    let source: string;
+    try {
+      source = readFileSync(sourcePath, 'utf8');
+    } catch (_error) {
+      skipped.push({ path: sourcePath, reason: 'unreadable' });
+      continue;
+    }
+
+    components.push({
+      sourcePath,
+      sourceDisplayPath: toIndexDisplayPath(input.paths, sourcePath),
+      artifactPath: getComponentIndexPath(input.paths, sourcePath, category),
+      category,
+      hash: createHash('sha256').update(source).digest('hex'),
+      name: basename(sourcePath, extname(sourcePath)),
+      exports: extractExports(source),
+      methods: [],
+      dependencies: extractDependencies(source),
+    });
+  }
+
+  components.sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+  return { components, skipped };
+}
+
 export function toIndexDisplayPath(paths: Pick<IndexPaths, 'projectRoot'>, sourcePath: string): string {
   const absoluteSourcePath = resolveFrom(paths.projectRoot, sourcePath);
   const projectRelativePath = normalizePathSeparators(relative(paths.projectRoot, absoluteSourcePath));
@@ -135,6 +194,125 @@ export function assertIndexOutputPath(indexRoot: string, candidatePath: string, 
   const relativePath = relative(resolve(indexRoot), resolve(candidatePath));
   if (relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))) return;
   throw new Error(`Resolved ${label} escapes index root: ${candidatePath}`);
+}
+
+const DEFAULT_EXCLUDES = [
+  '.git/**',
+  'node_modules/**',
+  'dist/**',
+  'build/**',
+  'coverage/**',
+  '.index/**',
+  '**/*.test.*',
+  '**/*.spec.*',
+];
+
+const READABLE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.rb', '.go', '.java', '.cs', '.php', '.rs', '.sql']);
+
+function* walkReadableFiles(
+  rootPath: string,
+  currentPath: string,
+  excludes: string[],
+  skipped: Array<{ path: string; reason: string }>,
+): Generator<string> {
+  let entries;
+  try {
+    entries = readdirSync(currentPath, { withFileTypes: true });
+  } catch (_error) {
+    skipped.push({ path: currentPath, reason: 'unreadable' });
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = join(currentPath, entry.name);
+    const relativePath = normalizePathSeparators(relative(rootPath, entryPath));
+    if (matchesAnyExclude(relativePath, entry.name, excludes)) continue;
+
+    if (entry.isDirectory()) {
+      yield* walkReadableFiles(rootPath, entryPath, excludes, skipped);
+      continue;
+    }
+
+    if (!entry.isFile()) continue;
+    if (!isReadableCandidateFile(entryPath)) continue;
+    yield entryPath;
+  }
+}
+
+function isReadableCandidateFile(sourcePath: string): boolean {
+  if (!READABLE_EXTENSIONS.has(extname(sourcePath).toLowerCase())) return false;
+  try {
+    return statSync(sourcePath).isFile();
+  } catch (_error) {
+    return false;
+  }
+}
+
+function classifyComponentFile(sourcePath: string): IndexCategory {
+  const normalized = normalizePathSeparators(sourcePath).toLowerCase();
+  const fileBase = basename(normalized, extname(normalized));
+  if (normalized.includes('/controllers/') || /(^|[.-])controller$/.test(fileBase)) return 'controllers';
+  if (normalized.includes('/services/') || /(^|[.-])service$/.test(fileBase)) return 'services';
+  if (normalized.includes('/models/') || /(^|[.-])model$/.test(fileBase)) return 'models';
+  if (normalized.includes('/helpers/') || normalized.includes('/utils/') || /(^|[.-])(helper|util)$/.test(fileBase)) return 'helpers';
+  if (normalized.includes('/migrations/') || /^\d+[-_].+/.test(fileBase)) return 'migrations';
+  return 'other';
+}
+
+function matchesAnyExclude(relativePath: string, entryName: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => matchesExcludePattern(relativePath, entryName, pattern));
+}
+
+function matchesExcludePattern(relativePath: string, entryName: string, pattern: string): boolean {
+  const normalizedPattern = normalizePathSeparators(pattern).replace(/^\.\//, '');
+  if (!normalizedPattern) return false;
+  if (normalizedPattern.endsWith('/**')) {
+    const directoryPattern = normalizedPattern.slice(0, -3);
+    if (relativePath === directoryPattern || relativePath.startsWith(`${directoryPattern}/`)) return true;
+  }
+  if (!normalizedPattern.includes('/') && !normalizedPattern.includes('*')) {
+    return relativePath === normalizedPattern || relativePath.startsWith(`${normalizedPattern}/`) || entryName === normalizedPattern;
+  }
+  const regex = new RegExp(`^${globPatternToRegexSource(normalizedPattern)}$`);
+  return regex.test(relativePath) || regex.test(entryName);
+}
+
+function globPatternToRegexSource(pattern: string): string {
+  let source = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*') {
+      if (pattern[index + 1] === '*') {
+        source += '.*';
+        index += 1;
+      } else {
+        source += '[^/]*';
+      }
+      continue;
+    }
+    source += escapeRegex(char);
+  }
+  return source;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function extractExports(source: string): string[] {
+  const exports = new Set<string>();
+  for (const match of source.matchAll(/export\s+(?:default\s+)?(?:class|function|const|let|var|interface|type)\s+([A-Za-z_$][\w$]*)/g)) {
+    exports.add(match[1]);
+  }
+  return [...exports];
+}
+
+function extractDependencies(source: string): string[] {
+  const dependencies = new Set<string>();
+  for (const match of source.matchAll(/(?:import\s+[^'\"]*from\s+|require\()['\"]([^'\"]+)['\"]/g)) {
+    dependencies.add(match[1]);
+  }
+  return [...dependencies];
 }
 
 function resolveFrom(basePath: string, configuredPath: string): string {

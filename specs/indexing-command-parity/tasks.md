@@ -152,7 +152,7 @@
   - _Requirements: FR-5, FR-7, FR-10, AC-3.1, AC-3.4_
   - _Design: Component scanner_
 
-- [ ] 1.11 [GREEN] Pass test: implement recursive component scanner
+- [x] 1.11 [GREEN] Pass test: implement recursive component scanner
   - **Do**:
     1. Recursively scan readable files under the scan path.
     2. Classify controllers, services, models, helpers, migrations, and other files.
