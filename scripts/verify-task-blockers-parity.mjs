@@ -28,6 +28,7 @@ const cases = new Map([
   ['relaxed-completion-validation-fixtures', verifyRelaxedCompletionValidationFixtures],
   ['topology-blocker-priority-contract', verifyTopologyBlockerPriorityContract],
   ['red-pass-evidence-contract', verifyRedPassEvidenceContract],
+  ['executor-topology-contract', verifyExecutorTopologyContract],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -481,6 +482,34 @@ async function verifyRedPassEvidenceContract() {
 
   if (!/verify\|verification\|evidence/.test(evidenceSection[0]) || !/RED_PASS/.test(evidenceSection[0])) {
     expectedFail('keyed evidence parsing must require `verify:`/`verification:`/`evidence:` lines to carry `RED_PASS` instead of accepting raw failing output.');
+  }
+}
+
+async function verifyExecutorTopologyContract() {
+  const executorAgentSource = readFileSync(join(root, 'agents', 'ralph-spec-executor.md'), 'utf8');
+  const executorPromptSource = readFileSync(join(root, 'prompts', 'executor-prompt.md'), 'utf8');
+
+  assertExecutorSurfaceContract({
+    surfaceName: 'agents/ralph-spec-executor.md',
+    source: executorAgentSource,
+  });
+  assertExecutorSurfaceContract({
+    surfaceName: 'prompts/executor-prompt.md',
+    source: executorPromptSource,
+  });
+}
+
+function assertExecutorSurfaceContract({ surfaceName, source }) {
+  if (!/topology preflight|preflight repo topology|repo-topology preflight/i.test(source)) {
+    expectedFail(`${surfaceName} must require topology preflight before commit handling.`);
+  }
+
+  if (!/non-`single_repo`|non-single_repo|split-repo|spec-outside-repo/i.test(source)) {
+    expectedFail(`${surfaceName} must explain non-\`single_repo\` split-repo/spec-outside-repo behavior.`);
+  }
+
+  if (!/commit:\s*none/i.test(source) || !/commit_reason/i.test(source)) {
+    expectedFail(`${surfaceName} must allow \`commit: none\` plus \`commit_reason\` for non-\`single_repo\` success.`);
   }
 }
 

@@ -285,7 +285,7 @@
   - _Requirements: FR-8, FR-10, NFR-2_
   - _Design: `TaskCompletionAssessment`; Technical Decisions_
 
-- [ ] Q6 [VERIFY] Quality check: expected-failure handling
+- [x] Q6 [VERIFY] Quality check: expected-failure handling
   - **Do**:
     1. Run the discovered `verify:index` command after evidence-parsing changes.
   - **Files**: None
@@ -297,7 +297,7 @@
 
 ## Phase 4: Prompt and template contracts
 
-- [ ] 4.1 [RED] Failing test: executor contract requires topology preflight and non-`single_repo` no-commit output
+- [x] 4.1 [RED] Failing test: executor contract requires topology preflight and non-`single_repo` no-commit output
   - **Do**:
     1. Add prompt-inspection cases covering `agents/ralph-spec-executor.md` and `prompts/executor-prompt.md`.
     2. Assert both surfaces require topology preflight and allow `commit: none` plus `commit_reason` in non-`single_repo` workspaces.
