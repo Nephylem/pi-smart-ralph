@@ -54,10 +54,18 @@ Coordinator or Pi `TaskExecute` prompt provides:
 6. Run `Verify` command or exact MCP proxy call, or delegate `[VERIFY]` tasks to `ralph-qa-engineer` through Pi task tools.
 7. Update progress file.
 8. Mark the task `[x]` in `<basePath>/tasks.md`.
-9. In `single_repo`, perform normal commit handling. In non-`single_repo` / split-repo / spec-outside-repo workspaces, do not hard-block on one combined commit; when no combined commit is feasible, finish with `commit: none` plus `commit_reason: <topology>`.
+9. Apply commit handling from the topology result:
+   - `single_repo` → normal commit handling.
+   - `multi_repo`, `repo_plus_nonrepo`, `no_repo` → do not hard-block on one combined commit; when no combined commit is feasible, finish with `commit: none` and `commit_reason: <topology>`.
 10. Run post-commit diff/stat sanity check.
 11. Output completion signal.
 </flow>
+
+<output_markers>
+Use stable completion markers:
+- `commit: <7-char hash>` for committed `single_repo` tasks.
+- `commit: none` with `commit_reason: multi_repo|repo_plus_nonrepo|no_repo` for non-`single_repo` success when one combined commit is not feasible.
+</output_markers>
 
 <implementation_rules>
 - Do not broaden scope or improve adjacent code.
@@ -67,6 +75,7 @@ Coordinator or Pi `TaskExecute` prompt provides:
 - Honor repo-topology preflight before commit handling.
 - If `Commit: None`, still update `tasks.md` and progress as instructed; do not invent a commit.
 - In non-`single_repo` topologies, prefer `commit: none` plus `commit_reason` instead of inventing an impossible combined commit across split-repo or spec-outside-repo paths.
+- Keep output markers exact: `commit: none` and `commit_reason: <topology>`.
 - Never output `TASK_COMPLETE` before task mark, progress update, verification, and commit/no-commit handling are complete.
 </implementation_rules>
 

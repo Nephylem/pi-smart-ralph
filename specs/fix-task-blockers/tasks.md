@@ -320,7 +320,7 @@
   - _Requirements: FR-7, FR-12, AC-2.3_
   - _Design: Prompt contracts; Data Flow step 4_
 
-- [ ] 4.3 [YELLOW] Refactor: tighten executor examples and output markers
+- [x] 4.3 [YELLOW] Refactor: tighten executor examples and output markers
   - **Do**:
     1. Simplify executor wording so required topology markers are easy to follow.
     2. Keep output examples stable for verifier string assertions.

@@ -504,12 +504,24 @@ function assertExecutorSurfaceContract({ surfaceName, source }) {
     expectedFail(`${surfaceName} must require topology preflight before commit handling.`);
   }
 
-  if (!/non-`single_repo`|non-single_repo|split-repo|spec-outside-repo/i.test(source)) {
-    expectedFail(`${surfaceName} must explain non-\`single_repo\` split-repo/spec-outside-repo behavior.`);
+  if (!/single_repo/.test(source)) {
+    expectedFail(`${surfaceName} must name \`single_repo\` explicitly in commit-handling guidance.`);
+  }
+
+  if (!/multi_repo/.test(source) || !/repo_plus_nonrepo/.test(source) || !/no_repo/.test(source)) {
+    expectedFail(`${surfaceName} must list all non-\`single_repo\` topology markers in commit-handling guidance.`);
+  }
+
+  if (!/split-repo|spec-outside-repo/i.test(source)) {
+    expectedFail(`${surfaceName} must explain split-repo/spec-outside-repo behavior.`);
   }
 
   if (!/commit:\s*none/i.test(source) || !/commit_reason/i.test(source)) {
     expectedFail(`${surfaceName} must allow \`commit: none\` plus \`commit_reason\` for non-\`single_repo\` success.`);
+  }
+
+  if (!/commit:\s*none`?\s+and\s+`?commit_reason:\s*<topology>/i.test(source) && !/commit:\s*none`?\s+plus\s+`?commit_reason:\s*<topology>/i.test(source)) {
+    expectedFail(`${surfaceName} must keep the stable non-\`single_repo\` output-marker example \`commit: none\` + \`commit_reason: <topology>\`.`);
   }
 }
 
