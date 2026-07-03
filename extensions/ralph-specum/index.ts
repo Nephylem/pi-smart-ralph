@@ -936,6 +936,131 @@ function formatBootstrapSummary(result: RalphAgentBootstrapResult): string {
 	].join(", ");
 }
 
+type RalphRuntimeConfigFileResult = {
+	label: string;
+	path: string;
+	created: boolean;
+	updatedKeys: string[];
+	preservedKeys: string[];
+	errors: string[];
+};
+
+type RalphRuntimeConfigBootstrapResult = {
+	files: RalphRuntimeConfigFileResult[];
+	changed: boolean;
+	reloadRecommended: boolean;
+};
+
+const RALPH_SUBAGENTS_DEFAULT_CONFIG: Record<string, unknown> = {
+	toolDescriptionMode: "compact",
+	widgetMode: "background",
+	fleetView: false,
+	defaultJoinMode: "smart",
+	schedulingEnabled: false,
+	scopeModels: false,
+	disableDefaultAgents: false,
+	maxConcurrent: 4,
+	defaultMaxTurns: 0,
+	graceTurns: 5,
+};
+
+const RALPH_TASKS_DEFAULT_CONFIG: Record<string, unknown> = {
+	taskScope: "session",
+	autoCascade: false,
+	autoClearCompleted: "never",
+	showAll: false,
+	maxVisible: 20,
+	sortOrder: "status",
+	hiddenAt: "top",
+};
+
+function runtimeConfigFilePath(cwd: string, relativePath: string): string {
+	return join(resolve(cwd), relativePath);
+}
+
+function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string, defaults: Record<string, unknown>): RalphRuntimeConfigFileResult {
+	const targetPath = runtimeConfigFilePath(cwd, relativePath);
+	const result: RalphRuntimeConfigFileResult = {
+		label,
+		path: targetPath,
+		created: false,
+		updatedKeys: [],
+		preservedKeys: [],
+		errors: [],
+	};
+
+	let nextConfig: Record<string, unknown>;
+	if (existsSync(targetPath)) {
+		try {
+			const parsed = JSON.parse(readFileSync(targetPath, "utf8")) as unknown;
+			if (!isRecordValue(parsed) || Array.isArray(parsed)) {
+				result.errors.push(`${formatProjectPath(targetPath, cwd)} must contain a JSON object; left unchanged.`);
+				return result;
+			}
+			nextConfig = { ...parsed };
+		} catch (error) {
+			result.errors.push(`Could not parse ${formatProjectPath(targetPath, cwd)}: ${formatError(error)}; left unchanged.`);
+			return result;
+		}
+	} else {
+		nextConfig = {};
+		result.created = true;
+	}
+
+	for (const [key, value] of Object.entries(defaults)) {
+		if (Object.prototype.hasOwnProperty.call(nextConfig, key)) {
+			result.preservedKeys.push(key);
+			continue;
+		}
+		nextConfig[key] = value;
+		result.updatedKeys.push(key);
+	}
+
+	if (!result.created && result.updatedKeys.length === 0) return result;
+
+	try {
+		mkdirSync(dirname(targetPath), { recursive: true });
+		writeFileSync(targetPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+	} catch (error) {
+		result.errors.push(`Could not write ${formatProjectPath(targetPath, cwd)}: ${formatError(error)}`);
+	}
+
+	return result;
+}
+
+function bootstrapRalphRuntimeConfig(cwd: string): RalphRuntimeConfigBootstrapResult {
+	const files = [
+		mergeRuntimeConfigFile(cwd, ".pi/subagents.json", "pi-subagents settings", RALPH_SUBAGENTS_DEFAULT_CONFIG),
+		mergeRuntimeConfigFile(cwd, ".pi/tasks-config.json", "pi-tasks settings", RALPH_TASKS_DEFAULT_CONFIG),
+	];
+	const changed = files.some((file) => file.errors.length === 0 && (file.created || file.updatedKeys.length > 0));
+	return {
+		files,
+		changed,
+		reloadRecommended: changed,
+	};
+}
+
+function formatRuntimeConfigDetail(file: RalphRuntimeConfigFileResult, cwd: string): string {
+	if (file.errors.length > 0) return file.errors.join("; ");
+	const path = formatProjectPath(file.path, cwd);
+	if (file.created) return `${path} created with defaults: ${file.updatedKeys.join(", ")}`;
+	if (file.updatedKeys.length > 0) return `${path} added missing default(s): ${file.updatedKeys.join(", ")}; preserved existing: ${file.preservedKeys.join(", ") || "none"}`;
+	return `${path} already contains all recommended Smart Ralph keys; preserved existing values`;
+}
+
+function runtimeConfigCheckSection(cwd: string, result: RalphRuntimeConfigBootstrapResult): CheckSection {
+	return {
+		title: "Ralph runtime defaults",
+		checks: result.files.map((file) => ({
+			label: file.label,
+			ok: file.errors.length === 0,
+			detail: formatRuntimeConfigDetail(file, cwd),
+			action: "Fix or remove the malformed settings file, then rerun /ralph-init.",
+		})),
+	};
+}
+
 function validateRalphAgents(cwd: string, bootstrapResult?: RalphAgentBootstrapResult): CheckSection {
 	const checks: Check[] = [];
 	const agentsDir = projectRalphAgentsDir(cwd);
@@ -1062,7 +1187,7 @@ function formatCheck(check: Check): string {
 	return lines.join("\n");
 }
 
-function formatDiagnostics(title: string, pi: ExtensionAPI, cwd = process.cwd(), bootstrapResult?: RalphAgentBootstrapResult): string {
+function formatDiagnostics(title: string, pi: ExtensionAPI, cwd = process.cwd(), bootstrapResult?: RalphAgentBootstrapResult, runtimeConfigResult?: RalphRuntimeConfigBootstrapResult): string {
 	const validation = validateRalphEnvironment(pi, cwd, bootstrapResult);
 	const lines = [
 		title,
@@ -1074,6 +1199,14 @@ function formatDiagnostics(title: string, pi: ExtensionAPI, cwd = process.cwd(),
 
 	for (const section of validation.sections) {
 		lines.push("", `${section.title}:`, ...section.checks.map(formatCheck));
+	}
+
+	if (runtimeConfigResult) {
+		const section = runtimeConfigCheckSection(cwd, runtimeConfigResult);
+		lines.push("", `${section.title}:`, ...section.checks.map(formatCheck));
+		if (runtimeConfigResult.reloadRecommended) {
+			lines.push("", "Runtime defaults were updated. Run /reload or restart Pi so pi-subagents and pi-tasks reload their settings.");
+		}
 	}
 
 	if (validation.installCommands.length > 0) {
@@ -1096,20 +1229,26 @@ function formatDiagnostics(title: string, pi: ExtensionAPI, cwd = process.cwd(),
 
 type InitArguments = {
 	refreshAgents: boolean;
+	runtimeConfig: boolean;
 	error?: string;
 };
 
 function parseInitArgs(args: string): InitArguments {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
 	let refreshAgents = false;
+	let runtimeConfig = true;
 	for (const token of tokens) {
 		if (token === "--refresh-agents" || token === "--refresh") {
 			refreshAgents = true;
 			continue;
 		}
-		return { refreshAgents, error: `Unknown option: ${token}. Usage: /ralph-init [--refresh-agents]` };
+		if (token === "--no-runtime-config") {
+			runtimeConfig = false;
+			continue;
+		}
+		return { refreshAgents, runtimeConfig, error: `Unknown option: ${token}. Usage: /ralph-init [--refresh-agents] [--no-runtime-config]` };
 	}
-	return { refreshAgents };
+	return { refreshAgents, runtimeConfig };
 }
 
 async function notify(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info") {
@@ -8020,7 +8159,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"/ralph-switch        Switch the active spec marker.",
 					"/ralph-cancel        Clear execution state for a spec.",
 					"/ralph-model         Show/switch Ralph's inherited Pi model profile; supports anthropic, openai-codex, github-copilot.",
-					"/ralph-init          Bootstrap/check Pi tools and project Ralph subagents; --refresh-agents overwrites conflicts.",
+					"/ralph-init          Bootstrap/check Pi tools, runtime defaults, and project Ralph subagents; --refresh-agents overwrites conflicts.",
 				].join("\n"),
 			);
 		},
@@ -8438,7 +8577,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("ralph-init", {
-		description: "Bootstrap and validate Smart Ralph dependencies without starting workflows; use --refresh-agents to overwrite conflicting ralph-*.md files",
+		description: "Bootstrap and validate Smart Ralph dependencies, runtime defaults, and project Ralph subagents; use --refresh-agents to overwrite conflicting ralph-*.md files",
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
 			const parsed = parseInitArgs(args);
@@ -8446,8 +8585,9 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				await notify(ctx, parsed.error, "warning");
 				return;
 			}
+			const runtimeConfig = parsed.runtimeConfig ? bootstrapRalphRuntimeConfig(ctx.cwd) : undefined;
 			const agentBootstrap = bootstrapRalphAgents(ctx.cwd, parsed.refreshAgents);
-			const diagnostics = formatDiagnostics("Smart Ralph bootstrap diagnostics", pi, ctx.cwd, agentBootstrap);
+			const diagnostics = formatDiagnostics("Smart Ralph bootstrap diagnostics", pi, ctx.cwd, agentBootstrap, runtimeConfig);
 			await notify(ctx, diagnostics, diagnostics.includes("Overall: PASS") ? "info" : "warning");
 		},
 	});

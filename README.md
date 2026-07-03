@@ -115,7 +115,9 @@ The extension also handles `resources_discover`. When the bundled `pi-web-access
 
 ### 3. Project bootstrap and Ralph agents
 
-`/ralph-init` validates the package and target project without starting a spec. It checks package resources, required runtime packages, required active tools, and Ralph agent frontmatter.
+`/ralph-init` validates the package and target project without starting a spec. It checks package resources, required runtime packages, required active tools, runtime defaults, and Ralph agent frontmatter.
+
+It also writes missing Smart Ralph defaults into `.pi/subagents.json` and `.pi/tasks-config.json` while preserving any existing user-set keys. These defaults keep Ralph subagents visible in the background widget, disable FleetView and scheduled-agent prompt overhead, and make Pi task cards session-scoped with completed tasks retained for evidence. If defaults are added or files are created, run `/reload` or restart Pi so the bundled runtimes reload their startup settings.
 
 It also copies the bundled Ralph agent definitions from this package's `agents/` directory into the target project's `.pi/agents/` directory. Existing Smart-Ralph-managed files can be updated automatically. User-owned conflicting `ralph-*.md` files are not overwritten unless you run:
 
@@ -374,8 +376,9 @@ For a small smoke test:
 | Command | Description |
 | --- | --- |
 | `/ralph-help` | Show command help. |
-| `/ralph-init` | Validate the package and bootstrap project-local Ralph agents. |
+| `/ralph-init` | Validate the package, write missing runtime defaults, and bootstrap project-local Ralph agents. |
 | `/ralph-init --refresh-agents` | Re-copy bundled Ralph agents into `.pi/agents`, replacing conflicts intentionally. |
+| `/ralph-init --no-runtime-config` | Validate/bootstrap without writing `.pi/subagents.json` or `.pi/tasks-config.json`. |
 | `/ralph-model [auto\|provider\|model]` | Show or switch the active Pi model that Ralph subagents inherit. |
 
 ### Spec workflow
