@@ -59,7 +59,7 @@
   - _Requirements: FR-2, FR-5, AC-1.2, AC-1.5_
   - _Design: `extensions/ralph-specum/paths.ts`; `extensions/ralph-specum/refactor.ts`_
 
-- [ ] 1.5 [GREEN] Pass test: resolve target specs and inventory refactorable artifacts
+- [x] 1.5 [GREEN] Pass test: resolve target specs and inventory refactorable artifacts
   - **Do**:
     1. Implement spec lookup through existing configured-root helpers.
     2. Detect existing `requirements.md`, `design.md`, and `tasks.md` in the selected spec.

@@ -1,6 +1,22 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { findSpec, requireCurrentSpec, type RalphPathOptions, type SpecEntry } from "./paths.ts";
+
 export const REFACTOR_ALLOWED_FILES = Object.freeze(["requirements", "design", "tasks"]);
 export const REFACTOR_USAGE = "/ralph-refactor [spec] [--file=requirements|design|tasks]";
 export const REFACTOR_COMMAND_DESCRIPTION = "Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks]";
+
+export type RefactorArtifact = (typeof REFACTOR_ALLOWED_FILES)[number];
+
+export type ResolveRefactorSpecPlanOptions = RalphPathOptions & {
+	reference?: string | null;
+};
+
+export type RefactorSpecPlan = {
+	spec: SpecEntry;
+	availableFiles: RefactorArtifact[];
+	artifactPaths: Record<RefactorArtifact, string>;
+};
 
 function emptyRefactorOptions() {
 	return {
@@ -50,10 +66,37 @@ export function formatRefactorParseError(error) {
 	return `${message}\n${formatRefactorUsage()}`;
 }
 
-export function formatPendingRefactorMessage(options) {
+export function formatPendingRefactorMessage(options, plan) {
 	const target = options?.reference ? ` for ${options.reference}` : "";
 	const scope = options?.file ? ` with --file=${options.file}` : "";
-	return `Ralph refactor command registered${target}${scope}. Artifact update flow is not implemented yet.`;
+	if (!plan) {
+		return `Ralph refactor command registered${target}${scope}. Artifact update flow is not implemented yet.`;
+	}
+	return `Ralph refactor command registered${target}${scope}. Resolved spec '${plan.spec.name}' with refactorable artifacts: ${plan.availableFiles.join(", ")}. Artifact update flow is not implemented yet.`;
+}
+
+export function resolveRefactorSpecPlan(options = {}) {
+	const spec = options.reference ? findSpec(options.reference, options) : requireCurrentSpec(options);
+	const artifactPaths = getRefactorArtifactPaths(spec.absolutePath);
+	const availableFiles = REFACTOR_ALLOWED_FILES.filter((artifact) => existsSync(artifactPaths[artifact]));
+	if (availableFiles.length === 0) {
+		throw new Error(
+			`Spec '${spec.name}' has no refactorable artifacts. Expected one or more of requirements.md, design.md, or tasks.md in ${spec.path}.`,
+		);
+	}
+	return {
+		spec,
+		availableFiles,
+		artifactPaths,
+	};
+}
+
+function getRefactorArtifactPaths(specPath) {
+	return {
+		requirements: join(specPath, "requirements.md"),
+		design: join(specPath, "design.md"),
+		tasks: join(specPath, "tasks.md"),
+	};
 }
 
 function readFileOptionValue(args, index, token) {
