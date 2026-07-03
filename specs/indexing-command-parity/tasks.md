@@ -268,7 +268,7 @@
   - _Requirements: FR-6, FR-8, NFR-1, AC-3.2, AC-3.3, AC-4.2_
   - _Design: Template/frontmatter renderer; File Structure_
 
-- [ ] Q6 [VERIFY] Quality check: contract package verification
+- [x] Q6 [VERIFY] Quality check: contract package verification
   - **Do**:
     1. Run discovered package verification commands after contract artifact changes.
   - **Files**: None
@@ -278,7 +278,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.19 [RED] Failing test: unchanged files skip and force updates
+- [x] 1.19 [RED] Failing test: unchanged files skip and force updates
   - **Do**:
     1. Add a `hash-skip-force` verifier case that runs the same fixture twice.
     2. Assert the second run reports `skip` and preserves component content or mtime.

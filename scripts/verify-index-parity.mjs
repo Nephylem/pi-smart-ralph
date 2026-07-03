@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -15,6 +15,7 @@ const cases = new Map([
   ['scanner', verifyScanner],
   ['dry-run', verifyDryRun],
   ['render-contract', verifyRenderContract],
+  ['hash-skip-force', verifyHashSkipForce],
 ]);
 
 async function main() {
@@ -447,6 +448,88 @@ async function verifyRenderContract() {
   }
 }
 
+async function verifyHashSkipForce() {
+  const helper = await loadIndexingHelper();
+  const runRalphIndex = helper?.runRalphIndex;
+
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-hash-skip-force-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(tempRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const servicePath = join(servicesRoot, 'accounts.service.ts');
+    writeFileSync(servicePath, 'export class AccountsService { list() { return []; } }\n', 'utf8');
+
+    const args = ['--path', scanRoot, '--type', 'services', '--quick'];
+    const firstResult = await runRalphIndex({ cwd: projectRoot, specRoot, args });
+    if (firstResult?.ok !== true) {
+      expectedFail(`initial hash-skip fixture run must succeed; got ${JSON.stringify(firstResult)}`);
+    }
+
+    const firstComponentWrite = findComponentWrite(firstResult.writes, servicePath);
+    assertEqual(firstComponentWrite.action, 'create', 'initial component write action');
+    const componentPath = firstComponentWrite.artifactPath;
+    if (!componentPath || !existsSync(componentPath)) {
+      expectedFail(`initial run must create a component artifact; got ${JSON.stringify(firstComponentWrite)}`);
+    }
+
+    const firstContent = readFileSync(componentPath, 'utf8');
+    const firstMtimeMs = statSync(componentPath).mtimeMs;
+
+    const secondResult = await runRalphIndex({ cwd: projectRoot, specRoot, args });
+    if (secondResult?.ok !== true) {
+      expectedFail(`second unchanged fixture run must succeed; got ${JSON.stringify(secondResult)}`);
+    }
+
+    const secondComponentWrite = findComponentWrite(secondResult.writes, servicePath);
+    assertEqual(secondComponentWrite.action, 'skip', 'unchanged component write action');
+    assertEqual(secondResult.state?.created, 0, 'unchanged run created count');
+    if (!String(secondComponentWrite.reason ?? '').includes('unchanged')) {
+      expectedFail(`unchanged skip write must explain that the source hash is unchanged; got ${JSON.stringify(secondComponentWrite)}`);
+    }
+    assertEqual(secondResult.state?.skipped, 1, 'unchanged run skipped count');
+
+    const secondContent = readFileSync(componentPath, 'utf8');
+    const secondMtimeMs = statSync(componentPath).mtimeMs;
+    if (secondContent !== firstContent && secondMtimeMs !== firstMtimeMs) {
+      expectedFail('unchanged skip run must preserve component artifact content or mtime.');
+    }
+
+    const secondReport = `${secondResult.message ?? ''}\n${secondResult.writes
+      .map((write) => `${write.action ?? ''} ${write.kind ?? ''} ${write.path ?? ''}`)
+      .join('\n')}`;
+    if (!secondReport.includes('skip')) {
+      expectedFail(`unchanged run must report a skip action; got ${secondReport}`);
+    }
+
+    const forceResult = await runRalphIndex({ cwd: projectRoot, specRoot, args: [...args, '--force'] });
+    if (forceResult?.ok !== true) {
+      expectedFail(`force hash-skip fixture run must succeed; got ${JSON.stringify(forceResult)}`);
+    }
+
+    const forceComponentWrite = findComponentWrite(forceResult.writes, servicePath);
+    assertEqual(forceComponentWrite.action, 'update', 'force unchanged component write action');
+    assertEqual(forceResult.state?.updated, 1, 'force unchanged run updated count');
+
+    const forceReport = `${forceResult.message ?? ''}\n${forceResult.writes
+      .map((write) => `${write.action ?? ''} ${write.kind ?? ''} ${write.path ?? ''}`)
+      .join('\n')}`;
+    if (!forceReport.includes('update')) {
+      expectedFail(`force run must report an update action for unchanged sources; got ${forceReport}`);
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function verifyParserOptions() {
   const parseIndexArgs = await loadParseIndexArgs();
 
@@ -497,6 +580,19 @@ async function verifyParserOptions() {
   assertMissingValueMessage(parseIndexArgs(['--path']), '--path');
   assertMissingValueMessage(parseIndexArgs(['--type=']), '--type');
   assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
+}
+
+function findComponentWrite(writes, sourcePath) {
+  if (!Array.isArray(writes)) {
+    expectedFail(`index run must include planned writes; got ${JSON.stringify(writes)}`);
+  }
+
+  const write = writes.find((candidate) => candidate?.kind === 'component' && candidate?.sourcePath === sourcePath);
+  if (!write) {
+    expectedFail(`index run must include component write for ${sourcePath}; got ${JSON.stringify(writes)}`);
+  }
+
+  return write;
 }
 
 function parseFrontmatter(markdown) {
