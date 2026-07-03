@@ -288,7 +288,7 @@
   - _Requirements: FR-9, FR-10, AC-3.3, AC-3.6_
   - _Design: completion parser; allowed-file audit_
 
-- [ ] 4.2 [GREEN] Pass test: validate completion output and restore unauthorized changes
+- [x] 4.2 [GREEN] Pass test: validate completion output and restore unauthorized changes
   - **Do**:
     1. Require valid completion markers before treating a specialist run as successful.
     2. Snapshot the selected spec directory and reject/restore unauthorized mutations outside `allowedFiles`.

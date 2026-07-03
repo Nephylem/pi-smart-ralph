@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { findSpec, requireCurrentSpec, type RalphPathOptions, type SpecEntry } from "./paths.ts";
 import { getProgressPath, getRalphStatePath, readProgress } from "./state.ts";
 
@@ -77,6 +77,24 @@ export type RefactorRequestV1 = {
 	progressLearnings: string[];
 	cascadePolicy: RefactorCascadePolicy;
 	allowedFiles: string[];
+};
+
+export type RefactorCompletionParseResult = {
+	ok: boolean;
+	cascadeNeeded?: string;
+	cascadeReason?: string;
+	evidence?: string;
+	error?: string;
+};
+
+export type RefactorSpecSnapshot = {
+	specPath: string;
+	files: Map<string, Buffer>;
+};
+
+export type RefactorAuditResult = {
+	changedFiles: string[];
+	unauthorizedFiles: string[];
 };
 
 function emptyRefactorOptions() {
@@ -283,6 +301,76 @@ export function buildRefactorSpecialistPrompt(request: RefactorRequestV1): strin
 	].join("\n\n");
 }
 
+export function parseRefactorCompletion(output: string): RefactorCompletionParseResult {
+	const text = typeof output === "string" ? output : String(output ?? "");
+	const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	const missingMarkers = REFACTOR_COMPLETION_MARKERS.filter((marker) => {
+		if (marker === "REFACTOR_COMPLETE") return !lines.includes(marker);
+		return !lines.some((line) => line.startsWith(`${marker}:`));
+	});
+	if (missingMarkers.length > 0) {
+		return {
+			ok: false,
+			error: `Missing required refactor completion marker(s): ${missingMarkers.join(", ")}.`,
+		};
+	}
+
+	const cascadeNeeded = readCompletionValue(lines, "CASCADE_NEEDED");
+	const cascadeReason = readCompletionValue(lines, "CASCADE_REASON");
+	const evidence = readCompletionValue(lines, "EVIDENCE");
+	if (!cascadeNeeded || !cascadeReason || !evidence) {
+		return {
+			ok: false,
+			error: "Refactor completion markers must include non-empty CASCADE_NEEDED, CASCADE_REASON, and EVIDENCE values.",
+		};
+	}
+
+	return {
+		ok: true,
+		cascadeNeeded,
+		cascadeReason,
+		evidence,
+	};
+}
+
+export function snapshotRefactorSpecDirectory(specPath: string): RefactorSpecSnapshot {
+	return {
+		specPath,
+		files: collectRefactorSpecFiles(specPath),
+	};
+}
+
+export function auditRefactorSpecMutationScope(snapshot: RefactorSpecSnapshot, allowedFiles: string[]): RefactorAuditResult {
+	const currentFiles = collectRefactorSpecFiles(snapshot.specPath);
+	const allowedSet = new Set(allowedFiles.map((filePath) => resolve(filePath)));
+	const allFiles = new Set([...snapshot.files.keys(), ...currentFiles.keys()]);
+	const changedFiles: string[] = [];
+	const unauthorizedFiles: string[] = [];
+
+	for (const filePath of allFiles) {
+		const before = snapshot.files.get(filePath);
+		const after = currentFiles.get(filePath);
+		const changed = !before || !after || !before.equals(after);
+		if (!changed) continue;
+		changedFiles.push(filePath);
+		if (!allowedSet.has(filePath)) unauthorizedFiles.push(filePath);
+	}
+
+	return { changedFiles, unauthorizedFiles };
+}
+
+export function restoreRefactorSpecDirectory(snapshot: RefactorSpecSnapshot): void {
+	const currentFiles = collectRefactorSpecFiles(snapshot.specPath);
+	for (const filePath of currentFiles.keys()) {
+		if (!snapshot.files.has(filePath)) unlinkSync(filePath);
+	}
+	for (const [filePath, content] of snapshot.files.entries()) {
+		mkdirSync(dirname(filePath), { recursive: true });
+		writeFileSync(filePath, content);
+	}
+	pruneEmptyDirectories(snapshot.specPath);
+}
+
 function extractProgressLearnings(progressContent: string): string[] {
 	if (!progressContent.trim()) return [];
 	const learnings: string[] = [];
@@ -301,6 +389,36 @@ function extractProgressLearnings(progressContent: string): string[] {
 		if (bullet) learnings.push(bullet[1]);
 	}
 	return learnings;
+}
+
+function readCompletionValue(lines: string[], marker: string): string {
+	const line = lines.find((entry) => entry.startsWith(`${marker}:`));
+	return line ? line.slice(marker.length + 1).trim() : "";
+}
+
+function collectRefactorSpecFiles(specPath: string): Map<string, Buffer> {
+	const files = new Map<string, Buffer>();
+	if (!existsSync(specPath)) return files;
+	for (const entry of readdirSync(specPath, { withFileTypes: true })) {
+		const entryPath = join(specPath, entry.name);
+		if (entry.isDirectory()) {
+			for (const [filePath, content] of collectRefactorSpecFiles(entryPath).entries()) {
+				files.set(filePath, content);
+			}
+			continue;
+		}
+		if (entry.isFile()) files.set(resolve(entryPath), readFileSync(entryPath));
+	}
+	return files;
+}
+
+function pruneEmptyDirectories(directoryPath: string, isRoot = true): void {
+	if (!existsSync(directoryPath)) return;
+	for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
+		if (entry.isDirectory()) pruneEmptyDirectories(join(directoryPath, entry.name), false);
+	}
+	if (isRoot) return;
+	if (readdirSync(directoryPath).length === 0) rmSync(directoryPath, { recursive: true, force: true });
 }
 
 function requireRefactorSelectedArtifact(selectedFilePlan: RefactorSelectedFilePlan) {

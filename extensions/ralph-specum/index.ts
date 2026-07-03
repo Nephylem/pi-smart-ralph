@@ -75,14 +75,18 @@ import {
 	buildRefactorSpecialistPrompt,
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
+	auditRefactorSpecMutationScope,
 	formatRefactorHeadlessDecisionError,
 	REFACTOR_COMMAND_DESCRIPTION,
 	formatPendingRefactorMessage,
 	formatRefactorParseError,
 	formatRefactorResolutionError,
 	parseRefactorArgs,
+	parseRefactorCompletion,
 	parseRefactorFilePromptSelection,
 	resolveRefactorSpecPlan,
+	restoreRefactorSpecDirectory,
+	snapshotRefactorSpecDirectory,
 } from "./refactor.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
@@ -9072,16 +9076,40 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
 			const prompt = buildRefactorSpecialistPrompt(request);
+			const specSnapshot = snapshotRefactorSpecDirectory(plan.spec.absolutePath);
 
-			await runRalphSubagent(
-				pi,
-				{
-					agentName: "ralph-refactor-specialist",
-					description: `Refactor ${selectedFilePlan.selectedFile}.md for ${plan.spec.name}`,
-					maxTurns: 50,
-				},
-				prompt,
-			);
+			try {
+				const completion = await runRalphSubagent(
+					pi,
+					{
+						agentName: "ralph-refactor-specialist",
+						description: `Refactor ${selectedFilePlan.selectedFile}.md for ${plan.spec.name}`,
+						maxTurns: 50,
+					},
+					prompt,
+				);
+				const completionOutput = subagentCompletionOutput(completion);
+				const completionValidation = parseRefactorCompletion(completionOutput);
+				const audit = auditRefactorSpecMutationScope(specSnapshot, request.allowedFiles);
+				if (!completionValidation.ok) {
+					restoreRefactorSpecDirectory(specSnapshot);
+					await notify(ctx, `Rejected /ralph-refactor result: ${completionValidation.error}`, "warning");
+					return;
+				}
+				if (audit.unauthorizedFiles.length > 0) {
+					restoreRefactorSpecDirectory(specSnapshot);
+					await notify(
+						ctx,
+						`Rejected /ralph-refactor result: unauthorized spec edits escaped allowedFiles (${audit.unauthorizedFiles.map((filePath) => formatProjectPath(filePath, ctx.cwd)).join(", ")}).`,
+						"warning",
+					);
+					return;
+				}
+			} catch (error) {
+				restoreRefactorSpecDirectory(specSnapshot);
+				await notify(ctx, `Rejected /ralph-refactor result: ${formatError(error)}`, "warning");
+				return;
+			}
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");
 		},
