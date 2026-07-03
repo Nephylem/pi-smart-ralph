@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+
 export type IndexCategory = 'controllers' | 'services' | 'models' | 'helpers' | 'migrations' | 'other';
 
 export interface IndexExternalInputs {
@@ -22,6 +25,29 @@ export type IndexParseResult =
   | { ok: true; options: IndexOptions }
   | { ok: false; options: IndexOptions; error: Error };
 
+export interface IndexPaths {
+  projectRoot: string;
+  scanPath: string;
+  specRoot: string;
+  indexRoot: string;
+  statePath: string;
+  stateAliasPath: string;
+  summaryPath: string;
+  componentRoot: string;
+  externalRoot: string;
+}
+
+export interface ResolveIndexPathsInput {
+  cwd?: string;
+  scanPath?: string;
+  specRoot?: string;
+}
+
+export interface PriorIndexStateResult {
+  state: unknown | null;
+  path: string | null;
+}
+
 const DEFAULT_INDEX_OPTIONS: IndexOptions = {
   scanPath: '.',
   specRoot: './specs',
@@ -37,6 +63,82 @@ const DEFAULT_INDEX_OPTIONS: IndexOptions = {
     includePackageResources: false,
   },
 };
+
+export function resolveIndexPaths(input: ResolveIndexPathsInput | IndexOptions = {}): IndexPaths {
+  const projectRoot = resolve(input.cwd ?? process.cwd());
+  const configuredScanPath = input.scanPath ?? DEFAULT_INDEX_OPTIONS.scanPath;
+  const configuredSpecRoot = input.specRoot ?? DEFAULT_INDEX_OPTIONS.specRoot;
+  const scanPath = resolveFrom(projectRoot, configuredScanPath);
+  const specRoot = resolveFrom(projectRoot, configuredSpecRoot);
+  const indexRoot = join(specRoot, '.index');
+  const paths: IndexPaths = {
+    projectRoot,
+    scanPath,
+    specRoot,
+    indexRoot,
+    statePath: join(indexRoot, 'index-state.json'),
+    stateAliasPath: join(indexRoot, '.index-state.json'),
+    summaryPath: join(indexRoot, 'index.md'),
+    componentRoot: join(indexRoot, 'components'),
+    externalRoot: join(indexRoot, 'external'),
+  };
+
+  assertInsideIndexRoot(paths.indexRoot, paths.statePath, 'state path');
+  assertInsideIndexRoot(paths.indexRoot, paths.stateAliasPath, 'state alias path');
+  assertInsideIndexRoot(paths.indexRoot, paths.summaryPath, 'summary path');
+  assertInsideIndexRoot(paths.indexRoot, paths.componentRoot, 'component root');
+  assertInsideIndexRoot(paths.indexRoot, paths.externalRoot, 'external root');
+
+  return paths;
+}
+
+export function readPriorIndexState(paths: IndexPaths): PriorIndexStateResult {
+  for (const candidatePath of [paths.statePath, paths.stateAliasPath]) {
+    if (!existsSync(candidatePath)) continue;
+    return {
+      state: JSON.parse(readFileSync(candidatePath, 'utf8')),
+      path: candidatePath,
+    };
+  }
+
+  return { state: null, path: null };
+}
+
+export const readIndexState = readPriorIndexState;
+
+export function getComponentIndexPath(paths: IndexPaths, sourcePath: string, category: IndexCategory = 'other'): string {
+  const artifactPath = join(paths.componentRoot, `${category}-${artifactSlug(sourcePath)}.md`);
+  assertInsideIndexRoot(paths.indexRoot, artifactPath, 'component artifact path');
+  return artifactPath;
+}
+
+export function getExternalIndexPath(paths: IndexPaths, sourceId: string): string {
+  const artifactPath = join(paths.externalRoot, `${artifactSlug(sourceId)}.md`);
+  assertInsideIndexRoot(paths.indexRoot, artifactPath, 'external artifact path');
+  return artifactPath;
+}
+
+function resolveFrom(basePath: string, configuredPath: string): string {
+  return isAbsolute(configuredPath) ? resolve(configuredPath) : resolve(basePath, configuredPath);
+}
+
+function assertInsideIndexRoot(indexRoot: string, candidatePath: string, label: string): void {
+  const relativePath = relative(indexRoot, candidatePath);
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`Resolved ${label} escapes index root: ${candidatePath}`);
+  }
+}
+
+function artifactSlug(input: string): string {
+  const parsedBase = basename(input, extname(input)) || 'resource';
+  const normalized = input.replace(/\\/g, '/');
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0;
+  }
+  const safeBase = parsedBase.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'resource';
+  return `${safeBase}-${hash.toString(16).padStart(8, '0').slice(0, 8)}`;
+}
 
 export function createDefaultIndexOptions(): IndexOptions {
   return {

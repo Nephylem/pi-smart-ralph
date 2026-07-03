@@ -106,7 +106,7 @@
   - _Requirements: FR-8, FR-9, AC-4.1, AC-4.4_
   - _Design: Index path resolver; Technical Decisions_
 
-- [ ] 1.8 [GREEN] Pass test: implement index path resolver and alias state read
+- [x] 1.8 [GREEN] Pass test: implement index path resolver and alias state read
   - **Do**:
     1. Resolve scan paths from `--path` and output paths from the configured spec root.
     2. Add canonical index root, state, summary, component, and external path helpers.
