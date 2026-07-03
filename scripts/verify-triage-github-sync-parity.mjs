@@ -12,6 +12,7 @@ const temporaryFixtureRoots = [];
 const cases = new Map([
   ['minimal-state-load', verifyMinimalStateLoad],
   ['minimal-state-repair', verifyMinimalStateRepair],
+  ['minimal-state-validation-boundary', verifyMinimalStateValidationBoundary],
 ]);
 
 process.on('exit', () => {
@@ -213,6 +214,33 @@ async function verifyMinimalStateRepair() {
   }
 
   return { summary: `repaired epic state at ${statePath}` };
+}
+
+async function verifyMinimalStateValidationBoundary() {
+  const fixtureRoot = createFixtureRoot('minimal-state-validation-boundary');
+  const epicName = 'demo-epic';
+  seedMinimalEpicStateFixture(fixtureRoot, epicName);
+
+  const { readCompatibleEpicState, readEpicState, validateEpicState } = await loadEpicsModule();
+  const compatibleRead = readCompatibleEpicState(epicName, { cwd: fixtureRoot });
+  const rawState = readEpicState(epicName, { cwd: fixtureRoot });
+  const strictValidation = validateEpicState(rawState);
+  const compatibilityWarnings = compatibleRead.compatibilityWarnings;
+  const persistedCompatibilityWarnings = compatibleRead.state?.validation?.compatibilityWarnings;
+
+  if (!Array.isArray(compatibilityWarnings) || compatibilityWarnings.length === 0) {
+    expectedFail('expected compatibility read to expose normalization warnings for an original minimal fixture');
+  }
+
+  if (!Array.isArray(persistedCompatibilityWarnings) || persistedCompatibilityWarnings.length === 0) {
+    expectedFail('expected normalized state.validation.compatibilityWarnings to preserve the compatibility warning');
+  }
+
+  if (strictValidation.warnings.length > 0) {
+    expectedFail(`strict validation still rejects the original minimal fixture before normalization: ${strictValidation.warnings.join('; ')}`);
+  }
+
+  return { summary: 'minimal fixture reaches normalization before strict validation' };
 }
 
 function seedMinimalEpicStateFixture(fixtureRoot, epicName) {

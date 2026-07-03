@@ -78,7 +78,7 @@
   - _Requirements: FR-1, FR-2_
   - _Design: `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] V1 [VERIFY] Compatibility checkpoint: minimal load + repair
+- [x] V1 [VERIFY] Compatibility checkpoint: minimal load + repair
   - **Do**:
     1. Run the targeted compatibility verifier cases from `scripts/verify-triage-github-sync-parity.mjs`.
   - **Files**: None
@@ -88,7 +88,7 @@
   - _Requirements: FR-1, FR-2; AC-1.1, AC-1.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
 
-- [ ] 1.7 [RED] Failing test: validation runs after normalization, not before
+- [x] 1.7 [RED] Failing test: validation runs after normalization, not before
   - **Do**:
     1. Add `minimal-state-validation-boundary` verifier case.
     2. Assert original minimal fixtures produce compatibility warnings instead of an immediate strict-validation failure.
