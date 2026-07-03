@@ -14,6 +14,7 @@ const cases = new Map([
   ['spec-resolution', verifySpecResolution],
   ['headless-prompts', verifyHeadlessPrompts],
   ['file-narrowing', verifyFileNarrowing],
+  ['specialist-contract', verifySpecialistContract],
 ]);
 
 async function main() {
@@ -330,6 +331,30 @@ async function verifyFileNarrowing() {
     expectedFail(error?.message ?? String(error));
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifySpecialistContract() {
+  const specialistSourcePath = join(root, 'agents', 'ralph-refactor-specialist.md');
+  const source = readFileSync(specialistSourcePath, 'utf8');
+  const failures = [];
+
+  if (!/artifact-only|only the selected artifact path|artifact content/i.test(source)) {
+    failures.push('specialist contract must explicitly restrict edits to the selected artifact only');
+  }
+
+  if (/append refactoring log to progress/i.test(source) || /progress log/i.test(source)) {
+    failures.push('specialist contract must not claim ownership of .progress.md updates');
+  }
+
+  const requiredMarkers = ['REFACTOR_COMPLETE', 'CASCADE_NEEDED', 'CASCADE_REASON', 'EVIDENCE'];
+  const missingMarkers = requiredMarkers.filter((marker) => !source.includes(marker));
+  if (missingMarkers.length > 0) {
+    failures.push(`specialist completion contract is missing marker(s): ${missingMarkers.join(', ')}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`specialist contract inspection failed for ${specialistSourcePath}: ${failures.join('; ')}`);
   }
 }
 

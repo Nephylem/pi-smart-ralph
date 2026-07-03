@@ -174,7 +174,7 @@
   - _Requirements: FR-4, FR-8, AC-1.4, AC-2.3, AC-2.4_
   - _Design: `extensions/ralph-specum/refactor.ts`_
 
-- [ ] Q4 [VERIFY] Quality check: scope narrowing verifier
+- [x] Q4 [VERIFY] Quality check: scope narrowing verifier
   - **Do**:
     1. Run the verifier implementing the research `fixture/state smoke` row for `--file` scoping and progress-learning ingestion.
   - **Files**: None
@@ -186,7 +186,7 @@
 
 ## Phase 5: Specialist contract and bounded delegation
 
-- [ ] 3.1 [RED] Failing verifier: specialist contract requires artifact-only structured completion
+- [x] 3.1 [RED] Failing verifier: specialist contract requires artifact-only structured completion
   - **Do**:
     1. Add a `specialist-contract` case to `scripts/verify-refactor-parity.mjs`.
     2. Assert the specialist contract requires artifact-only edits plus `REFACTOR_COMPLETE`, `CASCADE_NEEDED`, `CASCADE_REASON`, and `EVIDENCE` markers.
