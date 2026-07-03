@@ -267,7 +267,7 @@
   - _Requirements: NFR-2, NFR-3, AC-4.2_
   - _Design: verifier script conventions_
 
-- [ ] Q6 [VERIFY] Quality check: docs and package wiring
+- [x] Q6 [VERIFY] Quality check: docs and package wiring
   - **Do**:
     1. Run the dedicated package-wiring verifier.
     2. Run the research-discovered package verification commands after feedback wiring is added.
@@ -280,7 +280,7 @@
 
 ## Phase 4: Additional Testing
 
-- [ ] 4.1 [RED] Failing verifier: acceptance checklist bundles all feedback parity cases
+- [x] 4.1 [RED] Failing verifier: acceptance checklist bundles all feedback parity cases
   - **Do**:
     1. Expand `acceptance-checklist` in `scripts/verify-feedback-parity.mjs` to run command-registration, draft-fallback, headless-input, confirmation-flow, github-execution, and package-wiring assertions together.
     2. Make the case fail if any sub-case is missing from the bundle.

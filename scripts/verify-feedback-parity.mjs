@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const root = process.cwd();
@@ -18,6 +19,8 @@ const acceptanceChecklistCases = [
   'github-execution',
   'package-wiring',
 ];
+const acceptanceChecklistIsolationMode = 'shared-process';
+const verifierTempPrefixes = ['feedback-parity-'];
 
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
@@ -568,7 +571,30 @@ async function verifyGithubExecution() {
   }
 }
 
+function requiredAcceptanceChecklistCases() {
+  return [...cases.keys()].filter((caseName) => caseName !== acceptanceChecklistCaseKey);
+}
+
+function cleanupVerifierTempFixtures() {
+  for (const entry of readdirSync(tmpdir(), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (!verifierTempPrefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
+    rmSync(join(tmpdir(), entry.name), { recursive: true, force: true });
+  }
+}
+
 async function verifyAcceptanceChecklist() {
+  const requiredCases = requiredAcceptanceChecklistCases();
+  const missingCases = requiredCases.filter((caseName) => !acceptanceChecklistCases.includes(caseName));
+  const unexpectedCases = acceptanceChecklistCases.filter((caseName) => !requiredCases.includes(caseName));
+  if (missingCases.length > 0 || unexpectedCases.length > 0) {
+    expectedFail(`acceptance checklist bundle mismatch: missing ${missingCases.join(', ') || 'none'}; unexpected ${unexpectedCases.join(', ') || 'none'}`);
+  }
+
+  if (acceptanceChecklistIsolationMode !== 'isolated-subcases') {
+    expectedFail(`acceptance checklist must isolate bundled sub-cases before running them; current mode is ${acceptanceChecklistIsolationMode}`);
+  }
+
   for (const caseName of acceptanceChecklistCases) {
     const verifyCase = cases.get(caseName);
     if (typeof verifyCase !== 'function') {
@@ -579,7 +605,9 @@ async function verifyAcceptanceChecklist() {
 }
 
 async function verifyCleanupCase() {
+  cleanupVerifierTempFixtures();
   await verifyAcceptanceChecklist();
+  cleanupVerifierTempFixtures();
 }
 
 function scriptEventuallyRunsFeedbackCase(script, caseName) {
