@@ -546,6 +546,8 @@ async function verifyPlannerTemplateContract() {
 }
 
 async function verifyAcceptanceChecklist() {
+  const coveredCaseNames = [];
+
   for (const [coverageName, coverageCases] of Object.entries(acceptanceChecklistCoverage)) {
     if (!Array.isArray(coverageCases) || coverageCases.length === 0) {
       throw new Error(`acceptance checklist coverage ${coverageName} must list at least one verifier case`);
@@ -557,11 +559,17 @@ async function verifyAcceptanceChecklist() {
         throw new Error(`acceptance checklist is missing verifier case ${caseName}`);
       }
 
+      coveredCaseNames.push(caseName);
       const result = await runVerifierCase(caseName, verifyCase);
       if (!result.ok) {
         throw result.error;
       }
     }
+  }
+
+  const coveredCaseSet = new Set(coveredCaseNames);
+  if (coveredCaseSet.size !== acceptanceChecklistCases.length) {
+    expectedFail('acceptance checklist coverage must keep a stable one-pass case list for topology, commit, blocker-priority, prompt-contract, and RED_PASS regressions.');
   }
 
   if (!supportedCaseNames.includes(cleanupCaseKey)) {
