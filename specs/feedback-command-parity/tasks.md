@@ -210,7 +210,7 @@
   - _Requirements: FR-4, FR-6, FR-8, AC-2.3, AC-3.3_
   - _Design: GitHub helper reuse; confirmed create flow_
 
-- [ ] 3.3 [YELLOW] Refactor: isolate readiness warnings and create-result parsing
+- [x] 3.3 [YELLOW] Refactor: isolate readiness warnings and create-result parsing
   - **Do**:
     1. Extract warning aggregation and issue-create result parsing helpers.
     2. Keep label filtering and parse-failure messaging deterministic.

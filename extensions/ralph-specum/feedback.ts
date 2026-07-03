@@ -3,10 +3,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	collectGithubDetectionWarnings,
 	defaultGithubCommandRunner,
 	detectGithub,
 	githubIssueCreateArgs,
-	parseGithubIssueNumber,
+	parseGithubIssueCreateResult,
 	selectGithubLabels,
 	type GithubCommandResult,
 	type GithubRepository,
@@ -312,13 +313,12 @@ async function createConfirmedFeedbackResult(
 	const createArgs = githubIssueCreateArgs(confirmedDraft.title, confirmedDraft.body, labels, github.repository);
 	const result = await runFeedbackGithubCommand(runtime, createArgs);
 	assertFeedbackGithubSuccess(result, createArgs);
-	const issueNumber = parseGithubIssueNumber(`${result.stdout}\n${result.stderr}`);
-	if (!issueNumber) throw new Error("Unable to parse GitHub issue number from gh issue create output.");
+	const createdIssue = parseGithubIssueCreateResult(result, github.repository);
 	return {
 		mode: "created",
 		draft: { ...confirmedDraft, labels },
-		issueNumber,
-		issueUrl: `https://github.com/${github.repository.nameWithOwner}/issues/${issueNumber}`,
+		issueNumber: createdIssue.issueNumber,
+		issueUrl: createdIssue.issueUrl ?? `https://github.com/${github.repository.nameWithOwner}/issues/${createdIssue.issueNumber}`,
 		warnings: github.warnings,
 		missingLabels,
 	};
@@ -335,7 +335,7 @@ async function detectFeedbackGithub(
 			ready: detection.ready,
 			repository: detection.ready ? repository : null,
 			availableLabels: detection.labels.detected ? detection.labels.names : [],
-			warnings: feedbackGithubWarnings(detection),
+			warnings: collectGithubDetectionWarnings(detection),
 			missingLabels: [],
 		};
 	}
@@ -358,10 +358,13 @@ async function detectFeedbackGithub(
 	}
 	const labelResult = await runFeedbackGithubCommand(runtime, ["label", "list", "--repo", targetRepo, "--limit", "200", "--json", "name"]);
 	const availableLabels = parseFeedbackLabelNames(labelResult);
-	const warnings = !feedbackCommandSucceeded(labelResult) && feedbackGithubCommandError(labelResult, "gh label list failed")
-		? [feedbackGithubCommandError(labelResult, "gh label list failed")]
-		: [];
-	return { ready: true, repository, availableLabels, warnings, missingLabels: [] };
+	return {
+		ready: true,
+		repository,
+		availableLabels,
+		warnings: feedbackLabelWarnings(labelResult),
+		missingLabels: [],
+	};
 }
 
 async function runFeedbackGithubCommand(runtime: FeedbackCommandRuntime, args: string[]): Promise<GithubCommandResult> {
@@ -400,13 +403,9 @@ function feedbackGithubRepository(targetRepo: string): GithubRepository {
 	};
 }
 
-function feedbackGithubWarnings(detection: ReturnType<typeof detectGithub>): string[] {
-	return [
-		detection.gh.error,
-		detection.repository.error,
-		detection.auth.error,
-		detection.labels.error,
-	].filter((value): value is string => Boolean(value));
+function feedbackLabelWarnings(result: GithubCommandResult): string[] {
+	const error = !feedbackCommandSucceeded(result) ? feedbackGithubCommandError(result, "gh label list failed") : "";
+	return error ? [error] : [];
 }
 
 function parseFeedbackLabelNames(result: GithubCommandResult): string[] {

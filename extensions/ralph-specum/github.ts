@@ -192,6 +192,27 @@ export function parseGithubIssueNumber(output: string): number | null {
 	return null;
 }
 
+export function collectGithubDetectionWarnings(detection: GithubDetection): string[] {
+	return [
+		detection.gh.error,
+		detection.repository.error,
+		detection.auth.error,
+		detection.labels.error,
+	].filter((value): value is string => Boolean(value));
+}
+
+export function parseGithubIssueCreateResult(result: GithubCommandResult, repository?: GithubRepository): { issueNumber: number; issueUrl?: string } {
+	const combinedOutput = `${result.stdout}\n${result.stderr}`;
+	const issueNumber = parseGithubIssueNumber(combinedOutput);
+	if (!issueNumber) {
+		throw new Error(`Unable to parse GitHub issue number from gh issue create output: ${trimForMessage(combinedOutput)}`);
+	}
+	return {
+		issueNumber,
+		issueUrl: issueUrl(repository, issueNumber),
+	};
+}
+
 export function ralphGithubMetadataComment(metadata: RalphGithubIssueMetadata): string {
 	return `<!-- ralph-specum:${JSON.stringify(orderedMetadata(metadata))} -->`;
 }
