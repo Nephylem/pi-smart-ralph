@@ -225,8 +225,14 @@ export function readEpicState(reference: EpicStateReference, options: RalphPathO
 export function safeReadEpicState(reference: EpicStateReference, options: RalphPathOptions = {}): SafeEpicStateRead {
 	const path = getEpicStatePath(reference, options);
 	try {
-		const state = readEpicState(reference, options);
-		const warnings = state ? validateEpicState(state).warnings : [];
+		const rawState = readEpicState(reference, options);
+		if (!rawState) {
+			return { path, state: null, warnings: [] };
+		}
+
+		const epic = resolveEpicReference(reference, options);
+		const { state, isCompatibilitySubset } = normalizeCompatibleEpicState(epic, rawState, options);
+		const warnings = isCompatibilitySubset ? [] : validateEpicState(state).warnings;
 		return { path, state, warnings };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -578,11 +584,81 @@ function resolveEpicReference(reference: EpicStateReference, options: RalphPathO
 }
 
 function requireEpicState(reference: EpicStateReference, options: RalphPathOptions): EpicState {
-	const state = readEpicState(reference, options);
-	if (!state) {
+	const read = safeReadEpicState(reference, options);
+	if (!read.state) {
 		throw new EpicStateError(`Missing epic state at ${getEpicStatePath(reference, options)}`, getEpicStatePath(reference, options));
 	}
-	return state;
+	return read.state;
+}
+
+function normalizeCompatibleEpicState(
+	epic: CurrentEpic,
+	state: EpicState,
+	options: RalphPathOptions,
+): { state: EpicState; isCompatibilitySubset: boolean } {
+	const compatibilityWarnings: string[] = [];
+	const isCompatibilitySubset = isOriginalCompatibleEpicState(state);
+	const defaultRoot = getDefaultSpecRoot(options);
+	const now = timestamp();
+	const specs = getEpicSpecs(state).map((spec, index) => {
+		const normalizedStatus = normalizeChildSpecStatus(spec.status);
+		const childPath = typeof spec.path === "string" && spec.path.trim() ? spec.path : join(defaultRoot.path, spec.name);
+		return {
+			...spec,
+			status: normalizedStatus,
+			order: typeof spec.order === "number" && Number.isFinite(spec.order) ? spec.order : index,
+			path: childPath,
+			planPath: typeof spec.planPath === "string" && spec.planPath.trim() ? spec.planPath : join(childPath, "plan.md"),
+			dependencies: Array.isArray(spec.dependencies)
+				? spec.dependencies.filter((dependency): dependency is string => typeof dependency === "string")
+				: [],
+		} as EpicChildSpec;
+	});
+
+	if (isCompatibilitySubset) {
+		compatibilityWarnings.push("Normalized original-compatible epic state in memory before strict validation.");
+	}
+
+	const normalizedState: EpicState = {
+		...state,
+		schemaVersion: Number.isFinite(state.schemaVersion) ? state.schemaVersion : EPIC_SCHEMA_VERSION,
+		name: typeof state.name === "string" && state.name.trim() ? state.name : epic.name,
+		status: normalizeEpicStatus(state.status),
+		basePath: typeof state.basePath === "string" && state.basePath.trim() ? state.basePath : epic.path,
+		epicPath: typeof state.epicPath === "string" && state.epicPath.trim() ? state.epicPath : `${epic.path}/epic.md`,
+		researchPath: typeof state.researchPath === "string" && state.researchPath.trim() ? state.researchPath : `${epic.path}/research.md`,
+		progressPath: typeof state.progressPath === "string" && state.progressPath.trim() ? state.progressPath : `${epic.path}/.progress.md`,
+		createdAt: typeof state.createdAt === "string" && state.createdAt.trim() ? state.createdAt : now,
+		updatedAt: typeof state.updatedAt === "string" && state.updatedAt.trim() ? state.updatedAt : now,
+		activeSpec: typeof state.activeSpec === "string" && state.activeSpec.trim()
+			? state.activeSpec
+			: specs.find((spec) => spec.status === "in_progress")?.name ?? null,
+		lastCompletedSpec: typeof state.lastCompletedSpec === "string" && state.lastCompletedSpec.trim()
+			? state.lastCompletedSpec
+			: [...specs].reverse().find((spec) => spec.status === "completed")?.name ?? null,
+		specs,
+		validation: {
+			...(isPlainObject(state.validation) ? state.validation : {}),
+			warnings: [],
+			compatibilityWarnings,
+			lastValidatedAt:
+				isPlainObject(state.validation) && typeof state.validation.lastValidatedAt === "string" && state.validation.lastValidatedAt.trim()
+					? state.validation.lastValidatedAt
+					: now,
+		},
+	};
+
+	return { state: normalizedState, isCompatibilitySubset };
+}
+
+function isOriginalCompatibleEpicState(state: EpicState): boolean {
+	return !Number.isFinite(state.schemaVersion)
+		|| typeof state.basePath !== "string"
+		|| typeof state.epicPath !== "string"
+		|| typeof state.researchPath !== "string"
+		|| typeof state.progressPath !== "string"
+		|| !isPlainObject(state.validation)
+		|| getEpicSpecs(state).some((spec, index) => !(typeof spec.order === "number" && Number.isFinite(spec.order)) || index < 0);
 }
 
 function getEpicSpecs(state: EpicState): EpicChildSpec[] {

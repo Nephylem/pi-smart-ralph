@@ -13,7 +13,7 @@
   - _Requirements: FR-1, AC-1.1_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] 1.2 [GREEN] Pass test: normalize original minimal epic state on read
+- [x] 1.2 [GREEN] Pass test: normalize original minimal epic state on read
   - **Do**:
     1. Add shared compatible-read normalization in `extensions/ralph-specum/epics.ts`.
     2. Derive missing Pi fields in memory without dropping original-compatible fields or child dependency/status data.
