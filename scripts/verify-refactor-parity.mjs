@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +16,7 @@ const cases = new Map([
   ['headless-prompts', verifyHeadlessPrompts],
   ['file-narrowing', verifyFileNarrowing],
   ['specialist-contract', verifySpecialistContract],
+  ['request-payload', verifyRequestPayload],
 ]);
 
 async function main() {
@@ -358,6 +360,74 @@ async function verifySpecialistContract() {
   }
 }
 
+async function verifyRequestPayload() {
+  const resolveRefactorSpecPlan = await loadResolveRefactorSpecPlan();
+  const buildRefactorSelectedFilePlan = await loadBuildRefactorSelectedFilePlan();
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-request-payload-'));
+
+  try {
+    const fixture = createRefactorCommandFixture(tempRoot);
+    const plan = await resolveRefactorSpecPlan({ cwd: fixture.projectRoot, reference: null });
+    const selectedFilePlan = await buildRefactorSelectedFilePlan(plan, 'requirements');
+    const expectedArtifactPath = join(fixture.specRoot, 'requirements.md');
+    assertEqual(selectedFilePlan?.artifactPath, expectedArtifactPath, 'selected artifact path for request payload');
+
+    const subagentStub = createRefactorRequestCaptureStub();
+    const commandWithStub = await loadRefactorCommand({ events: subagentStub.events });
+    await commandWithStub.handler('--file=requirements', {
+      cwd: fixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify() {},
+        select(title, labels) {
+          if (/section/i.test(title)) return labels[0] ?? null;
+          return labels[0] ?? null;
+        },
+        confirm() {
+          return true;
+        },
+        input() {
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    if (subagentStub.requests.length === 0) {
+      expectedFail('coordinator did not dispatch any refactor specialist request to the capture stub.');
+    }
+
+    if (subagentStub.requests.length !== 1) {
+      throw new Error(`coordinator must dispatch exactly one refactor specialist request for --file=requirements; got ${subagentStub.requests.length}`);
+    }
+
+    const request = parseCapturedRefactorRequest(subagentStub.requests[0]);
+    assertRequestHasKeys(request, ['spec', 'files', 'sections', 'progressLearnings', 'cascadePolicy', 'allowedFiles']);
+    assertEqual(request?.spec?.name, 'interactive-target', 'request spec.name');
+    assertEqual(request?.spec?.basePath, fixture.specRoot, 'request spec.basePath');
+    assertArrayEqual((request?.files ?? []).map((entry) => entry.kind), ['requirements'], 'request files kinds');
+    assertArrayEqual((request?.files ?? []).map((entry) => entry.path), [expectedArtifactPath], 'request files paths');
+    assertArrayEqual(request?.allowedFiles, [expectedArtifactPath], 'request allowedFiles');
+
+    const outOfScopeAllowedFiles = (request?.allowedFiles ?? []).filter((filePath) => filePath !== expectedArtifactPath);
+    if (outOfScopeAllowedFiles.length > 0) {
+      throw new Error(`allowedFiles must contain only the in-scope artifact path; got ${JSON.stringify(request.allowedFiles)}`);
+    }
+
+    const hasFixtureLearning = (request?.progressLearnings ?? []).some((entry) => String(entry).includes('interactive planning should read this later'));
+    if (!hasFixtureLearning) {
+      throw new Error(`request progressLearnings must include .progress.md learnings; got ${JSON.stringify(request?.progressLearnings ?? [])}`);
+    }
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -391,7 +461,7 @@ async function loadBuildRefactorSelectedFilePlan() {
   return buildRefactorSelectedFilePlan;
 }
 
-async function loadRefactorCommandHandler() {
+async function loadRefactorCommand(overrides = {}) {
   const extensionUrl = new URL('../extensions/ralph-specum/index.ts', import.meta.url);
   const extensionModule = await import(extensionUrl.href);
   const activate = extensionModule?.default;
@@ -400,19 +470,28 @@ async function loadRefactorCommandHandler() {
   }
 
   const commands = new Map();
-  activate({
+  const pi = {
+    events: overrides.events ?? new EventEmitter(),
     on() {},
     registerCommand(name, definition) {
       commands.set(name, definition);
     },
-  });
+    ...overrides,
+  };
+  activate(pi);
 
-  const handler = commands.get('ralph-refactor')?.handler;
+  const command = commands.get('ralph-refactor');
+  const handler = command?.handler;
   if (typeof handler !== 'function') {
     expectedFail('ralph-refactor command handler is not registered from extensions/ralph-specum/index.ts.');
   }
 
-  return handler;
+  return { pi, command, handler };
+}
+
+async function loadRefactorCommandHandler() {
+  const command = await loadRefactorCommand();
+  return command.handler;
 }
 
 async function loadRefactorHelper() {
@@ -422,6 +501,58 @@ async function loadRefactorHelper() {
   } catch (error) {
     if (isExpectedMissingHelperError(error)) return null;
     throw error;
+  }
+}
+
+function createRefactorRequestCaptureStub() {
+  const events = new EventEmitter();
+  const requests = [];
+  let completionCount = 0;
+
+  events.on('subagents:rpc:ping', (payload) => {
+    events.emit(`subagents:rpc:ping:reply:${payload.requestId}`, { success: true, data: { version: 1 } });
+  });
+
+  events.on('subagents:rpc:spawn', (payload) => {
+    requests.push(payload);
+    const agentId = `refactor-capture-${requests.length}`;
+    events.emit(`subagents:rpc:spawn:reply:${payload.requestId}`, { success: true, data: { id: agentId } });
+    queueMicrotask(() => {
+      completionCount += 1;
+      events.emit('subagents:completed', {
+        id: agentId,
+        status: 'completed',
+        result: [
+          'REFACTOR_COMPLETE',
+          'CASCADE_NEEDED: none',
+          'CASCADE_REASON: none',
+          `EVIDENCE: capture stub completion ${completionCount}`,
+        ].join('\n'),
+      });
+    });
+  });
+
+  return { events, requests };
+}
+
+function parseCapturedRefactorRequest(spawnPayload) {
+  const prompt = String(spawnPayload?.prompt ?? '');
+  const match = prompt.match(/\{[\s\S]*\}/m);
+  if (!match) {
+    throw new Error(`could not locate JSON request payload in captured prompt: ${prompt}`);
+  }
+  try {
+    return JSON.parse(match[0]);
+  } catch (error) {
+    throw new Error(`captured request payload is not valid JSON: ${error?.message ?? error}`);
+  }
+}
+
+function assertRequestHasKeys(value, keys) {
+  const actualKeys = value && typeof value === 'object' ? Object.keys(value) : [];
+  const missing = keys.filter((key) => !actualKeys.includes(key));
+  if (missing.length > 0) {
+    throw new Error(`request payload is missing key(s): ${missing.join(', ')} from ${JSON.stringify(actualKeys)}`);
   }
 }
 

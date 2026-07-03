@@ -219,7 +219,7 @@
   - _Requirements: FR-9, FR-10, AC-3.1, AC-3.3, AC-3.6_
   - _Design: specialist contract; `refactor.ts` completion parser_
 
-- [ ] Q5 [VERIFY] Quality check: specialist protocol verifier
+- [x] Q5 [VERIFY] Quality check: specialist protocol verifier
   - **Do**:
     1. Run the verifier covering the research `fixture/state smoke` contract for structured specialist completion.
   - **Files**: None
@@ -231,7 +231,7 @@
 
 ## Phase 6: Request payload shape and allowed-files scoping
 
-- [ ] 3.4 [RED] Failing verifier: `RefactorRequestV1` payload and allowed-files scope
+- [x] 3.4 [RED] Failing verifier: `RefactorRequestV1` payload and allowed-files scope
   - **Do**:
     1. Add a `request-payload` case to `scripts/verify-refactor-parity.mjs` with a request-capture stub.
     2. Assert the coordinator sends `{ spec, files, sections, progressLearnings, cascadePolicy, allowedFiles }` and that `allowedFiles` contains only in-scope artifact paths.
