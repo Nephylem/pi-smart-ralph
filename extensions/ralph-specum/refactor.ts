@@ -60,6 +60,11 @@ export type RefactorSelectedFilePlan = {
 
 export type RefactorCascadePolicy = "detect-only" | "approved" | "skipped";
 
+export type RefactorRequestFile = {
+	kind: RefactorArtifact;
+	path: string;
+};
+
 export type RefactorRequestV1 = {
 	spec: {
 		name: string;
@@ -67,10 +72,7 @@ export type RefactorRequestV1 = {
 		statePath: string;
 		progressPath: string;
 	};
-	files: Array<{
-		kind: RefactorArtifact;
-		path: string;
-	}>;
+	files: RefactorRequestFile[];
 	sections: string[];
 	progressLearnings: string[];
 	cascadePolicy: RefactorCascadePolicy;
@@ -215,7 +217,7 @@ export function parseRefactorFilePromptSelection(selectedLabel: string | null): 
 	return REFACTOR_ALLOWED_FILES.includes(selectedFile as RefactorArtifact) ? (selectedFile as RefactorArtifact) : null;
 }
 
-export function buildRefactorSectionPromptPlan(selection: RefactorSelectionPlan): RefactorPromptPlan | null {
+export function buildRefactorSectionPromptPlan(selection: Pick<RefactorSelectedFilePlan, "selectedFile" | "availableSections">): RefactorPromptPlan | null {
 	if (!selection.selectedFile) return null;
 	return {
 		title: `Choose refactor section for ${selection.selectedFile}`,
@@ -223,7 +225,10 @@ export function buildRefactorSectionPromptPlan(selection: RefactorSelectionPlan)
 	};
 }
 
-export function buildRefactorSelectedSectionPlan(selection: RefactorSelectionPlan, selectedSection: string | null): RefactorSelectedSectionPlan | null {
+export function buildRefactorSelectedSectionPlan(
+	selection: Pick<RefactorSelectedFilePlan, "selectedFile" | "availableSections">,
+	selectedSection: string | null,
+): RefactorSelectedSectionPlan | null {
 	if (!selection.selectedFile) return null;
 	const selectedSections = typeof selectedSection === "string" && selectedSection.trim() !== ""
 		? [selectedSection]
@@ -241,9 +246,7 @@ export function buildRefactorRequest(
 	selectedSectionPlan: RefactorSelectedSectionPlan | null,
 	options: RalphPathOptions = {},
 ): RefactorRequestV1 {
-	if (!selectedFilePlan.selectedFile || !selectedFilePlan.artifactPath) {
-		throw new Error("Refactor request requires a selected artifact before delegation.");
-	}
+	const selection = requireRefactorSelectedArtifact(selectedFilePlan);
 
 	return {
 		spec: {
@@ -252,17 +255,32 @@ export function buildRefactorRequest(
 			statePath: getRalphStatePath(plan.spec, options),
 			progressPath: getProgressPath(plan.spec, options),
 		},
-		files: [
-			{
-				kind: selectedFilePlan.selectedFile,
-				path: selectedFilePlan.artifactPath,
-			},
-		],
+		files: buildRefactorRequestFiles(selection),
 		sections: selectedSectionPlan?.selectedSections ? [...selectedSectionPlan.selectedSections] : [],
 		progressLearnings: [...selectedFilePlan.progressLearnings],
 		cascadePolicy: "detect-only",
-		allowedFiles: [selectedFilePlan.artifactPath],
+		allowedFiles: buildRefactorAllowedFiles(selection),
 	};
+}
+
+export function buildRefactorRequestFiles(selection: { selectedFile: RefactorArtifact; artifactPath: string }): RefactorRequestFile[] {
+	return [
+		{
+			kind: selection.selectedFile,
+			path: selection.artifactPath,
+		},
+	];
+}
+
+export function buildRefactorAllowedFiles(selection: { artifactPath: string }): string[] {
+	return [selection.artifactPath];
+}
+
+export function buildRefactorSpecialistPrompt(request: RefactorRequestV1): string {
+	return [
+		"Apply one bounded Smart Ralph refactor step using this request payload.",
+		JSON.stringify(request, null, 2),
+	].join("\n\n");
 }
 
 function extractProgressLearnings(progressContent: string): string[] {
@@ -283,6 +301,16 @@ function extractProgressLearnings(progressContent: string): string[] {
 		if (bullet) learnings.push(bullet[1]);
 	}
 	return learnings;
+}
+
+function requireRefactorSelectedArtifact(selectedFilePlan: RefactorSelectedFilePlan) {
+	if (!selectedFilePlan.selectedFile || !selectedFilePlan.artifactPath) {
+		throw new Error("Refactor request requires a selected artifact before delegation.");
+	}
+	return {
+		selectedFile: selectedFilePlan.selectedFile,
+		artifactPath: selectedFilePlan.artifactPath,
+	};
 }
 
 function selectRequestedArtifact(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null): RefactorArtifact | null {

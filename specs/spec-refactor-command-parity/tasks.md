@@ -254,7 +254,7 @@
   - _Requirements: FR-4, FR-8, FR-9, AC-3.1, AC-3.2, AC-3.6_
   - _Design: `extensions/ralph-specum/refactor.ts`; `extensions/ralph-specum/index.ts`_
 
-- [ ] 3.6 [YELLOW] Refactor: isolate request builders and scope guards
+- [x] 3.6 [YELLOW] Refactor: isolate request builders and scope guards
   - **Do**:
     1. Extract request-building and allowed-file helper functions into `refactor.ts`.
     2. Keep the handler orchestration focused on sequencing rather than payload assembly.

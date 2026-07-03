@@ -72,6 +72,7 @@ import {
 	buildRefactorFilePromptPlan,
 	buildRefactorRequest,
 	buildRefactorSectionPromptPlan,
+	buildRefactorSpecialistPrompt,
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
 	formatRefactorHeadlessDecisionError,
@@ -9070,10 +9071,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 			}
 
 			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
-			const prompt = [
-				"Apply one bounded Smart Ralph refactor step using this request payload.",
-				JSON.stringify(request, null, 2),
-			].join("\n\n");
+			const prompt = buildRefactorSpecialistPrompt(request);
 
 			await runRalphSubagent(
 				pi,
