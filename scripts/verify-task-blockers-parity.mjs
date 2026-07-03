@@ -450,12 +450,25 @@ async function verifyTopologyBlockerPriorityContract() {
 }
 
 async function verifyRedPassEvidenceContract() {
+  const helperSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'task-completion.ts'), 'utf8');
   const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
   const evidenceSection = indexSource.match(/function extractCompletionEvidence\([\s\S]*?\n}\n\nfunction validateSubagentCompletion/);
   const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
 
   if (!evidenceSection || !validationSection) {
     expectedFail('parity coverage could not locate completion-evidence parsing for RED_PASS assertions.');
+  }
+
+  if (!helperSource.includes("const KEYED_COMPLETION_EVIDENCE_PATTERN = /^(?:verify|verification|evidence):\\s*(.+)$/i;")) {
+    expectedFail('task-completion helper must centralize keyed `verify:`/`verification:`/`evidence:` parsing behind one stable completion-evidence pattern.');
+  }
+
+  if (!/function\s+extractKeyedCompletionEvidence\(/.test(helperSource) || !/function\s+collectKeyedCompletionEvidence\(/.test(helperSource)) {
+    expectedFail('task-completion helper must expose one internal extraction path for keyed completion evidence collection.');
+  }
+
+  if (!/parseTaskCompletionFields\([\s\S]*extractKeyedCompletionEvidence/.test(helperSource) || !/hasExpectedFailureProof\([\s\S]*collectKeyedCompletionEvidence/.test(helperSource)) {
+    expectedFail('task-completion helper must reuse the centralized keyed-evidence extractor for both completion-field parsing and RED_PASS validation.');
   }
 
   if (!/RED_PASS/.test(indexSource)) {

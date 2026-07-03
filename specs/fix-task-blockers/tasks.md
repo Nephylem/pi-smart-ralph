@@ -274,7 +274,7 @@
   - _Requirements: FR-8, FR-10, AC-3.1, AC-3.3_
   - _Design: keyed evidence helpers; Error Handling_
 
-- [ ] 3.6 [YELLOW] Refactor: centralize completion evidence parsing
+- [x] 3.6 [YELLOW] Refactor: centralize completion evidence parsing
   - **Do**:
     1. Isolate keyed evidence extraction for `verify:`, `verification:`, and `evidence:` lines.
     2. Keep `RED_PASS` parsing rules explicit and stable for future regressions.

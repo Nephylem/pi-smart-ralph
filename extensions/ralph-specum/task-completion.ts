@@ -157,6 +157,35 @@ function selectTaskCompletionBlocker(selection) {
     ?? selection.fallbackBlocker;
 }
 
+const KEYED_COMPLETION_EVIDENCE_PATTERN = /^(?:verify|verification|evidence):\s*(.+)$/i;
+
+function normalizeCompletionFieldValue(value) {
+  return String(value ?? '').replace(/`/g, '').trim();
+}
+
+function normalizeCompletionFieldToken(value) {
+  return normalizeCompletionFieldValue(value).toLowerCase();
+}
+
+function extractKeyedCompletionEvidence(line) {
+  const keyedEvidenceMatch = line.match(KEYED_COMPLETION_EVIDENCE_PATTERN);
+  if (!keyedEvidenceMatch) return null;
+
+  const keyedEvidence = normalizeCompletionFieldValue(keyedEvidenceMatch[1] ?? '');
+  return keyedEvidence || null;
+}
+
+function collectKeyedCompletionEvidence(output) {
+  const keyedEvidence = [];
+
+  for (const line of output.split(/\r?\n/)) {
+    const extractedEvidence = extractKeyedCompletionEvidence(line.trim());
+    if (extractedEvidence) keyedEvidence.push(extractedEvidence);
+  }
+
+  return keyedEvidence;
+}
+
 function parseTaskCompletionFields(output) {
   const completionFields = { keyedEvidence: [] };
 
@@ -166,19 +195,19 @@ function parseTaskCompletionFields(output) {
 
     const commitMatch = trimmed.match(/^commit:\s*(.+)$/i);
     if (commitMatch) {
-      completionFields.commit = String(commitMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+      completionFields.commit = normalizeCompletionFieldToken(commitMatch[1]);
       continue;
     }
 
     const commitReasonMatch = trimmed.match(/^commit_reason:\s*(.+)$/i);
     if (commitReasonMatch) {
-      completionFields.commitReason = String(commitReasonMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+      completionFields.commitReason = normalizeCompletionFieldToken(commitReasonMatch[1]);
       continue;
     }
 
-    const keyedEvidenceMatch = trimmed.match(/^(?:verify|verification|evidence):\s*(.+)$/i);
-    if (keyedEvidenceMatch) {
-      completionFields.keyedEvidence.push(String(keyedEvidenceMatch[1] ?? "").replace(/`/g, "").trim());
+    const keyedEvidence = extractKeyedCompletionEvidence(trimmed);
+    if (keyedEvidence) {
+      completionFields.keyedEvidence.push(keyedEvidence);
     }
   }
 
@@ -186,11 +215,10 @@ function parseTaskCompletionFields(output) {
 }
 
 function hasExpectedFailureProof(output, proofToken = 'RED_PASS') {
-  const normalizedToken = String(proofToken ?? '').replace(/`/g, '').trim().toLowerCase();
+  const normalizedToken = normalizeCompletionFieldToken(proofToken);
   if (!normalizedToken) return false;
 
-  const completionFields = parseTaskCompletionFields(output);
-  return completionFields.keyedEvidence.some((value) => value.toLowerCase() === normalizedToken);
+  return collectKeyedCompletionEvidence(output).some((value) => normalizeCompletionFieldToken(value) === normalizedToken);
 }
 
 function assessTaskCompletionOutput(
