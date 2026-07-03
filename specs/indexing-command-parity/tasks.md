@@ -60,7 +60,7 @@
   - _Requirements: FR-2, AC-1.2, AC-1.3_
   - _Design: Index option parser; Error Handling_
 
-- [ ] 1.5 [GREEN] Pass test: support parity flags and conflict validation
+- [x] 1.5 [GREEN] Pass test: support parity flags and conflict validation
   - **Do**:
     1. Parse all supported parity flags without a new CLI parser dependency.
     2. Normalize categories and exclude patterns.
