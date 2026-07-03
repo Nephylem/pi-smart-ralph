@@ -89,10 +89,17 @@ export interface CollectExternalResourcesInput {
   indexedAt: string;
 }
 
+export interface RecoverableExternalError {
+  sourceType: string;
+  sourceId: string;
+  message: string;
+  recoverable: true;
+}
+
 export interface CollectExternalResourcesResult {
   ok: true;
   external: ExternalEntry[];
-  errors: Array<{ sourceType: string; sourceId: string; message: string }>;
+  errors: RecoverableExternalError[];
 }
 
 export interface ScanComponentFilesInput {
@@ -146,13 +153,15 @@ export interface IndexStateV1 {
   summaryPath: string;
   components: Array<{ source: string; hash: string; category: IndexCategory; artifactPath: string; indexed: string }>;
   external: Array<{ sourceType: string; sourceId: string; artifactPath: string; fetched: string; hash?: string; error?: string }>;
-  errors: Array<{ sourceType: string; sourceId: string; message: string }>;
+  errors: RecoverableExternalError[];
 }
 
 export interface IndexRunInput {
   cwd?: string;
   specRoot?: string;
   args?: string[];
+  externalInputs?: Partial<IndexExternalInputs>;
+  adapters?: ExternalResourceAdapters;
 }
 
 export interface IndexRunResult {
@@ -235,8 +244,10 @@ export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRun
     specRoot: input.specRoot ?? parsedOptions.specRoot,
     externalInputs: {
       ...parsedOptions.externalInputs,
-      urls: [...parsedOptions.externalInputs.urls],
-      mcpResources: [...parsedOptions.externalInputs.mcpResources],
+      ...input.externalInputs,
+      urls: [...(input.externalInputs?.urls ?? parsedOptions.externalInputs.urls)],
+      mcpResources: [...(input.externalInputs?.mcpResources ?? parsedOptions.externalInputs.mcpResources)],
+      includePackageResources: input.externalInputs?.includePackageResources ?? parsedOptions.externalInputs.includePackageResources,
     },
   };
   const paths = resolveIndexPaths({ cwd: input.cwd, scanPath: options.scanPath, specRoot: options.specRoot });
@@ -277,7 +288,7 @@ export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRun
   const priorState = readPriorIndexState(paths).state;
   const scanResult = scanComponentFiles({ paths, options, changedSourcePaths });
   const plannedAt = new Date().toISOString();
-  const externalResult = await collectExternalResources({ paths, options, indexedAt: plannedAt });
+  const externalResult = await collectExternalResources({ paths, options, adapters: input.adapters, indexedAt: plannedAt });
   const plan = planIndexWrites({
     paths,
     options,
@@ -349,7 +360,7 @@ export function scanComponentFiles(input: ScanComponentFilesInput): ScanComponen
 
 export async function collectExternalResources(input: CollectExternalResourcesInput): Promise<CollectExternalResourcesResult> {
   const external: ExternalEntry[] = [];
-  const errors: Array<{ sourceType: string; sourceId: string; message: string }> = [];
+  const errors: RecoverableExternalError[] = [];
   const externalInputs = input.options.externalInputs ?? createDefaultIndexOptions().externalInputs;
 
   if (externalInputs.includePackageResources) {
@@ -361,7 +372,7 @@ export async function collectExternalResources(input: CollectExternalResourcesIn
       const fetched = await input.adapters?.fetchUrl?.(url);
       external.push(normalizeFetchedExternalEntry('url', url, fetched, input.paths, input.indexedAt));
     } catch (error) {
-      errors.push({ sourceType: 'url', sourceId: url, message: errorMessage(error) });
+      errors.push(createRecoverableExternalError('url', url, error));
     }
   }
 
@@ -370,7 +381,7 @@ export async function collectExternalResources(input: CollectExternalResourcesIn
       const fetched = await input.adapters?.fetchMcpResource?.(resource);
       external.push(normalizeFetchedExternalEntry('mcp', resource, fetched, input.paths, input.indexedAt));
     } catch (error) {
-      errors.push({ sourceType: 'mcp', sourceId: resource, message: errorMessage(error) });
+      errors.push(createRecoverableExternalError('mcp', resource, error));
     }
   }
 
@@ -408,7 +419,7 @@ export interface IndexPlanInput {
   options: IndexOptions;
   components: ComponentEntry[];
   externalResources?: ExternalEntry[];
-  externalErrors?: Array<{ sourceType: string; sourceId: string; message: string }>;
+  externalErrors?: RecoverableExternalError[];
   priorState: unknown;
   indexedAt: string;
 }
@@ -422,7 +433,7 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   const priorComponentHashes = readPriorComponentHashes(input.priorState);
   const priorExternalHashes = readPriorExternalHashes(input.priorState);
   const externalResources = input.externalResources ?? [];
-  const externalErrors = input.externalErrors ?? [];
+  const externalErrors = normalizeRecoverableExternalErrors(input.externalErrors ?? []);
   const writes: PlannedWrite[] = [];
   let created = 0;
   let updated = 0;
@@ -762,6 +773,19 @@ function normalizeFetchedExternalEntry(
   };
 }
 
+export function normalizeRecoverableExternalErrors(errors: Array<Partial<RecoverableExternalError> & { sourceType?: unknown; sourceId?: unknown; message?: unknown }>): RecoverableExternalError[] {
+  return errors.map((error) => ({
+    sourceType: String(error.sourceType ?? 'external'),
+    sourceId: String(error.sourceId ?? 'unknown'),
+    message: String(error.message ?? 'External resource failed'),
+    recoverable: true,
+  }));
+}
+
+function createRecoverableExternalError(sourceType: string, sourceId: string, error: unknown): RecoverableExternalError {
+  return normalizeRecoverableExternalErrors([{ sourceType, sourceId, message: errorMessage(error) }])[0];
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -821,7 +845,13 @@ function renderIndexSummary(state: IndexStateV1): string {
     PATHS: state.paths.join(', '),
   });
 
-  return `${rendered.trimEnd()}\n\n## Contract Stats\n\n- generated-at: ${state.indexed}\n- component count: ${state.componentCount}\n- external count: ${state.externalCount}\n- created: ${state.created}\n- updated: ${state.updated}\n- skipped: ${state.skipped}\n`;
+  return `${rendered.trimEnd()}\n\n## Contract Stats\n\n- generated-at: ${state.indexed}\n- component count: ${state.componentCount}\n- external count: ${state.externalCount}\n- recoverable external errors: ${state.errors.length}\n- created: ${state.created}\n- updated: ${state.updated}\n- skipped: ${state.skipped}\n${renderRecoverableExternalErrors(state.errors)}`;
+}
+
+function renderRecoverableExternalErrors(errors: RecoverableExternalError[]): string {
+  if (errors.length === 0) return '';
+  const lines = errors.map((error) => `- ${error.sourceType} ${error.sourceId}: ${error.message}`);
+  return `\n## Recoverable External Errors\n\n${lines.join('\n')}\n`;
 }
 
 function minimalIndexSummaryTemplate(): string {

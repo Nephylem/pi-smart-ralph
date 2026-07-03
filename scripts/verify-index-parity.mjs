@@ -656,6 +656,7 @@ async function verifyExternalAdapters() {
   const parseIndexArgs = helper?.parseIndexArgs;
   const resolveIndexPaths = helper?.resolveIndexPaths;
   const collectExternalResources = helper?.collectExternalResources ?? helper?.collectIndexExternalResources;
+  const runRalphIndex = helper?.runRalphIndex;
 
   if (typeof parseIndexArgs !== 'function') {
     expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
@@ -669,6 +670,10 @@ async function verifyExternalAdapters() {
     expectedFail('collectExternalResources is not exported from extensions/ralph-specum/indexing.ts yet.');
   }
 
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
   const manifestPath = join(root, 'references', 'ralph-resource-manifest.v1.json');
   const manifestSource = readFileSync(manifestPath, 'utf8');
   const manifestHash = sha256(manifestSource);
@@ -680,6 +685,7 @@ async function verifyExternalAdapters() {
     const specRoot = join(tempRoot, 'spec-root');
     mkdirSync(scanRoot, { recursive: true });
     mkdirSync(specRoot, { recursive: true });
+    writeFileSync(join(scanRoot, 'accounts.service.ts'), 'export class AccountsService {}\n', 'utf8');
 
     const parseResult = parseIndexArgs(['--path', scanRoot, '--quick']);
     if (parseResult?.ok !== true) {
@@ -759,6 +765,35 @@ async function verifyExternalAdapters() {
     }
     assertRecoverableExternalError(failureExternal.errors, 'url', 'https://example.invalid/architecture', 'fixture URL fetch failure');
     assertRecoverableExternalError(failureExternal.errors, 'mcp', 'mcp://fixture/resource', 'fixture MCP fetch failure');
+
+    const runCalls = { urls: [], mcpResources: [] };
+    const runResult = await runRalphIndex({
+      cwd: projectRoot,
+      specRoot,
+      args: ['--path', scanRoot, '--type', 'services', '--quick'],
+      externalInputs: {
+        urls: ['https://example.invalid/recoverable'],
+        mcpResources: [],
+        includePackageResources: false,
+      },
+      adapters: createExternalAdapterSpies(runCalls, {
+        urlError: new Error('fixture run URL failure'),
+        mcpError: new Error('MCP should stay lazy for this run'),
+      }),
+    });
+    if (runResult?.ok !== true) {
+      expectedFail(`component indexing must succeed when one requested external resource fails; got ${JSON.stringify(runResult)}`);
+    }
+    assertArrayEqual(runCalls.urls, ['https://example.invalid/recoverable'], 'run-level explicit URL adapter calls');
+    assertArrayEqual(runCalls.mcpResources, [], 'run-level MCP adapter stays lazy without explicit MCP inputs');
+    assertEqual(runResult.state.componentCount, 1, 'component count with recoverable external failure');
+    assertEqual(runResult.state.externalCount, 0, 'external success count excludes failed external resources');
+    assertRecoverableExternalError(runResult.state.errors, 'url', 'https://example.invalid/recoverable', 'fixture run URL failure');
+    assertEqual(runResult.state.errors[0]?.recoverable, true, 'state marks external failures recoverable');
+    const summary = readFileSync(runResult.summaryPath, 'utf8');
+    if (!summary.includes('recoverable external errors: 1') || !summary.includes('fixture run URL failure')) {
+      expectedFail(`summary must include recoverable external error count and detail; got ${summary}`);
+    }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -795,6 +830,9 @@ function assertRecoverableExternalError(errors, sourceType, sourceId, messageFra
   });
   if (!error) {
     expectedFail(`recoverable ${sourceType} error for ${sourceId} must be recorded; got ${JSON.stringify(errors)}`);
+  }
+  if (error.recoverable !== true) {
+    expectedFail(`recoverable ${sourceType} error for ${sourceId} must be normalized with recoverable: true; got ${JSON.stringify(error)}`);
   }
 }
 

@@ -394,7 +394,7 @@
   - _Requirements: FR-12, FR-13, AC-6.1, AC-6.2, AC-6.3, AC-6.4_
   - _Design: External resource adapters; Template/frontmatter renderer_
 
-- [ ] 1.27 [YELLOW] Refactor: separate recoverable external errors from fatal run errors
+- [x] 1.27 [YELLOW] Refactor: separate recoverable external errors from fatal run errors
   - **Do**:
     1. Normalize external error entries in state and summary.
     2. Ensure component indexing can succeed when one external resource fails.
