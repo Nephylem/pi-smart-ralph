@@ -76,11 +76,14 @@ import {
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
 	auditRefactorSpecMutationScope,
+	formatRefactorCompletionValidationError,
+	formatRefactorExecutionError,
 	formatRefactorHeadlessDecisionError,
 	REFACTOR_COMMAND_DESCRIPTION,
 	formatPendingRefactorMessage,
 	formatRefactorParseError,
 	formatRefactorResolutionError,
+	formatRefactorUnauthorizedEditError,
 	parseRefactorArgs,
 	parseRefactorCompletion,
 	parseRefactorFilePromptSelection,
@@ -9093,21 +9096,21 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				const audit = auditRefactorSpecMutationScope(specSnapshot, request.allowedFiles);
 				if (!completionValidation.ok) {
 					restoreRefactorSpecDirectory(specSnapshot);
-					await notify(ctx, `Rejected /ralph-refactor result: ${completionValidation.error}`, "warning");
+					await notify(ctx, formatRefactorCompletionValidationError(completionValidation.error), "warning");
 					return;
 				}
 				if (audit.unauthorizedFiles.length > 0) {
 					restoreRefactorSpecDirectory(specSnapshot);
 					await notify(
 						ctx,
-						`Rejected /ralph-refactor result: unauthorized spec edits escaped allowedFiles (${audit.unauthorizedFiles.map((filePath) => formatProjectPath(filePath, ctx.cwd)).join(", ")}).`,
+						formatRefactorUnauthorizedEditError(audit.unauthorizedFiles, (filePath) => formatProjectPath(filePath, ctx.cwd)),
 						"warning",
 					);
 					return;
 				}
 			} catch (error) {
 				restoreRefactorSpecDirectory(specSnapshot);
-				await notify(ctx, `Rejected /ralph-refactor result: ${formatError(error)}`, "warning");
+				await notify(ctx, formatRefactorExecutionError(error), "warning");
 				return;
 			}
 

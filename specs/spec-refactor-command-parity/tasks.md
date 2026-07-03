@@ -300,7 +300,7 @@
   - _Requirements: FR-9, FR-10, AC-3.3, AC-3.6_
   - _Design: audit layer; `refactor.ts` completion parsing_
 
-- [ ] 4.3 [YELLOW] Refactor: isolate snapshot, diff, and error-report helpers
+- [x] 4.3 [YELLOW] Refactor: isolate snapshot, diff, and error-report helpers
   - **Do**:
     1. Extract snapshot/diff helpers and user-facing failure messages into reusable functions.
     2. Keep unauthorized-edit recovery deterministic for the verifier fixtures.

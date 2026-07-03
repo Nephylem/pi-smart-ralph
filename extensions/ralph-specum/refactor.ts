@@ -92,6 +92,11 @@ export type RefactorSpecSnapshot = {
 	files: Map<string, Buffer>;
 };
 
+export type RefactorSpecDiff = {
+	currentFiles: Map<string, Buffer>;
+	changedFiles: string[];
+};
+
 export type RefactorAuditResult = {
 	changedFiles: string[];
 	unauthorizedFiles: string[];
@@ -340,23 +345,39 @@ export function snapshotRefactorSpecDirectory(specPath: string): RefactorSpecSna
 	};
 }
 
-export function auditRefactorSpecMutationScope(snapshot: RefactorSpecSnapshot, allowedFiles: string[]): RefactorAuditResult {
+export function diffRefactorSpecDirectory(snapshot: RefactorSpecSnapshot): RefactorSpecDiff {
 	const currentFiles = collectRefactorSpecFiles(snapshot.specPath);
+	const allFiles = [...new Set([...snapshot.files.keys(), ...currentFiles.keys()])].sort();
+	const changedFiles = allFiles.filter((filePath) => hasRefactorFileChanged(snapshot.files.get(filePath), currentFiles.get(filePath)));
+	return {
+		currentFiles,
+		changedFiles,
+	};
+}
+
+export function auditRefactorSpecMutationScope(snapshot: RefactorSpecSnapshot, allowedFiles: string[]): RefactorAuditResult {
+	const diff = diffRefactorSpecDirectory(snapshot);
 	const allowedSet = new Set(allowedFiles.map((filePath) => resolve(filePath)));
-	const allFiles = new Set([...snapshot.files.keys(), ...currentFiles.keys()]);
-	const changedFiles: string[] = [];
-	const unauthorizedFiles: string[] = [];
+	const unauthorizedFiles = diff.changedFiles.filter((filePath) => !allowedSet.has(filePath));
+	return {
+		changedFiles: diff.changedFiles,
+		unauthorizedFiles,
+	};
+}
 
-	for (const filePath of allFiles) {
-		const before = snapshot.files.get(filePath);
-		const after = currentFiles.get(filePath);
-		const changed = !before || !after || !before.equals(after);
-		if (!changed) continue;
-		changedFiles.push(filePath);
-		if (!allowedSet.has(filePath)) unauthorizedFiles.push(filePath);
-	}
+export function formatRefactorCompletionValidationError(error: string): string {
+	return `Rejected /ralph-refactor result: ${error}`;
+}
 
-	return { changedFiles, unauthorizedFiles };
+export function formatRefactorUnauthorizedEditError(
+	unauthorizedFiles: string[],
+	formatPath: (filePath: string) => string,
+): string {
+	return `Rejected /ralph-refactor result: unauthorized spec edits escaped allowedFiles (${unauthorizedFiles.map((filePath) => formatPath(filePath)).join(", ")}).`;
+}
+
+export function formatRefactorExecutionError(error: unknown): string {
+	return `Rejected /ralph-refactor result: ${error instanceof Error ? error.message : String(error ?? "Unknown /ralph-refactor execution error")}`;
 }
 
 export function restoreRefactorSpecDirectory(snapshot: RefactorSpecSnapshot): void {
@@ -399,7 +420,7 @@ function readCompletionValue(lines: string[], marker: string): string {
 function collectRefactorSpecFiles(specPath: string): Map<string, Buffer> {
 	const files = new Map<string, Buffer>();
 	if (!existsSync(specPath)) return files;
-	for (const entry of readdirSync(specPath, { withFileTypes: true })) {
+	for (const entry of listRefactorDirectoryEntries(specPath)) {
 		const entryPath = join(specPath, entry.name);
 		if (entry.isDirectory()) {
 			for (const [filePath, content] of collectRefactorSpecFiles(entryPath).entries()) {
@@ -412,9 +433,17 @@ function collectRefactorSpecFiles(specPath: string): Map<string, Buffer> {
 	return files;
 }
 
+function listRefactorDirectoryEntries(directoryPath: string) {
+	return readdirSync(directoryPath, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function hasRefactorFileChanged(before: Buffer | undefined, after: Buffer | undefined): boolean {
+	return !before || !after || !before.equals(after);
+}
+
 function pruneEmptyDirectories(directoryPath: string, isRoot = true): void {
 	if (!existsSync(directoryPath)) return;
-	for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
+	for (const entry of listRefactorDirectoryEntries(directoryPath)) {
 		if (entry.isDirectory()) pruneEmptyDirectories(join(directoryPath, entry.name), false);
 	}
 	if (isRoot) return;
