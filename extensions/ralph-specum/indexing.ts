@@ -75,14 +75,14 @@ export function parseIndexArgs(args: string[] = []): IndexParseResult {
       case '--type': {
         const valueResult = readOptionValue(args, index, optionName, inlineValue);
         if (!valueResult.ok) return failParse(options, valueResult.error);
-        options.categories.push(...normalizeCategories(valueResult.value));
+        options.categories.push(...normalizeCategoryTokens(valueResult.value));
         index = valueResult.index;
         break;
       }
       case '--exclude': {
         const valueResult = readOptionValue(args, index, optionName, inlineValue);
         if (!valueResult.ok) return failParse(options, valueResult.error);
-        options.excludes.push(...normalizeExcludePatterns(valueResult.value));
+        options.excludes.push(...normalizePatternTokens(valueResult.value));
         index = valueResult.index;
         break;
       }
@@ -137,27 +137,30 @@ type OptionValueResult =
 
 function readOptionValue(args: string[], index: number, optionName: string, inlineValue: string | undefined): OptionValueResult {
   if (inlineValue !== undefined) {
-    if (inlineValue.trim() === '') return { ok: false, error: `${optionName} requires a value` };
+    if (inlineValue.trim() === '') return { ok: false, error: missingOptionValueMessage(optionName) };
     return { ok: true, value: inlineValue, index };
   }
 
   const nextIndex = index + 1;
   const value = args[nextIndex];
   if (value === undefined || isOptionToken(value) || value.trim() === '') {
-    return { ok: false, error: `${optionName} requires a value` };
+    return { ok: false, error: missingOptionValueMessage(optionName) };
   }
 
   return { ok: true, value, index: nextIndex };
+}
+
+function missingOptionValueMessage(optionName: string): string {
+  return `Missing value for ${optionName}. Provide a value after ${optionName} or use ${optionName}=<value>.`;
 }
 
 function normalizePathValue(value: string): string {
   return value.trim();
 }
 
-function normalizeCategories(value: string): IndexCategory[] {
-  return value
-    .split(',')
-    .map((category) => category.trim().toLowerCase())
+function normalizeCategoryTokens(value: string): IndexCategory[] {
+  return splitCommaSeparatedTokens(value)
+    .map((category) => category.toLowerCase())
     .filter((category): category is IndexCategory => isIndexCategory(category));
 }
 
@@ -165,10 +168,14 @@ function isIndexCategory(category: string): category is IndexCategory {
   return ['controllers', 'services', 'models', 'helpers', 'migrations', 'other'].includes(category);
 }
 
-function normalizeExcludePatterns(value: string): string[] {
+function normalizePatternTokens(value: string): string[] {
+  return splitCommaSeparatedTokens(value).map((pattern) => pattern.replace(/\\/g, '/').replace(/^\.\//, ''));
+}
+
+function splitCommaSeparatedTokens(value: string): string[] {
   return value
     .split(',')
-    .map((pattern) => pattern.trim().replace(/\\/g, '/').replace(/^\.\//, ''))
+    .map((token) => token.trim())
     .filter(Boolean);
 }
 

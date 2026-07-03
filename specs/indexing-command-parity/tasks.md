@@ -72,7 +72,7 @@
   - _Requirements: FR-2, NFR-5, AC-1.2, AC-1.3_
   - _Design: Index option parser; Error Handling_
 
-- [ ] 1.6 [YELLOW] Refactor: isolate token normalization helpers
+- [x] 1.6 [YELLOW] Refactor: isolate token normalization helpers
   - **Do**:
     1. Extract category and pattern normalization helpers.
     2. Add readable error messages for missing option values.

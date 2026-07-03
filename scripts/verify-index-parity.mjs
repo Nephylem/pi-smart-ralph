@@ -104,6 +104,17 @@ async function verifyParserOptions() {
       )}`,
     );
   }
+
+  assertMissingValueMessage(parseIndexArgs(['--path']), '--path');
+  assertMissingValueMessage(parseIndexArgs(['--type=']), '--type');
+  assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
+}
+
+function assertMissingValueMessage(result, optionName) {
+  const errorText = String(result?.error?.message ?? result?.error ?? result?.message ?? '');
+  if (result?.ok !== false || !errorText.includes('Missing value') || !errorText.includes(optionName)) {
+    expectedFail(`${optionName} missing value error must be readable and name the option; got ${stringifyParseResult(result)}`);
+  }
 }
 
 function assertStableDefaultShape(result, label) {
