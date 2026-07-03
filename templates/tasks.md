@@ -48,6 +48,8 @@ This spec is not complete until ALL criteria are met:
 2. **Simplicity**: Minimum steps to achieve the goal. No speculative features, no abstractions for single-use code. If the task can be done in 2 steps, don't write 4.
 3. **Surgical**: Each task touches only what it must. No drive-by refactors, no "while you're in there" improvements. Every file in the Files section traces directly to the task's goal.
 4. **Goal-Driven**: Emphasize **Done when** and **Verify** over **Do** steps. The Do is guidance; the Done when is the contract. Transform imperative commands into declarative success criteria. Instead of "Add validation" write "Done when: invalid inputs return 400 with error message."
+5. **Scoped Verification by Default**: For ordinary implementation/refactor tasks, `Verify` should target only touched files/modules/tests whenever that can prove the task. Save broad repo-wide lint/typecheck/test commands for `Q*`, `V*`, `VE*`, and final gates.
+6. **Python Order Matters**: For Python implementation/refactor tasks, prefer `black --check` on touched files before module/file `mypy`, then targeted `pytest` when applicable so formatter blockers surface locally first.
 
 ### Bad vs. Good Examples
 
@@ -85,7 +87,7 @@ GOOD:
     3. Initialize with env var `POSTHOG_KEY` in wrapper
   - **Files**: src/lib/analytics.ts, package.json
   - **Done when**: `import { track } from '@/lib/analytics'` resolves without error
-  - **Verify**: `pnpm check-types`
+  - **Verify**: `pnpm exec eslint src/lib/analytics.ts`
 
 **Example 3: Refactoring (overloaded vs. focused)**
 
@@ -154,12 +156,21 @@ GOOD:
     1. Extract hardcoded timeout to config constant in `src/auth.ts`
   - **Files**: src/auth.ts
   - **Done when**: Code is clean AND all auth tests pass
-  - **Verify**: `pnpm test -- --grep "auth" && pnpm lint`
+  - **Verify**: `pnpm test -- --grep "auth" && pnpm exec eslint src/auth.ts src/utils/token.ts`
   - **Commit**: `refactor(auth): yellow - extract timeout to config`
 
 <!-- ============================================================ -->
 <!-- POC-FIRST WORKFLOW (use when Intent = GREENFIELD)            -->
 <!-- ============================================================ -->
+
+## Verification defaults for implementation/refactor tasks
+
+Use these defaults unless the project research identified a better scoped command:
+- Python: `black --check <touched-files>` -> `mypy <touched-file-or-module>` -> `pytest <targeted-test>`
+- TS/JS: touched-file/module lint or typecheck -> targeted test command
+- Backend/API: smallest endpoint/module verification that proves the behavior
+- Avoid whole-repo formatter/lint/typecheck/test commands on ordinary implementation/refactor tasks when a scoped command proves the task.
+- Keep broad repo/seam checks in `[VERIFY]` checkpoints and final gates.
 
 ## Phase 1: Make It Work (POC)
 

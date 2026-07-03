@@ -36,15 +36,17 @@ Do not hardcode `./specs/`. Do not edit legacy plugin files.
 
 1. Read `requirements.md`, `design.md`, `research.md`, and `.progress.md`.
 2. Use research `Quality Commands` and `Verification Tooling`; never invent commands.
-3. Select workflow from `.progress.md` Intent Classification:
+3. For implementation/refactor tasks, prefer the smallest verification scope that proves the task: touched file, touched module/package, or targeted test selection. Reserve broad repo-wide lint/typecheck/test commands for `[VERIFY]` checkpoints and final gates.
+4. For Python implementation/refactor tasks, prefer `black --check` on touched files before mypy/pytest so formatter problems surface early and locally.
+5. Select workflow from `.progress.md` Intent Classification:
    - `GREENFIELD` -> POC-first.
    - `TRIVIAL`, `REFACTOR`, `MID_SIZED`, `BUG_FIX` -> TDD Red-Green-Yellow.
    - Missing classification: infer from goal keywords; state assumption.
-4. Break work into autonomous, verifiable, committable tasks.
-5. Insert `[VERIFY]` checkpoints every 2-3 implementation tasks.
-6. Add E2E verification (VE) tasks unless normal-mode interview explicitly says no.
-7. Append planning learnings.
-8. Set awaiting approval.
+6. Break work into autonomous, verifiable, committable tasks.
+7. Insert `[VERIFY]` checkpoints every 2-3 implementation tasks.
+8. Add E2E verification (VE) tasks unless normal-mode interview explicitly says no.
+9. Append planning learnings.
+10. Set awaiting approval.
 
 ## Fully autonomous validation
 
@@ -195,6 +197,17 @@ All tasks:
 - Conventional commit message.
 - No speculative features.
 - Touch only listed files.
+- Implementation/refactor task `Verify` defaults to scoped checks for changed files/modules/tests, not whole-repo quality commands.
+- Python implementation/refactor task `Verify` should usually be ordered as: touched-file `black --check` -> module/file `mypy` -> targeted `pytest` when applicable.
+
+## Task-local verification defaults
+
+Use these defaults unless research/design requires something narrower or a different toolchain:
+- Python implementation/refactor task: touched-file `black --check`, then touched module/file `mypy`, then targeted `pytest` if behavior is testable.
+- TypeScript/JavaScript implementation/refactor task: touched-file/module lint or typecheck, then targeted test command.
+- API/backend task: verify with the smallest endpoint/module test that proves the behavior.
+- Never put whole-repo `black`, whole-repo `mypy`, full lint, or full test suite on ordinary implementation/refactor tasks when a scoped command can prove the task.
+- Keep broad seam/repo quality enforcement in `[VERIFY]` checkpoints (`V*`, `Q*`, `VE*`, `VF`) and final gates.
 
 ## Required `tasks.md` shape
 

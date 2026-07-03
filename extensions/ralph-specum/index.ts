@@ -2,9 +2,10 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	findSpec,
 	getCurrentSpecFilePath,
@@ -1317,6 +1318,30 @@ const ralphStatusAnimation: RalphStatusAnimationState = {
 	timer: null,
 };
 
+type RalphFooterSubagentState = {
+	phase: string;
+	agentName: string;
+	agentId: string;
+	startedAt: number;
+};
+
+type RalphGitWorkspaceInfo = {
+	worktreeName: string | null;
+	gitDir: string | null;
+	root: string | null;
+};
+
+const RALPH_FOOTER_REFRESH_INTERVAL_MS = 250;
+const ralphFooterState: {
+	ctx: ExtensionCommandContext | null;
+	subagent: RalphFooterSubagentState | null;
+	gitInfoCache: Map<string, { expiresAt: number; value: RalphGitWorkspaceInfo }>;
+} = {
+	ctx: null,
+	subagent: null,
+	gitInfoCache: new Map(),
+};
+
 function formatRalphElapsed(startedAt: number): string {
 	const totalSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 	if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -1387,6 +1412,141 @@ function stopRalphStatusAnimation(ctx?: ExtensionCommandContext): void {
 	ralphStatusAnimation.frameIndex = 0;
 	ralphStatusAnimation.startedAt = 0;
 	if (statusCtx?.hasUI) statusCtx.ui.setStatus("ralph", undefined);
+}
+
+function formatFooterBadge(text: string): string {
+	return `[${text}]`;
+}
+
+function formatMainContextUsage(ctx: ExtensionCommandContext): string {
+	const usage = ctx.getContextUsage();
+	if (!usage) return "Main 🪟 unknown";
+	if (usage.tokens !== null && Number.isFinite(usage.tokens) && usage.contextWindow > 0) {
+		const percent = usage.percent ?? (usage.tokens / usage.contextWindow) * 100;
+		const rendered = formatTokenUsageBar(usage.tokens, usage.contextWindow, RALPH_TOKEN_BAR_WIDTH).replace(
+			/^.*?% /,
+			`${Math.max(0, Math.min(100, percent)).toFixed(1)}% `,
+		);
+		return `Main 🪟 ${rendered}`;
+	}
+	return `Main 🪟 ? [${"-".repeat(RALPH_TOKEN_BAR_WIDTH)}] ?/${formatTokenCount(usage.contextWindow)}`;
+}
+
+function ralphFooterProjectDirectory(ctx: ExtensionCommandContext): string {
+	const name = basename(ctx.cwd);
+	return name && name !== "/" ? name : ctx.cwd;
+}
+
+function detectGitWorkspaceInfo(cwd: string): RalphGitWorkspaceInfo {
+	const cached = ralphFooterState.gitInfoCache.get(cwd);
+	if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+	const topLevel = runGitCommand(cwd, ["rev-parse", "--show-toplevel"]);
+	if (!topLevel.ok || !topLevel.stdout) {
+		const value = { worktreeName: null, gitDir: null, root: null };
+		ralphFooterState.gitInfoCache.set(cwd, { expiresAt: Date.now() + 5_000, value });
+		return value;
+	}
+
+	const gitDirResult = runGitCommand(cwd, ["rev-parse", "--absolute-git-dir"]);
+	const gitDir = gitDirResult.ok && gitDirResult.stdout ? gitDirResult.stdout.split(/\r?\n/).at(-1)?.trim() || null : null;
+	const worktreeMatch = gitDir?.match(/[\\/]worktrees[\\/]([^\\/]+)$/);
+	const value = {
+		worktreeName: worktreeMatch?.[1] ?? null,
+		gitDir,
+		root: topLevel.stdout.split(/\r?\n/).at(-1)?.trim() || null,
+	};
+		ralphFooterState.gitInfoCache.set(cwd, { expiresAt: Date.now() + 5_000, value });
+	return value;
+}
+
+function readRalphFooterSpecSummary(ctx: ExtensionCommandContext): {
+	epicName: string;
+	specName: string;
+	inProgress: number;
+	pending: number;
+	completed: number;
+} {
+	const options = pathOptions(ctx);
+	const epicName = readCurrentEpicName(options) ?? "no epic";
+	const currentSpecValue = readCurrentSpecValue(options);
+	const spec = currentSpecValue ? resolveCurrentSpec(options) : null;
+	if (!spec) {
+		return { epicName, specName: currentSpecValue ?? "no spec", inProgress: 0, pending: 0, completed: 0 };
+	}
+
+	const counts = countTasks(spec);
+	let inProgress = 0;
+	try {
+		const state = readRalphState(spec, options);
+		inProgress = activePendingEvidenceIndex(state) !== null && booleanField(state, "blocked") !== true ? 1 : 0;
+	} catch {
+		inProgress = 0;
+	}
+	const pending = Math.max(0, counts.pending - inProgress);
+	return { epicName, specName: spec.name, inProgress, pending, completed: counts.completed };
+}
+
+function formatRalphFooterProgress(summary: { inProgress: number; pending: number; completed: number }): string {
+	return `⏳ ${summary.inProgress} in progress | • ${summary.pending} pending | ✔ ${summary.completed} completed`;
+}
+
+function formatRalphFooterNativeInfo(ctx: ExtensionCommandContext, footerData: {
+	getAvailableProviderCount(): number;
+	getExtensionStatuses(): ReadonlyMap<string, string>;
+}): string {
+	const providerCount = footerData.getAvailableProviderCount();
+	const branchEntries = ctx.sessionManager.getBranch().length;
+	const mode = ctx.hasPendingMessages() ? "queued" : ctx.isIdle() ? "idle" : "streaming";
+	const extraStatuses = [...footerData.getExtensionStatuses().entries()]
+		.filter(([key, value]) => key !== "ralph" && key !== "subagents" && typeof value === "string" && value.trim().length > 0)
+		.slice(0, 2)
+		.map(([key]) => key);
+	const suffix = extraStatuses.length > 0 ? ` · ext:${extraStatuses.join(",")}` : "";
+	return `📈 ${providerCount} providers · ${branchEntries} entries · ${mode}${suffix}`;
+}
+
+function installRalphFooter(ctx: ExtensionCommandContext): void {
+	if (!ctx.hasUI) return;
+	ralphFooterState.ctx = ctx;
+	ctx.ui.setFooter((tui, theme, footerData) => {
+		const unsubscribeBranch = footerData.onBranchChange(() => tui.requestRender());
+		const timer = setInterval(() => {
+			if (ralphFooterState.subagent || ralphStatusAnimation.active) tui.requestRender();
+		}, RALPH_FOOTER_REFRESH_INTERVAL_MS);
+		(timer as { unref?: () => void }).unref?.();
+
+		return {
+			dispose() {
+				unsubscribeBranch();
+				clearInterval(timer);
+			},
+			invalidate() {},
+			render(width: number): string[] {
+				const branch = footerData.getGitBranch() ?? "no git";
+				const gitInfo = detectGitWorkspaceInfo(ctx.cwd);
+				const summary = readRalphFooterSpecSummary(ctx);
+				const modelLabel = ctx.model?.id ?? "no-model";
+				const topLine = [
+					formatFooterBadge(`📁 ${ralphFooterProjectDirectory(ctx)}`),
+					formatFooterBadge(`𖣂 ${gitInfo.worktreeName ?? "no worktree"}`),
+					formatFooterBadge(`𖦥 ${branch}`),
+					formatFooterBadge(`👾 ${modelLabel}`),
+					formatFooterBadge(`📋 ${summary.epicName}`),
+					formatFooterBadge(`🎯 ${summary.specName}`),
+					formatFooterBadge(formatRalphFooterProgress(summary)),
+				].join("");
+				const nativeInfo = formatRalphFooterNativeInfo(ctx, footerData);
+				const active = ralphFooterState.subagent;
+				const manager = active ? getRalphSubagentManager() : undefined;
+				const record = active ? manager?.getRecord(active.agentId) : undefined;
+				const subLine = active
+					? `${formatMainContextUsage(ctx)} [${nativeInfo}] | ${active.agentName} 🤖 ${getSubagentUsageText(record) || `${formatTokenCount(0)} tokens`} · 🔨 ${record?.toolUses ?? 0} tools · ⏰ ${formatRalphElapsed(record?.startedAt ?? active.startedAt)}`
+					: `${formatMainContextUsage(ctx)} [${nativeInfo}] | ${theme.fg("dim", "No subagent 🤖 idle")}`;
+				return [truncateToWidth(topLine, width, "…"), truncateToWidth(subLine, width, "…")];
+			},
+		};
+	});
 }
 
 function printJsonOutput(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info"): void {
@@ -2617,22 +2777,22 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"",
 		"Commands:",
 		"- /ralph-triage [--output spec-files|github-issues|both] [--yes] <epic> <goal>  Create/resume an epic and requested outputs",
-		"- /ralph-epic-status [--json|--repair] [epic]  Show or repair epic child spec readiness",
-		"- /ralph-epic-switch <epic>          Switch active epic marker",
-		"- /ralph-epic-next [--switch|--start] [epic] Select next unblocked child spec",
-		"- /ralph-epic-cancel [epic]          Cancel active epic execution state safely",
-		"- /ralph-start [--next-epic-spec] [--quick|--autonomous] [spec-name] [goal]  Create/resume a spec; quick mode reviews artifacts and implements",
-		"- /ralph-research [spec]              Generate research.md",
-		"- /ralph-requirements [spec]          Generate requirements.md",
-		"- /ralph-design [spec]                Generate design.md",
-		"- /ralph-tasks [spec]                 Generate canonical tasks.md",
-		"- /ralph-implement [spec]             Execute tasks.md through Ralph subagents",
-		"- /ralph-refactor [spec] [--file=requirements|design|tasks]  Update an existing spec artifact with bounded scope",
-		"- /ralph-index [--path <dir>] [--type controllers,services,models,helpers,migrations,other] [--exclude <pattern>] [--dry-run] [--force] [--changed] [--quick]  Generate searchable component and external index artifacts",
-		"- /ralph-switch <spec-name-or-path>  Switch active spec",
-		"- /ralph-cancel [spec-name-or-path]   Clear execution state for a spec",
-		"- /ralph-model [auto|provider|model] Switch Ralph's inherited Pi model profile",
-		"- /ralph-init [--refresh-agents]      Bootstrap/check package tools and project Ralph subagents",
+		"- /ralph-epic-status [--json] [--repair] [epic]  Show active epic readiness; --json prints machine state, --repair fills stubs",
+		"- /ralph-epic-switch <epic>                    Switch active epic marker",
+		"- /ralph-epic-next [--peek] [--switch] [--start] [epic]  Preview/select next unblocked child spec",
+		"- /ralph-epic-cancel [--delete-child-specs] [epic]  Cancel active epic execution state safely",
+		"- /ralph-start [--fresh] [--quick|--autonomous] [--skip-research] [--tasks-size fine|coarse] [--next-epic-spec] [spec-name] [goal]  Create/resume a spec",
+		"- /ralph-research [spec]                        Generate research.md",
+		"- /ralph-requirements [spec]                    Generate requirements.md",
+		"- /ralph-design [spec]                          Generate design.md",
+		"- /ralph-tasks [--quick|--autonomous] [--tasks-size fine|coarse] [spec]  Generate canonical tasks.md",
+		"- /ralph-implement [--recovery-mode] [--max-task-iterations N] [--max-global-iterations N] [spec]  Execute tasks.md through Ralph subagents",
+		"- /ralph-refactor [spec] [--file requirements|design|tasks]  Update one existing spec artifact with bounded scope",
+		"- /ralph-index [--path <dir>] [--type controllers,services,models,helpers,migrations,other] [--exclude <pattern>] [--dry-run] [--force] [--changed] [--quick]  Generate searchable component/external index artifacts",
+		"- /ralph-switch <spec-name-or-path>            Switch active spec",
+		"- /ralph-cancel [spec-name-or-path]             Clear execution state for a spec",
+		"- /ralph-model [auto|anthropic|openai-codex|github-copilot|inherit|provider/model]  Switch Ralph's inherited Pi model profile",
+		"- /ralph-init [--refresh-agents] [--no-runtime-config]  Bootstrap/check package tools, runtime defaults, and project Ralph subagents",
 	);
 
 	return { message: lines.join("\n"), type: validation.ready ? "info" : "warning" };
@@ -3965,10 +4125,13 @@ function startRalphSubagentStatusTicker(
 	agentId: string,
 ): () => void {
 	if (!ctx.hasUI) return () => {};
+	ralphFooterState.ctx = ctx;
+	ralphFooterState.subagent = { phase, agentName, agentId, startedAt: Date.now() };
 	const manager = getRalphSubagentManager();
 	if (!manager) {
 		setSubagentStatusSurfaces(ctx, `Ralph ${phase}: ${agentId} ${agentName}`);
 		return () => {
+			if (ralphFooterState.subagent?.agentId === agentId) ralphFooterState.subagent = null;
 			clearSubagentStatusSurfaces(ctx);
 		};
 	}
@@ -3983,6 +4146,7 @@ function startRalphSubagentStatusTicker(
 	update();
 	return () => {
 		clearInterval(timer);
+		if (ralphFooterState.subagent?.agentId === agentId) ralphFooterState.subagent = null;
 		clearSubagentStatusSurfaces(ctx);
 	};
 }
@@ -5922,6 +6086,79 @@ function meaningfulEvidence(value: string): string | null {
 	return normalized;
 }
 
+function truncateFailureReason(reason: string, maxLength = 280): string {
+	const normalized = normalizeWhitespace(reason);
+	return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function extractRelevantFailureLines(output: string): string[] {
+	return output
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.filter((line) => !/^(TASK_COMPLETE|VERIFICATION_PASS|REFACTOR_COMPLETE|VERIFICATION_FAIL|TASK_MODIFICATION_REQUEST|USER_INPUT_REQUIRED)\b/i.test(line));
+}
+
+function formatQuestionBlockReason(lines: string[], fallback: string): string {
+	const questionLines = lines
+		.filter((line) => /^(?:questions?:|\d+\.|[-*])\s*/i.test(line))
+		.map((line) => line.replace(/^(?:questions?:|\d+\.|[-*])\s*/i, "").trim())
+		.filter(Boolean);
+	if (questionLines.length === 0) return fallback;
+	return `${fallback} ${questionLines.slice(0, 2).join(" ")}`;
+}
+
+function detectExplicitFailureReason(output: string, definition: ImplementationSubagentDefinition): string | null {
+	if (!output.trim()) return null;
+
+	if (/TASK_MODIFICATION_REQUEST/i.test(output)) {
+		try {
+			const request = parseTaskModificationRequest(output);
+			if (request) return `Task modification requested (${request.type}) for ${request.originalTaskId}: ${request.reasoning}`;
+		} catch (error) {
+			return `Task modification request is invalid: ${formatError(error)}`;
+		}
+		return "Task modification requested.";
+	}
+
+	const relevantLines = extractRelevantFailureLines(output);
+	if (/USER_INPUT_REQUIRED/i.test(output)) {
+		return truncateFailureReason(formatQuestionBlockReason(relevantLines, "User input required."));
+	}
+	if (/VERIFICATION_FAIL/i.test(output)) {
+		const failureLine = relevantLines.find((line) => /\bFAIL\b|\berror\b|\bblocked\b/i.test(line));
+		return truncateFailureReason(`Verification failed: ${failureLine ?? "qa-engineer reported VERIFICATION_FAIL."}`);
+	}
+
+	const structuredFailure = relevantLines.find((line) => /^Task\s+\S+.*FAILED$/i.test(line));
+	const structuredError = relevantLines.find((line) => /^Error:\s*/i.test(line));
+	if (structuredFailure || structuredError) {
+		return truncateFailureReason([structuredFailure, structuredError].filter(Boolean).join(" "));
+	}
+
+	const commandFailurePatterns = [
+		/command not found/i,
+		/no such file or directory/i,
+		/exited with code\s+\d+/i,
+		/returned non-zero exit status/i,
+		/traceback \(most recent call last\)/i,
+		/AssertionError/i,
+		/FAILED/i,
+		/Error:/i,
+		/Exception:/i,
+		/mypy:/i,
+		/black.*would reformat/i,
+		/ruff:/i,
+		/pytest/i,
+	];
+	const commandFailure = relevantLines.find((line) => commandFailurePatterns.some((pattern) => pattern.test(line)));
+	if (commandFailure) return truncateFailureReason(commandFailure);
+
+	const summary = relevantLines.slice(0, 3).join(" ");
+	if (summary) return truncateFailureReason(summary);
+	return `Missing completion signal ${definition.completionSignal}.`;
+}
+
 function extractCompletionEvidence(output: string, signal: CompletionSignal): string | null {
 	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 	const keyedEvidence: string[] = [];
@@ -5946,12 +6183,22 @@ function extractCompletionEvidence(output: string, signal: CompletionSignal): st
 function validateSubagentCompletion(completion: SubagentCompletion, definition: ImplementationSubagentDefinition): CompletionValidation {
 	const output = subagentCompletionOutput(completion);
 	if (!hasCompletionSignal(output, definition.completionSignal)) {
-		return { ok: false, signal: definition.completionSignal, error: `Missing completion signal ${definition.completionSignal}.`, output };
+		return {
+			ok: false,
+			signal: definition.completionSignal,
+			error: detectExplicitFailureReason(output, definition) ?? `Missing completion signal ${definition.completionSignal}.`,
+			output,
+		};
 	}
 
 	const contradiction = hasContradiction(output);
 	if (contradiction) {
-		return { ok: false, signal: definition.completionSignal, error: `Completion contradicted by output pattern: ${contradiction}.`, output };
+		return {
+			ok: false,
+			signal: definition.completionSignal,
+			error: detectExplicitFailureReason(output, definition) ?? `Completion contradicted by output pattern: ${contradiction}.`,
+			output,
+		};
 	}
 
 	const evidence = extractCompletionEvidence(output, definition.completionSignal);
@@ -8743,13 +8990,17 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		})();
 	}
 
-	pi.on("session_start", async () => {
+	pi.on("session_start", async (_event, ctx) => {
 		await bootstrapBundledRuntimes(pi);
+		installRalphFooter(ctx);
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		activeRalphCoordinatorJob = null;
+		ralphFooterState.ctx = null;
+		ralphFooterState.subagent = null;
 		stopRalphStatusAnimation();
+		if (ctx.hasUI) ctx.ui.setFooter(undefined);
 	});
 
 	pi.on("resources_discover", async () => {
@@ -8770,21 +9021,21 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"/ralph-triage       Create or resume an epic; --output spec-files|github-issues|both; --yes confirms GitHub writes.",
 					"/ralph-epic-status  Show active epic readiness; --json prints machine state, --repair fills missing stubs.",
 					"/ralph-epic-switch  Switch the active epic marker.",
-					"/ralph-epic-next    Select the next unblocked child spec; --start begins it.",
-					"/ralph-epic-cancel  Cancel active epic execution state safely.",
-					"/ralph-start         Create or resume a spec; --next-epic-spec selects active epic child.",
-					"/ralph-research      Generate research.md with ralph-research-analyst.",
-					"/ralph-requirements  Generate requirements.md with ralph-product-manager.",
-					"/ralph-design        Generate design.md with ralph-architect-reviewer.",
-					"/ralph-tasks         Generate canonical tasks.md with ralph-task-planner.",
-					"/ralph-implement     Execute tasks.md through Ralph subagents.",
-					"/ralph-refactor      Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks].",
-					"/ralph-index         Generate searchable index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, and --quick.",
-					"/ralph-status        Show specs across configured roots.",
-					"/ralph-switch        Switch the active spec marker.",
-					"/ralph-cancel        Clear execution state for a spec.",
-					"/ralph-model         Show/switch Ralph's inherited Pi model profile; supports anthropic, openai-codex, github-copilot.",
-					"/ralph-init          Bootstrap/check Pi tools, runtime defaults, and project Ralph subagents; --refresh-agents overwrites conflicts.",
+					"/ralph-epic-next    Preview/select the next unblocked child spec; --peek previews, --switch updates the marker, --start begins it.",
+					"/ralph-epic-cancel  Cancel active epic execution state safely; --delete-child-specs also removes child spec dirs after confirmation.",
+					"/ralph-start        Create or resume a spec; supports --fresh, --quick, --autonomous, --skip-research, --tasks-size fine|coarse, --next-epic-spec.",
+					"/ralph-research     Generate research.md with ralph-research-analyst.",
+					"/ralph-requirements Generate requirements.md with ralph-product-manager.",
+					"/ralph-design       Generate design.md with ralph-architect-reviewer.",
+					"/ralph-tasks        Generate canonical tasks.md with ralph-task-planner; supports --quick, --autonomous, --tasks-size fine|coarse.",
+					"/ralph-implement    Execute tasks.md through Ralph subagents; supports --recovery-mode, --max-task-iterations N, --max-global-iterations N.",
+					"/ralph-refactor     Update one existing spec artifact; supports [spec] [--file requirements|design|tasks].",
+					"/ralph-index        Generate searchable index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, --quick.",
+					"/ralph-status       Show specs across configured roots.",
+					"/ralph-switch       Switch the active spec marker.",
+					"/ralph-cancel       Clear execution state for a spec.",
+					"/ralph-model        Show/switch Ralph's inherited Pi model profile; supports auto, anthropic, openai-codex, github-copilot, inherit, provider/model.",
+					"/ralph-init         Bootstrap/check Pi tools, runtime defaults, and project Ralph subagents; supports --refresh-agents and --no-runtime-config.",
 				].join("\n"),
 			);
 		},

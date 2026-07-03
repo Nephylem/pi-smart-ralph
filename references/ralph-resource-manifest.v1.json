@@ -399,7 +399,8 @@
     "originalPath": "templates/tasks.md",
     "piPath": "templates/tasks.md",
     "kind": "template",
-    "status": "copied",
-    "sha256": "7b412963acc2ed9696bc5f4949ef1cae12d3485ad2b207ac81abf9fdbad0f6b5"
+    "status": "adapted",
+    "notes": "Packaged tasks template is intentionally adapted for Pi task-scoped verification defaults and blocker-safe execution guidance.",
+    "sha256": "e6a8ad73166adcb057a85ae334491c55659dad827eafa6e4fbb78684e19ad6eb"
   }
 ]
