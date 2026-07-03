@@ -483,7 +483,7 @@
   - _Requirements: FR-15, AC-5.1, AC-5.2_
   - _Design: package verification wiring; dedicated verifier script_
 
-- [ ] 6.3 [YELLOW] Refactor: align verifier structure with existing parity-script conventions
+- [x] 6.3 [YELLOW] Refactor: align verifier structure with existing parity-script conventions
   - **Do**:
     1. Normalize case parsing, cleanup handling, and summary output to match the existing repository verifier style.
     2. Keep acceptance-case names stable for final quality gates.

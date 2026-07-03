@@ -48,10 +48,10 @@ const cases = new Map([
   ['cascade-handling', verifyCascadeHandling],
   ['state-merge', verifyStateMerge],
   ['commit-spec', verifyCommitSpec],
-  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
-  [cleanupCaseKey, verifyCleanup],
   ['package-wiring', verifyPackageWiring],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
+const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
@@ -69,14 +69,33 @@ async function main() {
       console.log(`PASS ${caseName}`);
     }
 
+    const cleanupResult = await runVerifierCase(cleanupCaseKey, verifyCleanupCase);
+    if (!cleanupResult.ok) {
+      printCaseFailure(cleanupResult);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${cleanupCaseKey}`);
+
     console.log(`PASS refactor parity verifier: ${summaries.length}/${cases.size} cases passed`);
+    return;
+  }
+
+  if (requestedCase === cleanupCaseKey) {
+    const result = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!result.ok) {
+      printCaseFailure(result);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${requestedCase}`);
     return;
   }
 
   const verifyCase = cases.get(requestedCase);
   if (!verifyCase) {
     console.error(`Unknown verify case: ${requestedCase}`);
-    console.error(`Supported cases: ${[...cases.keys()].join(', ')}`);
+    console.error(`Supported cases: ${supportedCaseNames.join(', ')}`);
     process.exitCode = 2;
     return;
   }
@@ -846,14 +865,23 @@ async function verifyAcceptanceChecklist() {
   }
 }
 
-async function verifyCleanup() {
-  const beforeEntries = listVerifierTempEntries();
-  await verifyAcceptanceChecklist();
-  const afterEntries = listVerifierTempEntries();
-  const newEntries = afterEntries.filter((entry) => !beforeEntries.includes(entry));
+async function verifyCleanupCase() {
+  const beforeEntries = new Set(listVerifierTempEntries());
+  let caseError = null;
 
-  if (newEntries.length > 0) {
-    throw new Error(`verifier cleanup left temp artifacts behind: ${JSON.stringify(newEntries)}`);
+  try {
+    await verifyAcceptanceChecklist();
+  } catch (error) {
+    caseError = error;
+  }
+
+  const remainingEntries = listVerifierTempEntries().filter((entry) => !beforeEntries.has(entry));
+  if (remainingEntries.length > 0) {
+    expectedFail(`verifier cleanup must remove temporary artifacts; found ${JSON.stringify(remainingEntries)}`);
+  }
+
+  if (caseError) {
+    throw caseError;
   }
 }
 
@@ -871,7 +899,7 @@ async function verifyPackageWiring() {
   }
 
   for (const caseName of [acceptanceChecklistCaseKey, cleanupCaseKey]) {
-    if (!cases.has(caseName)) {
+    if (!supportedCaseNames.includes(caseName)) {
       failures.push(`scripts/verify-refactor-parity.mjs must expose the "${caseName}" case`);
     }
   }
