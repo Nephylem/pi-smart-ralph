@@ -69,6 +69,9 @@ import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-bran
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import {
+	buildRefactorFilePromptPlan,
+	buildRefactorSectionPromptPlan,
+	buildRefactorSelectedSectionPlan,
 	buildRefactorSelectionPlan,
 	formatRefactorHeadlessDecisionError,
 	REFACTOR_COMMAND_DESCRIPTION,
@@ -76,6 +79,7 @@ import {
 	formatRefactorParseError,
 	formatRefactorResolutionError,
 	parseRefactorArgs,
+	parseRefactorFilePromptSelection,
 	resolveRefactorSpecPlan,
 } from "./refactor.ts";
 
@@ -9043,25 +9047,27 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					return;
 				}
 
-				const selectedLabel = await ctx.ui.select(
-					"Choose refactor artifact file",
-					plan.availableFiles.map((artifact) => `${artifact} (${plan.spec.path}/${artifact}.md)`),
-				);
-				const selectedFile = typeof selectedLabel === "string" ? selectedLabel.split(" ")[0] : null;
-				selectionPlan = buildRefactorSelectionPlan(plan, selectedFile as "requirements" | "design" | "tasks" | null);
+				const filePromptPlan = buildRefactorFilePromptPlan(plan);
+				const selectedLabel = await ctx.ui.select(filePromptPlan.title, filePromptPlan.options);
+				const selectedFile = parseRefactorFilePromptSelection(selectedLabel);
+				selectionPlan = buildRefactorSelectionPlan(plan, selectedFile);
 			}
 
+			let selectedSectionPlan = selectionPlan.selectedFile
+				? buildRefactorSelectedSectionPlan(selectionPlan, null)
+				: null;
 			if (selectionPlan.requiresSectionChoice) {
 				if (!ctx.hasUI) {
 					await notify(ctx, formatRefactorHeadlessDecisionError(plan, selectionPlan), "warning");
 					return;
 				}
 
-				await ctx.ui.select(
-					`Choose refactor section for ${selectionPlan.selectedFile}`,
-					selectionPlan.availableSections,
-				);
+				const sectionPromptPlan = buildRefactorSectionPromptPlan(selectionPlan);
+				const selectedSection = sectionPromptPlan ? await ctx.ui.select(sectionPromptPlan.title, sectionPromptPlan.options) : null;
+				selectedSectionPlan = buildRefactorSelectedSectionPlan(selectionPlan, selectedSection);
 			}
+
+			void selectedSectionPlan;
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");
 		},

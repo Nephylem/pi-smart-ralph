@@ -28,6 +28,17 @@ export type RefactorSelectionPlan = {
 	requiresSectionChoice: boolean;
 };
 
+export type RefactorPromptPlan = {
+	title: string;
+	options: string[];
+};
+
+export type RefactorSelectedSectionPlan = {
+	selectedFile: RefactorArtifact;
+	availableSections: string[];
+	selectedSections: string[];
+};
+
 function emptyRefactorOptions() {
 	return {
 		reference: null,
@@ -138,6 +149,39 @@ export function listRefactorSections(artifactPath: string): string[] {
 export function formatRefactorHeadlessDecisionError(plan: RefactorSpecPlan, selection: RefactorSelectionPlan) {
 	const fileHint = selection.requiresFileChoice ? `choose a file (${formatRefactorArtifactList(plan.availableFiles)})` : `choose section(s) for ${selection.selectedFile}`;
 	return `Headless /ralph-refactor run needs user decisions to ${fileHint}. Re-run with interactive UI${selection.requiresFileChoice ? " or pass --file=<requirements|design|tasks>" : ""} so Ralph can collect the required selection safely.`;
+}
+
+export function buildRefactorFilePromptPlan(plan: RefactorSpecPlan): RefactorPromptPlan {
+	return {
+		title: "Choose refactor artifact file",
+		options: plan.availableFiles.map((artifact) => `${artifact} (${plan.spec.path}/${artifact}.md)`),
+	};
+}
+
+export function parseRefactorFilePromptSelection(selectedLabel: string | null): RefactorArtifact | null {
+	if (typeof selectedLabel !== "string") return null;
+	const selectedFile = selectedLabel.split(" ")[0]?.trim();
+	return REFACTOR_ALLOWED_FILES.includes(selectedFile as RefactorArtifact) ? (selectedFile as RefactorArtifact) : null;
+}
+
+export function buildRefactorSectionPromptPlan(selection: RefactorSelectionPlan): RefactorPromptPlan | null {
+	if (!selection.selectedFile) return null;
+	return {
+		title: `Choose refactor section for ${selection.selectedFile}`,
+		options: [...selection.availableSections],
+	};
+}
+
+export function buildRefactorSelectedSectionPlan(selection: RefactorSelectionPlan, selectedSection: string | null): RefactorSelectedSectionPlan | null {
+	if (!selection.selectedFile) return null;
+	const selectedSections = typeof selectedSection === "string" && selectedSection.trim() !== ""
+		? [selectedSection]
+		: [];
+	return {
+		selectedFile: selection.selectedFile,
+		availableSections: [...selection.availableSections],
+		selectedSections,
+	};
 }
 
 function selectRequestedArtifact(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null): RefactorArtifact | null {

@@ -117,7 +117,7 @@
   - _Requirements: FR-6, FR-7, AC-2.1, AC-2.2_
   - _Design: command handler orchestration; `refactor.ts` planning helpers_
 
-- [ ] 2.3 [YELLOW] Refactor: extract section summary and prompt helper module logic
+- [x] 2.3 [YELLOW] Refactor: extract section summary and prompt helper module logic
   - **Do**:
     1. Extract heading-summary and prompt-building helpers from the coordinator flow.
     2. Keep the selected-section plan serializable for later verifier reuse.
