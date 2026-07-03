@@ -24,7 +24,7 @@
   - _Requirements: FR-1, AC-1.1_
   - _Design: `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] 1.3 [YELLOW] Refactor: extract reusable compatible epic-state helpers
+- [x] 1.3 [YELLOW] Refactor: extract reusable compatible epic-state helpers
   - **Do**:
     1. Extract helper names/types for raw-read, normalize, and warning collection paths.
     2. Keep runtime behavior unchanged while reducing triage-local branching.

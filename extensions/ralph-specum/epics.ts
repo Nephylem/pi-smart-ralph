@@ -95,6 +95,14 @@ export type SafeEpicStateRead = {
 	warnings: string[];
 };
 
+export type RawEpicStateRead = SafeEpicStateRead;
+
+export type CompatibleEpicStateRead = SafeEpicStateRead & {
+	rawState: EpicState | null;
+	compatibilityWarnings: string[];
+	migratedFromCompatibilitySubset: boolean;
+};
+
 export type MissingEpicDependency = {
 	specName: string;
 	dependency: string;
@@ -222,22 +230,46 @@ export function readEpicState(reference: EpicStateReference, options: RalphPathO
 	}
 }
 
-export function safeReadEpicState(reference: EpicStateReference, options: RalphPathOptions = {}): SafeEpicStateRead {
+export function safeReadRawEpicState(reference: EpicStateReference, options: RalphPathOptions = {}): RawEpicStateRead {
 	const path = getEpicStatePath(reference, options);
 	try {
-		const rawState = readEpicState(reference, options);
-		if (!rawState) {
-			return { path, state: null, warnings: [] };
-		}
-
-		const epic = resolveEpicReference(reference, options);
-		const { state, isCompatibilitySubset } = normalizeCompatibleEpicState(epic, rawState, options);
-		const warnings = isCompatibilitySubset ? [] : validateEpicState(state).warnings;
-		return { path, state, warnings };
+		return {
+			path,
+			state: readEpicState(reference, options),
+			warnings: [],
+		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return { path, state: null, warnings: [message] };
 	}
+}
+
+export function readCompatibleEpicState(reference: EpicStateReference, options: RalphPathOptions = {}): CompatibleEpicStateRead {
+	const rawRead = safeReadRawEpicState(reference, options);
+	if (!rawRead.state) {
+		return {
+			...rawRead,
+			rawState: rawRead.state,
+			compatibilityWarnings: [],
+			migratedFromCompatibilitySubset: false,
+		};
+	}
+
+	const epic = resolveEpicReference(reference, options);
+	const normalized = normalizeCompatibleEpicState(epic, rawRead.state, options);
+	return {
+		path: rawRead.path,
+		state: normalized.state,
+		warnings: collectCompatibleEpicReadWarnings(normalized),
+		rawState: rawRead.state,
+		compatibilityWarnings: normalized.compatibilityWarnings,
+		migratedFromCompatibilitySubset: normalized.isCompatibilitySubset,
+	};
+}
+
+export function safeReadEpicState(reference: EpicStateReference, options: RalphPathOptions = {}): SafeEpicStateRead {
+	const { path, state, warnings } = readCompatibleEpicState(reference, options);
+	return { path, state, warnings };
 }
 
 export function writeEpicState(
@@ -595,9 +627,9 @@ function normalizeCompatibleEpicState(
 	epic: CurrentEpic,
 	state: EpicState,
 	options: RalphPathOptions,
-): { state: EpicState; isCompatibilitySubset: boolean } {
-	const compatibilityWarnings: string[] = [];
-	const isCompatibilitySubset = isOriginalCompatibleEpicState(state);
+): { state: EpicState; compatibilityWarnings: string[]; isCompatibilitySubset: boolean } {
+	const compatibilityWarnings = collectEpicCompatibilityWarnings(state);
+	const isCompatibilitySubset = compatibilityWarnings.length > 0;
 	const defaultRoot = getDefaultSpecRoot(options);
 	const now = timestamp();
 	const specs = getEpicSpecs(state).map((spec, index) => {
@@ -614,10 +646,6 @@ function normalizeCompatibleEpicState(
 				: [],
 		} as EpicChildSpec;
 	});
-
-	if (isCompatibilitySubset) {
-		compatibilityWarnings.push("Normalized original-compatible epic state in memory before strict validation.");
-	}
 
 	const normalizedState: EpicState = {
 		...state,
@@ -648,17 +676,27 @@ function normalizeCompatibleEpicState(
 		},
 	};
 
-	return { state: normalizedState, isCompatibilitySubset };
+	return { state: normalizedState, compatibilityWarnings, isCompatibilitySubset };
 }
 
-function isOriginalCompatibleEpicState(state: EpicState): boolean {
+function collectCompatibleEpicReadWarnings(read: { state: EpicState; isCompatibilitySubset: boolean }): string[] {
+	return read.isCompatibilitySubset ? [] : validateEpicState(read.state).warnings;
+}
+
+function collectEpicCompatibilityWarnings(state: EpicState): string[] {
+	return hasCompatibleEpicStateGaps(state)
+		? ["Normalized original-compatible epic state in memory before strict validation."]
+		: [];
+}
+
+function hasCompatibleEpicStateGaps(state: EpicState): boolean {
 	return !Number.isFinite(state.schemaVersion)
 		|| typeof state.basePath !== "string"
 		|| typeof state.epicPath !== "string"
 		|| typeof state.researchPath !== "string"
 		|| typeof state.progressPath !== "string"
 		|| !isPlainObject(state.validation)
-		|| getEpicSpecs(state).some((spec, index) => !(typeof spec.order === "number" && Number.isFinite(spec.order)) || index < 0);
+		|| getEpicSpecs(state).some((spec) => !(typeof spec.order === "number" && Number.isFinite(spec.order)));
 }
 
 function getEpicSpecs(state: EpicState): EpicChildSpec[] {
