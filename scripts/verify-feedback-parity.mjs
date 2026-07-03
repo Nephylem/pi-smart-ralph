@@ -123,14 +123,13 @@ async function verifyDraftFallback() {
     failures.push(`package.json bugs.url must stay fixed to Pi Smart Ralph issues; got ${JSON.stringify(bugsUrl)}`);
   }
 
+  const feedback = await loadFeedbackHelper();
   const requiredExports = [
     'resolveFeedbackTargetRepo',
     'buildFeedbackDraft',
     'renderFeedbackFallback',
   ];
-  const missingExports = requiredExports.filter(
-    (name) => !new RegExp(`export\\s+function\\s+${name}\\s*\\(`, 'm').test(feedbackSource),
-  );
+  const missingExports = requiredExports.filter((name) => typeof feedback?.[name] !== 'function');
   if (missingExports.length > 0) {
     failures.push(`feedback.ts is missing expected draft/fallback exports: ${missingExports.join(', ')}`);
   }
@@ -153,9 +152,68 @@ async function verifyDraftFallback() {
     failures.push('feedback.ts still references archived upstream repo tzachbon/smart-ralph');
   }
 
-  if (failures.length > 0) {
-    expectedFail(`draft fallback source inspection failed for ${feedbackModulePath}: ${failures.join('; ')}`);
+  if (feedback) {
+    const targetRepo = feedback.resolveFeedbackTargetRepo(bugsUrl);
+    if (targetRepo !== 'Nephylem/pi-smart-ralph') {
+      failures.push(`resolveFeedbackTargetRepo must normalize bugs.url to Nephylem/pi-smart-ralph; got ${JSON.stringify(targetRepo)}`);
+    }
+
+    let invalidRepoError = '';
+    try {
+      feedback.resolveFeedbackTargetRepo('https://example.com/not-github');
+    } catch (error) {
+      invalidRepoError = String(error?.message ?? error);
+    }
+    if (!invalidRepoError) {
+      failures.push('resolveFeedbackTargetRepo must fail closed when bugs.url is invalid');
+    }
+
+    const draft = feedback.buildFeedbackDraft('Manual fallback proof', { targetRepo });
+    if (draft.targetRepo !== targetRepo) failures.push(`draft targetRepo mismatch: ${JSON.stringify(draft.targetRepo)}`);
+    if (draft.sourceCommand !== '/ralph-feedback') failures.push(`draft sourceCommand mismatch: ${JSON.stringify(draft.sourceCommand)}`);
+    if (draft.confirmedBy !== 'unconfirmed') failures.push(`draft confirmedBy mismatch: ${JSON.stringify(draft.confirmedBy)}`);
+    if (!Array.isArray(draft.labels) || draft.labels.length === 0) failures.push('draft labels must be a non-empty array');
+
+    const fallback = feedback.renderFeedbackFallback(draft);
+    const expectedFallbackTokens = [
+      `targetRepo: ${draft.targetRepo}`,
+      `title: ${draft.title}`,
+      `body: ${draft.body}`,
+      `labels: ${draft.labels.join(', ')}`,
+      `sourceCommand: ${draft.sourceCommand}`,
+      `confirmedBy: ${draft.confirmedBy}`,
+      `https://github.com/${draft.targetRepo}/issues/new`,
+    ];
+    const missingFallbackTokens = expectedFallbackTokens.filter((token) => !fallback.includes(token));
+    if (missingFallbackTokens.length > 0) {
+      failures.push(`fallback output is missing ${missingFallbackTokens.join(', ')}`);
+    }
   }
+
+  if (failures.length > 0) {
+    expectedFail(`draft fallback verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function loadFeedbackHelper() {
+  const helperUrl = new URL('../extensions/ralph-specum/feedback.ts', import.meta.url);
+  try {
+    return await import(helperUrl.href);
+  } catch (error) {
+    if (isExpectedMissingHelperError(error)) return null;
+    throw error;
+  }
+}
+
+function isExpectedMissingHelperError(error) {
+  const message = String(error?.message ?? '');
+  return (
+    error?.code === 'ERR_MODULE_NOT_FOUND' ||
+    error?.code === 'ERR_UNKNOWN_FILE_EXTENSION' ||
+    message.includes('Cannot find module') ||
+    message.includes('Unknown file extension') ||
+    message.includes('/extensions/ralph-specum/feedback.ts')
+  );
 }
 
 function expectedFail(message) {

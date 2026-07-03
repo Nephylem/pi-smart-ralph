@@ -59,7 +59,7 @@
   - _Requirements: FR-2, FR-4, FR-5, AC-1.2, AC-1.3, AC-1.4_
   - _Design: `extensions/ralph-specum/feedback.ts`; package `bugs.url` target repo resolution_
 
-- [ ] 1.5 [GREEN] Pass test: implement fixed repo resolution and draft/fallback helpers
+- [x] 1.5 [GREEN] Pass test: implement fixed repo resolution and draft/fallback helpers
   - **Do**:
     1. Implement `resolveFeedbackTargetRepo`, `buildFeedbackDraft`, and `renderFeedbackFallback` in `feedback.ts`.
     2. Normalize `https://github.com/Nephylem/pi-smart-ralph/issues` to `Nephylem/pi-smart-ralph` and fail closed if `bugs.url` is invalid.
