@@ -50,6 +50,7 @@ This spec is not complete until ALL criteria are met:
 4. **Goal-Driven**: Emphasize **Done when** and **Verify** over **Do** steps. The Do is guidance; the Done when is the contract. Transform imperative commands into declarative success criteria. Instead of "Add validation" write "Done when: invalid inputs return 400 with error message."
 5. **Scoped Verification by Default**: For ordinary implementation/refactor tasks, `Verify` should target only touched files/modules/tests whenever that can prove the task. Save broad repo-wide lint/typecheck/test commands for `Q*`, `V*`, `VE*`, and final gates.
 6. **Python Order Matters**: For Python implementation/refactor tasks, prefer `black --check` on touched files before module/file `mypy`, then targeted `pytest` when applicable so formatter blockers surface locally first.
+7. **Topology-Aware Commits**: When task files and required spec artifacts cannot share one repo or cannot be committed together from one repo, use `Commit: None` instead of an impossible combined commit. Keep spec-root references configurable from `<basePath>` rather than hardcoding paths.
 
 ### Bad vs. Good Examples
 
@@ -151,6 +152,15 @@ GOOD:
   - **Verify**: `pnpm test -- --grep "login.*timeout"`
   - **Commit**: `fix(auth): green - fix login timeout handling`
 
+- [ ] 1.2b Topology-aware spec update without a shared repo commit
+  - **Do**:
+    1. Update only spec artifacts using `<basePath>`-relative references.
+    2. Use `Commit: None` because task files and required spec artifacts cannot share one repo and cannot be committed together from one repo.
+  - **Files**: `<basePath>/tasks.md`, `<basePath>/.progress.md`
+  - **Done when**: The task stays executable in a split-repo or spec-outside-repo workspace without an impossible combined commit.
+  - **Verify**: `<discovered command proving the spec-only change>`
+  - **Commit**: None
+
 - [ ] 1.3 [YELLOW] Refactor: extract timeout config
   - **Do**:
     1. Extract hardcoded timeout to config constant in `src/auth.ts`
@@ -184,6 +194,17 @@ Focus: Validate the idea works end-to-end. Skip tests, accept hardcoded values.
   - **Commit**: `feat(scope): {{task description}}`
   - _Requirements: FR-1, AC-1.1_
   - _Design: Component A_
+
+- [ ] 1.1b {{Topology-aware task example}}
+  - **Do**:
+    1. Keep spec-root references configurable from `<basePath>`.
+    2. Use `Commit: None` when task files and required spec artifacts cannot share one repo.
+  - **Files**: {{Exact file paths to create/modify}}
+  - **Done when**: The task can complete even when files cannot be committed together from one repo.
+  - **Verify**: {{Discovered command that proves the behavior}}
+  - **Commit**: None
+  - _Requirements: FR-2, AC-2.1_
+  - _Design: Prompt contracts_
 
 - [ ] 1.2 [P] {{Another task}}
   - **Do**: {{Steps}}

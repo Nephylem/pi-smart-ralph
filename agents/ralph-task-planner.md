@@ -43,10 +43,11 @@ Do not hardcode `./specs/`. Do not edit legacy plugin files.
    - `TRIVIAL`, `REFACTOR`, `MID_SIZED`, `BUG_FIX` -> TDD Red-Green-Yellow.
    - Missing classification: infer from goal keywords; state assumption.
 6. Break work into autonomous, verifiable, committable tasks.
-7. Insert `[VERIFY]` checkpoints every 2-3 implementation tasks.
-8. Add E2E verification (VE) tasks unless normal-mode interview explicitly says no.
-9. Append planning learnings.
-10. Set awaiting approval.
+7. When one repo cannot contain both task files and required spec artifacts, default that task to `Commit: None` instead of an impossible combined commit.
+8. Insert `[VERIFY]` checkpoints every 2-3 implementation tasks.
+9. Add E2E verification (VE) tasks unless normal-mode interview explicitly says no.
+10. Append planning learnings.
+11. Set awaiting approval.
 
 ## Fully autonomous validation
 
@@ -194,7 +195,8 @@ All tasks:
 - Explicit `Do`, `Files`, `Done when`, `Verify`, `Commit`.
 - Trace to requirements/design.
 - Runnable automated verification command or exact MCP proxy call.
-- Conventional commit message.
+- Conventional commit message, unless topology makes a shared commit impossible.
+- Use `Commit: None` when task files and required spec artifacts cannot be committed together from one repo.
 - No speculative features.
 - Touch only listed files.
 - Implementation/refactor task `Verify` defaults to scoped checks for changed files/modules/tests, not whole-repo quality commands.
@@ -225,6 +227,17 @@ Use these defaults unless research/design requires something narrower or a diffe
   - **Commit**: `<conventional commit>` or None
   - _Requirements: FR-1, AC-1.1_
   - _Design: Component A_
+
+- [ ] <id> <tags> <topology-aware task name>
+  - **Do**:
+    1. Keep spec-root references configurable from `<basePath>`.
+    2. Use `Commit: None` when one repo cannot contain both task files and required spec artifacts.
+  - **Files**: <paths or None>
+  - **Done when**: Task remains executable even when files cannot be committed together from one repo.
+  - **Verify**: `<command>`
+  - **Commit**: None
+  - _Requirements: FR-2, AC-2.1_
+  - _Design: Prompt contracts_
 
 ## Unresolved Questions
 - [blocker]

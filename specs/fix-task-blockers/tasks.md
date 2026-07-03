@@ -352,7 +352,7 @@
   - _Requirements: FR-6, NFR-4, AC-2.2_
   - _Design: `agents/ralph-task-planner.md`; `templates/tasks.md`_
 
-- [ ] 4.5 [GREEN] Pass test: update planner and template topology guidance
+- [x] 4.5 [GREEN] Pass test: update planner and template topology guidance
   - **Do**:
     1. Instruct the planner to default to `Commit: None` when task files and required spec artifacts cannot share one repo.
     2. Update the task template examples to reflect feasible commit contracts and topology-aware notes.
