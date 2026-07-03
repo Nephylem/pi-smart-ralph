@@ -17,6 +17,7 @@ const cases = new Map([
   ['scanner', verifyScanner],
   ['dry-run', verifyDryRun],
   ['dry-run-existing', verifyDryRunExisting],
+  ['path-safety', verifyPathSafety],
   ['render-contract', verifyRenderContract],
   ['hash-skip-force', verifyHashSkipForce],
   ['changed-git', verifyChangedGit],
@@ -485,6 +486,89 @@ async function verifyDryRunExisting() {
       expectedFail(`dry-run with corrupt prior state must plan without rewriting the corrupt state; got ${JSON.stringify(corruptDryRunResult)}`);
     }
     assertExistingIndexFilesUnchanged(corruptBefore);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyPathSafety() {
+  const helper = await loadIndexingHelper();
+  const parseIndexArgs = helper?.parseIndexArgs;
+  const resolveIndexPaths = helper?.resolveIndexPaths;
+  const planIndexWrites = helper?.planIndexWrites;
+  const writeIndexPlan = helper?.writeIndexPlan;
+
+  if (typeof parseIndexArgs !== 'function') {
+    expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof resolveIndexPaths !== 'function') {
+    expectedFail('resolveIndexPaths is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof planIndexWrites !== 'function') {
+    expectedFail('planIndexWrites is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof writeIndexPlan !== 'function') {
+    expectedFail('writeIndexPlan is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-path-safety-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(tempRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const sourcePath = join(servicesRoot, 'accounts.service.ts');
+    const source = 'export class AccountsService { list() { return []; } }\n';
+    writeFileSync(sourcePath, source, 'utf8');
+
+    const parseResult = parseIndexArgs(['--path', scanRoot, '--type', 'services', '--quick']);
+    if (parseResult?.ok !== true) {
+      expectedFail(`path-safety fixture options must parse; got ${stringifyParseResult(parseResult)}`);
+    }
+
+    const paths = resolveIndexPaths({ cwd: projectRoot, scanPath: scanRoot, specRoot });
+    const escapedArtifactPath = resolve(paths.indexRoot, '..', 'escaped-path-safety.md');
+    const component = {
+      sourcePath,
+      sourceDisplayPath: 'src/services/accounts.service.ts',
+      artifactPath: escapedArtifactPath,
+      category: 'services',
+      hash: sha256(source),
+      name: 'accounts.service',
+      exports: ['AccountsService'],
+      methods: [],
+      dependencies: [],
+    };
+
+    let rejectedEscape = false;
+    try {
+      const plan = planIndexWrites({
+        paths,
+        options: parseResult.options,
+        components: [component],
+        externalResources: [],
+        externalErrors: [],
+        priorState: null,
+        indexedAt: '2026-07-03T00:00:00.000Z',
+      });
+      writeIndexPlan(plan.writes, { dryRun: false });
+    } catch (_error) {
+      rejectedEscape = true;
+    }
+
+    if (existsSync(escapedArtifactPath)) {
+      expectedFail(`path-safety enforcement must reject escaped artifact paths before writing outside .index; created ${escapedArtifactPath}`);
+    }
+
+    if (!rejectedEscape) {
+      expectedFail('path-safety enforcement must reject a crafted artifact path escape attempt before writing.');
+    }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

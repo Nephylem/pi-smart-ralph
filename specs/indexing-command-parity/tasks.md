@@ -524,7 +524,7 @@
   - _Requirements: FR-4, NFR-2, AC-2.3_
   - _Design: Atomic writer; Error Handling_
 
-- [ ] 2.3 [RED] Failing test: output path escape is rejected
+- [x] 2.3 [RED] Failing test: output path escape is rejected
   - **Do**:
     1. Add a `path-safety` verifier case with a crafted artifact path escape attempt.
     2. Assert the run fails before writing outside `<specRoot>/.index/`.
