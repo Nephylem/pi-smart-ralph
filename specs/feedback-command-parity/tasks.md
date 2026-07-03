@@ -71,7 +71,7 @@
   - _Requirements: FR-2, FR-4, FR-5, AC-1.2, AC-1.3, AC-1.4_
   - _Design: `extensions/ralph-specum/feedback.ts`; fixed target repo decision_
 
-- [ ] 1.6 [YELLOW] Refactor: isolate repo normalization and fallback rendering
+- [x] 1.6 [YELLOW] Refactor: isolate repo normalization and fallback rendering
   - **Do**:
     1. Extract repo normalization, title/body shaping, and URL encoding helpers.
     2. Keep fallback rendering deterministic for verifier assertions.
