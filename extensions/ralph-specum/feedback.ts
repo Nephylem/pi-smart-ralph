@@ -11,6 +11,19 @@ export const FEEDBACK_DEFAULT_CONFIRMED_BY = "unconfirmed";
 
 export type FeedbackCommandNotify = (ctx: ExtensionCommandContext, message: string, type?: "info" | "warning") => Promise<void>;
 export type FeedbackConfirmedBy = "unconfirmed" | "ui" | "yes-flag";
+export type FeedbackPromptAdapter = (title: string, prompt: string) => Promise<string | null>;
+export type FeedbackConfirmAdapter = (title: string, body: string) => Promise<boolean>;
+
+export interface FeedbackRuntimeAdapters {
+	input?: FeedbackPromptAdapter;
+	confirm?: FeedbackConfirmAdapter;
+}
+
+export interface FeedbackUsageResult {
+	mode: "usage";
+	message: string;
+	type: "warning";
+}
 
 export interface FeedbackIssueDraftV1 {
 	targetRepo: string;
@@ -95,23 +108,51 @@ export function formatFeedbackUsageMessage(): string {
 	].join("\n");
 }
 
+export function createFeedbackRuntimeAdapters(ctx: ExtensionCommandContext): FeedbackRuntimeAdapters {
+	return {
+		input: ctx.hasUI && ctx.ui?.input ? (title, prompt) => ctx.ui!.input(title, prompt) : undefined,
+		confirm: ctx.hasUI && ctx.ui?.confirm ? (title, body) => ctx.ui!.confirm(title, body) : undefined,
+	};
+}
+
+export async function resolveFeedbackMessageFromRuntime(
+	message: string | null | undefined,
+	runtime: FeedbackRuntimeAdapters,
+): Promise<string> {
+	const trimmedMessage = message?.trim() ?? "";
+	if (trimmedMessage) return trimmedMessage;
+	if (!runtime.input) return "";
+	const prompted = await runtime.input(
+		"Feedback message",
+		"Describe the feedback you want to submit. This stays draft-only until you explicitly confirm a write.",
+	);
+	return prompted?.trim() ?? "";
+}
+
+export function createFeedbackUsageResult(): FeedbackUsageResult {
+	return {
+		mode: "usage",
+		message: formatFeedbackUsageMessage(),
+		type: "warning",
+	};
+}
+
+export async function notifyFeedbackUsageResult(
+	ctx: ExtensionCommandContext,
+	notify: FeedbackCommandNotify,
+	result: FeedbackUsageResult,
+): Promise<void> {
+	await notify(ctx, result.message, result.type);
+}
+
 export function createFeedbackCommandHandler(notify: FeedbackCommandNotify) {
 	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 		const parsed = parseFeedbackCommandArgs(args);
-		let message = parsed.message?.trim() ?? "";
+		const runtime = createFeedbackRuntimeAdapters(ctx);
+		const message = await resolveFeedbackMessageFromRuntime(parsed.message, runtime);
 
 		if (!message) {
-			if (ctx.hasUI && ctx.ui?.input) {
-				const prompted = await ctx.ui.input(
-					"Feedback message",
-					"Describe the feedback you want to submit. This stays draft-only until you explicitly confirm a write.",
-				);
-				message = prompted?.trim() ?? "";
-			}
-		}
-
-		if (!message) {
-			await notify(ctx, formatFeedbackUsageMessage(), "warning");
+			await notifyFeedbackUsageResult(ctx, notify, createFeedbackUsageResult());
 			return;
 		}
 

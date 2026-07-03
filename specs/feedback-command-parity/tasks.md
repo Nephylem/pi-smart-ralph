@@ -118,7 +118,7 @@
   - _Requirements: FR-7, AC-3.1, AC-3.2_
   - _Design: message-resolution flow; usage mode_
 
-- [ ] 2.3 [YELLOW] Refactor: isolate runtime prompt helpers and usage results
+- [x] 2.3 [YELLOW] Refactor: isolate runtime prompt helpers and usage results
   - **Do**:
     1. Extract runtime adapters for `input`, `confirm`, and no-write usage output.
     2. Keep prompt and headless result shapes easy to stub in the verifier.
