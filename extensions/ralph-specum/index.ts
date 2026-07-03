@@ -69,6 +69,7 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
+import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
 	buildRefactorCascadePrompt,
@@ -149,6 +150,8 @@ const REQUIRED_PACKAGE_PATHS = [
 ] as const;
 
 const EXPECTED_RALPH_AGENTS = [
+	"Explore.md",
+	"Execute.md",
 	"ralph-research-analyst.md",
 	"ralph-product-manager.md",
 	"ralph-architect-reviewer.md",
@@ -320,8 +323,9 @@ function projectRalphAgentPath(cwd: string, agentName: string): string {
 
 function safeReadRalphAgentNames(agentsDir: string): { names: string[]; error?: string } {
 	try {
+		const expected = new Set<string>(EXPECTED_RALPH_AGENTS.map((name) => agentFileName(name)));
 		const names = readdirSync(agentsDir, { withFileTypes: true })
-			.filter((entry) => entry.isFile() && /^ralph-.*\.md$/.test(entry.name))
+			.filter((entry) => entry.isFile() && expected.has(entry.name))
 			.map((entry) => entry.name)
 			.sort();
 		return { names };
@@ -988,12 +992,12 @@ type RalphRuntimeConfigBootstrapResult = {
 
 const RALPH_SUBAGENTS_DEFAULT_CONFIG: Record<string, unknown> = {
 	toolDescriptionMode: "compact",
-	widgetMode: "background",
+	widgetMode: "off",
 	fleetView: false,
 	defaultJoinMode: "smart",
 	schedulingEnabled: false,
 	scopeModels: false,
-	disableDefaultAgents: false,
+	disableDefaultAgents: true,
 	maxConcurrent: 4,
 	defaultMaxTurns: 0,
 	graceTurns: 5,
@@ -1049,6 +1053,24 @@ function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string
 		}
 		nextConfig[key] = value;
 		result.updatedKeys.push(key);
+	}
+
+	if (relativePath === ".pi/subagents.json") {
+		if (nextConfig.widgetMode === "background" || nextConfig.widgetMode === "all") {
+			nextConfig.widgetMode = "off";
+			if (!result.updatedKeys.includes("widgetMode")) result.updatedKeys.push("widgetMode");
+			result.preservedKeys = result.preservedKeys.filter((key) => key !== "widgetMode");
+		}
+		if (nextConfig.fleetView === true) {
+			nextConfig.fleetView = false;
+			if (!result.updatedKeys.includes("fleetView")) result.updatedKeys.push("fleetView");
+			result.preservedKeys = result.preservedKeys.filter((key) => key !== "fleetView");
+		}
+		if (nextConfig.disableDefaultAgents !== true) {
+			nextConfig.disableDefaultAgents = true;
+			if (!result.updatedKeys.includes("disableDefaultAgents")) result.updatedKeys.push("disableDefaultAgents");
+			result.preservedKeys = result.preservedKeys.filter((key) => key !== "disableDefaultAgents");
+		}
 	}
 
 	if (!result.created && result.updatedKeys.length === 0) return result;
@@ -1438,7 +1460,7 @@ function formatFooterBadge(theme: { fg(color: any, text: string): string; bold(t
 	return `${theme.fg("accent", "[")}${theme.fg(color as any, theme.bold(content))}${theme.fg("accent", "]")}`;
 }
 
-function formatFooterBar(current: number, max: number, width = 12): string {
+function formatFooterBar(current: number, max: number, width = 16): string {
 	if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
 		return `[>${"-".repeat(Math.max(0, width - 1))}]`;
 	}
@@ -1475,10 +1497,10 @@ function formatFooterElapsed(startedAt: number): string {
 
 function formatMainContextUsage(ctx: ExtensionCommandContext): string {
 	const usage = ctx.getContextUsage();
-	if (!usage) return `Main 🪟 ${formatFooterProgress(0, 0)}`;
+	if (!usage) return `🪟 ${formatFooterProgress(0, 0)}`;
 	const current = usage.tokens !== null && Number.isFinite(usage.tokens) ? usage.tokens : 0;
 	const max = Number.isFinite(usage.contextWindow) ? usage.contextWindow : 0;
-	return `Main 🪟 ${formatFooterProgress(current, max)}`;
+	return `🪟 ${formatFooterProgress(current, max)}`;
 }
 
 function ralphFooterProjectDirectory(ctx: ExtensionCommandContext): string {
@@ -1582,29 +1604,13 @@ function formatFooterMcpBadge(
 	return formatFooterBadge(theme, `⚙  mcp ${active}/${total}`, active > 0 ? "success" : "dim");
 }
 
-function formatSubagentFooterUsage(record?: {
-	lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
-	session?: {
-		getSessionStats?: () => {
-			tokens?: { total?: number };
-			contextUsage?: { contextWindow?: number; percent?: number | null };
-		};
-	};
-}): string {
-	if (!record) return formatFooterProgress(0, 0);
-	const stats = typeof record.session?.getSessionStats === "function" ? record.session.getSessionStats() : undefined;
-	const current = typeof stats?.tokens?.total === "number" ? stats.tokens.total : getSubagentLifetimeUsageTokens(record);
-	const max = typeof stats?.contextUsage?.contextWindow === "number" ? stats.contextUsage.contextWindow : 0;
-	return formatFooterProgress(current, max);
-}
-
 function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
 	if (!ctx.hasUI) return;
 	ralphFooterState.ctx = ctx;
 	ctx.ui.setFooter((tui, theme, footerData) => {
 		const unsubscribeBranch = footerData.onBranchChange(() => tui.requestRender());
 		const timer = setInterval(() => {
-			if (ralphFooterState.subagent || ralphStatusAnimation.active) tui.requestRender();
+			if (ralphStatusAnimation.active) tui.requestRender();
 		}, RALPH_FOOTER_REFRESH_INTERVAL_MS);
 		(timer as { unref?: () => void }).unref?.();
 
@@ -1642,7 +1648,6 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 						? formatFooterIoBadge(theme, mainUsage)
 						: formatFooterBadge(theme, theme.fg("muted", "📊 idle"), "dim"),
 					formatFooterMcpBadge(theme, registry, ctx.cwd),
-					formatFooterBadge(theme, theme.fg("muted", "🤖 idle"), "dim"),
 				].join(" ");
 				return [truncateToWidth(topLine, width, "…"), truncateToWidth(bottomParts, width, "…")];
 			},
@@ -3059,7 +3064,7 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"- /ralph-epic-switch <epic>                    Switch active epic marker",
 		"- /ralph-epic-next [--peek] [--switch] [--start] [epic]  Preview/select next unblocked child spec",
 		"- /ralph-epic-cancel [--delete-child-specs] [epic]  Cancel active epic execution state safely",
-		"- /ralph-start [--fresh] [--quick|--autonomous] [--skip-research] [--tasks-size fine|coarse] [--next-epic-spec] [spec-name] [goal]  Create/resume a spec",
+		"- /ralph-start [--fresh] [--quick|--autonomous] [--skip-research] [--tasks-size fine|coarse] [--next-epic-spec] [spec-name] [-- goal]  Create/resume a spec; use `--` before markdown goals containing flag-like text",
 		"- /ralph-research [spec]                        Generate research.md",
 		"- /ralph-requirements [spec]                    Generate requirements.md",
 		"- /ralph-design [spec]                          Generate design.md",
@@ -3182,11 +3187,6 @@ function tokenizeCommandArgs(args: string): { tokens: string[]; error?: string }
 }
 
 function parseStartArgs(args: string): StartArguments {
-	const tokenized = tokenizeCommandArgs(args);
-	if (tokenized.error) {
-		return emptyStartArguments(tokenized.error);
-	}
-
 	const positionals: string[] = [];
 	const warnings: string[] = [];
 	let fresh = false;
@@ -3197,45 +3197,67 @@ function parseStartArgs(args: string): StartArguments {
 	let commitSpec: boolean | undefined;
 	let specsDir: string | undefined;
 	let tasksSize: StartArguments["tasksSize"];
+	let literalGoal = "";
+	let cursor = 0;
 
-	for (let index = 0; index < tokenized.tokens.length; index += 1) {
-		const token = tokenized.tokens[index];
+	while (true) {
+		const result = readCommandArgToken(args, cursor);
+		if (!result) break;
+		if (result.error) return emptyStartArguments(result.error);
+
+		const token = result.token;
+		if (token === "--") {
+			literalGoal = args.slice(result.nextIndex).trim();
+			break;
+		}
 		if (token === "--fresh") {
 			fresh = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--quick") {
 			quickMode = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--autonomous" || token === "--auto") {
 			autonomousMode = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--skip-research") {
 			skipResearch = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--next-epic-spec" || token === "--epic-next") {
 			nextEpicSpec = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--commit-spec") {
 			commitSpec = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--no-commit-spec") {
 			commitSpec = false;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--specs-dir" || token.startsWith("--specs-dir=")) {
-			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			const valueResult = token.includes("=") ? null : readCommandArgToken(args, result.nextIndex);
+			if (valueResult?.error) return emptyStartArguments(valueResult.error);
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : valueResult?.token;
 			if (!value || value.startsWith("--")) return emptyStartArguments("--specs-dir requires a path value.");
 			specsDir = value;
+			cursor = token.includes("=") ? result.nextIndex : (valueResult?.nextIndex ?? result.nextIndex);
 			continue;
 		}
 		if (token === "--tasks-size" || token.startsWith("--tasks-size=")) {
-			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			const valueResult = token.includes("=") ? null : readCommandArgToken(args, result.nextIndex);
+			if (valueResult?.error) return emptyStartArguments(valueResult.error);
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : valueResult?.token;
 			if (!value || value.startsWith("--")) return emptyStartArguments("--tasks-size requires fine or coarse.");
 			if (value === "fine" || value === "coarse") {
 				tasksSize = value;
@@ -3243,24 +3265,29 @@ function parseStartArgs(args: string): StartArguments {
 				tasksSize = "fine";
 				warnings.push(`Invalid --tasks-size value "${value}"; defaulting to fine.`);
 			}
+			cursor = token.includes("=") ? result.nextIndex : (valueResult?.nextIndex ?? result.nextIndex);
 			continue;
 		}
 		if (token.startsWith("--")) {
 			return emptyStartArguments(`Unknown option: ${token}`);
 		}
 		positionals.push(token);
+		cursor = result.nextIndex;
 	}
 
 	let reference: string | null = null;
 	let goal = "";
 	if (positionals.length > 0) {
 		const first = positionals[0];
+		const remaining = positionals.slice(1).join(" ").trim();
 		if (isPathReference(first) || isValidSpecName(first)) {
 			reference = first;
-			goal = positionals.slice(1).join(" ").trim();
+			goal = [remaining, literalGoal].filter(Boolean).join(" ").trim();
 		} else {
-			goal = positionals.join(" ").trim();
+			goal = [positionals.join(" ").trim(), literalGoal].filter(Boolean).join(" ").trim();
 		}
+	} else {
+		goal = literalGoal.trim();
 	}
 
 	if (!reference && goal && (quickMode || autonomousMode)) {
@@ -3385,12 +3412,12 @@ function isSpecUnderConfiguredRoot(spec: SpecEntry, options: RalphPathOptions): 
 function resolveStartTarget(parsed: StartArguments, options: RalphPathOptions): { target?: StartTarget; error?: string } {
 	if (!parsed.reference) {
 		if (parsed.goal) {
-			return { error: "Spec name is required when a goal is provided. Usage: /ralph-start <spec-name> [goal]" };
+			return { error: "Spec name is required when a goal is provided. Usage: /ralph-start <spec-name> [-- goal]" };
 		}
 
 		const currentValue = readCurrentSpecValue(options);
 		if (!currentValue) {
-			return { error: "Spec name is required. Usage: /ralph-start <spec-name> [goal]" };
+			return { error: "Spec name is required. Usage: /ralph-start <spec-name> [-- goal]" };
 		}
 
 		const spec = resolveCurrentSpec(options);
@@ -4258,36 +4285,60 @@ type SubagentCompletion = {
 	status?: string;
 };
 
-type RalphSubagentManager = {
-	getRecord(
-		id: string,
-	): {
-		id: string;
-		startedAt: number;
-		completedAt?: number;
-		status: string;
-		toolUses: number;
-		lifetimeUsage: {
-			input: number;
-			output: number;
-			cacheWrite: number;
-		};
-		session?: {
-			getSessionStats?: () => {
-				tokens?: {
-					total?: number;
-				};
-				contextUsage?: {
-					contextWindow?: number;
-					percent?: number | null;
-				};
+type RalphSubagentRecord = {
+	id: string;
+	type?: string;
+	description?: string;
+	startedAt: number;
+	completedAt?: number;
+	status: string;
+	toolUses: number;
+	lifetimeUsage: {
+		input: number;
+		output: number;
+		cacheWrite: number;
+	};
+	session?: {
+		getSessionStats?: () => {
+			tokens?: {
+				input?: number;
+				output?: number;
+				cacheWrite?: number;
+			};
+			contextUsage?: {
+				percent?: number | null;
 			};
 		};
-	} | undefined;
+	};
+};
+
+type RalphSubagentManager = {
+	getRecord(id: string): RalphSubagentRecord | undefined;
+};
+
+type RalphTrackedSubagentEntry = {
+	id: string;
+	type?: string;
+	description?: string;
+	startedAt: number;
+	completedAt?: number;
+	status: string;
+	toolUses?: number;
+	totalTokens?: number;
 };
 
 const RALPH_SUBAGENT_STATUS_INTERVAL_MS = 250;
 const RALPH_TOKEN_BAR_WIDTH = 16;
+const RALPH_SUBAGENT_WIDGET_KEY = "ralph-subagents";
+const RALPH_SUBAGENT_WIDGET_BAR_WIDTH = 10;
+const RALPH_SUBAGENT_WIDGET_MAX_LINES = 6;
+const RALPH_SUBAGENT_WIDGET_LINGER_MS = 5_000;
+const RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const ralphSubagentWidgetState: {
+	tracked: Map<string, RalphTrackedSubagentEntry>;
+} = {
+	tracked: new Map(),
+};
 
 function getRalphSubagentManager(): RalphSubagentManager | undefined {
 	const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
@@ -4324,39 +4375,247 @@ function getSubagentLifetimeUsageTokens(record: { lifetimeUsage?: { input?: numb
 	return Math.max(0, (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheWrite ?? 0));
 }
 
+function getSubagentSessionTokens(record?: {
+	session?: {
+		getSessionStats?: () => {
+			tokens?: { input?: number; output?: number; cacheWrite?: number };
+		};
+	};
+}): number | null {
+	const stats = typeof record?.session?.getSessionStats === "function" ? record.session.getSessionStats() : undefined;
+	const tokens = stats?.tokens;
+	if (!tokens) return null;
+	const total = (tokens.input ?? 0) + (tokens.output ?? 0) + (tokens.cacheWrite ?? 0);
+	return Number.isFinite(total) ? Math.max(0, total) : null;
+}
+
+function getSubagentContextPercent(record?: {
+	session?: {
+		getSessionStats?: () => {
+			contextUsage?: { percent?: number | null };
+		};
+	};
+}): number | null {
+	const stats = typeof record?.session?.getSessionStats === "function" ? record.session.getSessionStats() : undefined;
+	const percent = stats?.contextUsage?.percent;
+	return typeof percent === "number" && Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null;
+}
+
 function getSubagentUsageText(record?: {
 	lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
 	session?: {
 		getSessionStats?: () => {
-			tokens?: { total?: number };
-			contextUsage?: { contextWindow?: number; percent?: number | null };
+			tokens?: { input?: number; output?: number; cacheWrite?: number };
+			contextUsage?: { percent?: number | null };
 		};
 	};
 }): string {
 	if (!record) return "";
 
-	const session = record.session;
-	const stats = typeof session?.getSessionStats === "function" ? session.getSessionStats() : undefined;
-	const sessionTokens = typeof stats?.tokens?.total === "number" ? stats.tokens.total : undefined;
-	const contextWindow = typeof stats?.contextUsage?.contextWindow === "number" ? stats.contextUsage.contextWindow : undefined;
-	const contextPercent =
-		typeof stats?.contextUsage?.percent === "number" && Number.isFinite(stats.contextUsage.percent)
-			? stats.contextUsage.percent
-			: undefined;
-
-	if (contextWindow !== undefined && Number.isFinite(contextWindow) && contextWindow > 0 && typeof sessionTokens === "number" && Number.isFinite(sessionTokens)) {
-		const percent = contextPercent === undefined ? (sessionTokens / contextWindow) * 100 : contextPercent;
-		const safePercent = Math.max(0, Math.min(100, percent));
-		if (Number.isFinite(safePercent)) {
-			return formatTokenUsageBar(Math.max(0, sessionTokens), contextWindow, RALPH_TOKEN_BAR_WIDTH).replace(
-				/^.*?% /,
-				`${safePercent.toFixed(1)}% `,
-			);
-		}
+	const sessionTokens = getSubagentSessionTokens(record);
+	const contextPercent = getSubagentContextPercent(record);
+	if (sessionTokens !== null && contextPercent !== null) {
+		return `${formatTokenCount(sessionTokens)} tokens (${Math.round(contextPercent)}%)`;
 	}
+	if (sessionTokens !== null) return `${formatTokenCount(sessionTokens)} tokens`;
 
 	const lifetime = getSubagentLifetimeUsageTokens(record);
 	return `${formatTokenCount(lifetime)} tokens`;
+}
+
+function formatSubagentWidgetName(type?: string): string {
+	const normalized = (type ?? "Agent").trim().replace(/^ralph[-\s]+/i, "");
+	return normalized
+		.split(/[-_\s]+/)
+		.filter(Boolean)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ") || "Agent";
+}
+
+function getSubagentWidgetProgress(record: RalphSubagentRecord): { current: number; percent: number | null } {
+	const current = getSubagentSessionTokens(record) ?? getSubagentLifetimeUsageTokens(record);
+	const percent = getSubagentContextPercent(record);
+	return { current, percent };
+}
+
+function formatSubagentWidgetProgress(record: RalphSubagentRecord): string {
+	const { current, percent } = getSubagentWidgetProgress(record);
+	if (percent === null) {
+		return `${formatTokenCount(current)} tokens`;
+	}
+	return `${percent.toFixed(1)}% ${formatFooterBar(percent, 100, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)} ${formatTokenCount(current)} tokens`;
+}
+
+function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
+	if (!raw || typeof raw !== "object") return;
+	const event = raw as {
+		id?: unknown;
+		type?: unknown;
+		description?: unknown;
+		status?: unknown;
+		toolUses?: unknown;
+		tokens?: { total?: unknown };
+	};
+	if (typeof event.id !== "string" || !event.id.trim()) return;
+	const existing = ralphSubagentWidgetState.tracked.get(event.id);
+	const now = Date.now();
+	const nextStatus = typeof event.status === "string" && event.status.trim() ? event.status : fallbackStatus;
+	const next: RalphTrackedSubagentEntry = {
+		id: event.id,
+		type: typeof event.type === "string" ? event.type : existing?.type,
+		description: typeof event.description === "string" ? event.description : existing?.description,
+		startedAt: existing?.startedAt ?? now,
+		completedAt: existing?.completedAt,
+		status: nextStatus,
+		toolUses: typeof event.toolUses === "number" && Number.isFinite(event.toolUses) ? Math.max(0, event.toolUses) : existing?.toolUses,
+		totalTokens: typeof event.tokens?.total === "number" && Number.isFinite(event.tokens.total) ? Math.max(0, event.tokens.total) : existing?.totalTokens,
+	};
+	if (nextStatus !== "running" && nextStatus !== "queued") next.completedAt = now;
+	if (nextStatus === "running" && existing?.startedAt) next.startedAt = existing.startedAt;
+	if (nextStatus === "queued" && existing?.startedAt) next.startedAt = existing.startedAt;
+	ralphSubagentWidgetState.tracked.set(event.id, next);
+}
+
+function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSubagentRecord {
+	const live = getRalphSubagentManager()?.getRecord(entry.id);
+	if (live) {
+		return {
+			...live,
+			type: live.type ?? entry.type,
+			description: live.description ?? entry.description,
+			startedAt: live.startedAt || entry.startedAt,
+			completedAt: live.completedAt ?? entry.completedAt,
+			status: live.status || entry.status,
+		};
+	}
+	return {
+		id: entry.id,
+		type: entry.type,
+		description: entry.description,
+		startedAt: entry.startedAt,
+		completedAt: entry.completedAt,
+		status: entry.status,
+		toolUses: entry.toolUses ?? 0,
+		lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
+		session: entry.totalTokens !== undefined ? {
+			getSessionStats: () => ({
+				tokens: { input: entry.totalTokens ?? 0, output: 0, cacheWrite: 0 },
+				contextUsage: { percent: null },
+			}),
+		} : undefined,
+	};
+}
+
+function readActiveSubagentRecords(): RalphSubagentRecord[] {
+	return [...ralphSubagentWidgetState.tracked.values()]
+		.map(resolveTrackedSubagentRecord)
+		.filter((record) => record.status === "running" || record.status === "queued")
+		.sort((left, right) => left.startedAt - right.startedAt);
+}
+
+function readLingeringSubagentRecords(now = Date.now()): RalphSubagentRecord[] {
+	const lingering: RalphSubagentRecord[] = [];
+	for (const [id, entry] of ralphSubagentWidgetState.tracked.entries()) {
+		const record = resolveTrackedSubagentRecord(entry);
+		if (record.status === "running" || record.status === "queued") continue;
+		if (!record.completedAt) continue;
+		if (now - record.completedAt > RALPH_SUBAGENT_WIDGET_LINGER_MS) {
+			ralphSubagentWidgetState.tracked.delete(id);
+			continue;
+		}
+		lingering.push(record);
+	}
+	return lingering.sort((left, right) => (right.completedAt ?? 0) - (left.completedAt ?? 0));
+}
+
+function formatSubagentWidgetFinishedState(
+	record: RalphSubagentRecord,
+	theme: { fg(color: any, text: string): string; bold(text: string): string },
+): { icon: string; status: string; color: string } {
+	switch (record.status) {
+		case "completed":
+			return { icon: theme.fg("success", "✓"), status: "done", color: "success" };
+		case "steered":
+			return { icon: theme.fg("warning", "✓"), status: "turn limit", color: "warning" };
+		case "stopped":
+			return { icon: theme.fg("dim", "■"), status: "stopped", color: "dim" };
+		case "error":
+			return { icon: theme.fg("error", "✕"), status: "error", color: "error" };
+		case "aborted":
+		default:
+			return { icon: theme.fg("error", "✕"), status: "aborted", color: "warning" };
+	}
+}
+
+function formatSubagentWidgetLine(
+	record: RalphSubagentRecord,
+	frame: string,
+	theme: { fg(color: any, text: string): string; bold(text: string): string },
+): string {
+	const name = theme.bold(theme.fg("text", formatSubagentWidgetName(record.type)));
+	if (record.status === "queued") {
+		return `${theme.fg("accent", "[")} ${theme.fg("muted", "⋯")} ${name} ${theme.fg("muted", "🤖 queued")} ${theme.fg("accent", "]")}`;
+	}
+	if (record.status !== "running") {
+		const finished = formatSubagentWidgetFinishedState(record, theme);
+		const elapsed = formatFooterElapsed(record.startedAt);
+		return `${theme.fg("accent", "[")} ${finished.icon} ${name} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("accent", "]")}`;
+	}
+	const icon = theme.fg("accent", frame);
+	const progress = formatSubagentWidgetProgress(record);
+	const tools = `${record.toolUses} tool${record.toolUses === 1 ? "" : "s"}`;
+	const elapsed = formatFooterElapsed(record.startedAt);
+	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 ")}${theme.fg("text", progress)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("accent", "]")}`;
+}
+
+function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
+	if (!ctx.hasUI) return;
+	ralphSubagentWidgetState.tracked.clear();
+	ctx.ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
+		let hadVisible = false;
+		const request = () => tui.requestRender();
+		const unsubscribeCreated = eventOn(pi.events, "subagents:created", (raw) => {
+			upsertTrackedSubagent(raw, "queued");
+			request();
+		});
+		const unsubscribeStarted = eventOn(pi.events, "subagents:started", (raw) => {
+			upsertTrackedSubagent(raw, "running");
+			request();
+		});
+		const unsubscribeCompleted = eventOn(pi.events, "subagents:completed", (raw) => {
+			upsertTrackedSubagent(raw, "completed");
+			request();
+		});
+		const unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => {
+			upsertTrackedSubagent(raw, "error");
+			request();
+		});
+		const timer = setInterval(() => {
+			const now = Date.now();
+			const hasVisible = readActiveSubagentRecords().length > 0 || readLingeringSubagentRecords(now).length > 0;
+			if (hasVisible || hadVisible) tui.requestRender();
+			hadVisible = hasVisible;
+		}, RALPH_SUBAGENT_STATUS_INTERVAL_MS);
+		(timer as { unref?: () => void }).unref?.();
+		return {
+			dispose() {
+				unsubscribeCreated();
+				unsubscribeStarted();
+				unsubscribeCompleted();
+				unsubscribeFailed();
+				clearInterval(timer);
+			},
+			render() {
+				const now = Date.now();
+				const records = [...readActiveSubagentRecords(), ...readLingeringSubagentRecords(now)];
+				hadVisible = records.length > 0;
+				if (records.length === 0) return [];
+				const width = tui.terminal.columns;
+				const frame = RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES[Math.floor(now / RALPH_SUBAGENT_STATUS_INTERVAL_MS) % RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES.length] ?? "⠋";
+				return records.slice(0, RALPH_SUBAGENT_WIDGET_MAX_LINES).map((record) => truncateToWidth(formatSubagentWidgetLine(record, frame, theme), width, "…"));
+			},
+		};
+	}, { placement: "aboveEditor" });
 }
 
 function setSubagentStatusSurfaces(ctx: ExtensionCommandContext, message: string): void {
@@ -6295,6 +6554,22 @@ function buildImplementationPrompt(
 	options: RalphPathOptions,
 ): string {
 	const progressPath = getProgressPath(spec, options);
+	const workspaceReport = analyzeTaskWorkspace({
+		basePath: spec.absolutePath,
+		filesDirective: task.fields["files"],
+		tasksPath: artifactPath(spec, "tasks"),
+		progressPath,
+		commitDirective: task.fields["commit"],
+	});
+	const workspaceReportText = formatTaskWorkspaceReport(workspaceReport);
+	const workspaceGuidance = definition.completionSignal === "TASK_COMPLETE"
+		? [
+			"- Preflight workspace topology before commit handling and follow the computed report below.",
+			workspaceReport.topology === "single_repo"
+				? "- single_repo keeps existing commit-required behavior unless the task explicitly says `Commit: None`."
+				: "- Non-single_repo workspaces may complete with `commit: none` when one combined commit cannot span required files.",
+		]
+		: [];
 	return [
 		`You are running one Smart Ralph implementation-loop task as ${definition.agentName}.`,
 		"",
@@ -6312,6 +6587,7 @@ function buildImplementationPrompt(
 		"- Do not edit Smart Ralph package/runtime files unless they are explicitly listed in the task.",
 		"- Never ask the user; report USER_INPUT_REQUIRED or a blocker instead.",
 		"- The coordinator will update native pi-task cards and will not advance without evidence.",
+		...workspaceGuidance,
 		"",
 		...agentSpecificImplementationInstructions(definition),
 		"",
@@ -6323,6 +6599,11 @@ function buildImplementationPrompt(
 		"Current task block:",
 		"~~~markdown",
 		task.block,
+		"~~~",
+		"",
+		"Workspace preflight:",
+		"~~~text",
+		workspaceReportText,
 		"~~~",
 		"",
 		promptFileSection("Progress", progressPath, readProgress(spec, options)),
@@ -7004,6 +7285,13 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 			}
 
 			setRalphStatus(ctx, `Ralph implement: ${task.activeForm}`);
+			const workspaceReport = analyzeTaskWorkspace({
+				basePath: spec.absolutePath,
+				filesDirective: task.fields["files"],
+				tasksPath: artifactPath(spec, "tasks"),
+				progressPath: getProgressPath(spec, options),
+				commitDirective: task.fields["commit"],
+			});
 			const prompt = buildImplementationPrompt(task, definition, spec, state, options);
 			let validation: CompletionValidation;
 			let completionOutput = "";
@@ -9277,6 +9565,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		await bootstrapBundledRuntimes(pi);
 		installRalphFooter(pi, ctx);
+		installRalphSubagentWidget(pi, ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -9284,7 +9573,10 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		ralphFooterState.ctx = null;
 		ralphFooterState.subagent = null;
 		stopRalphStatusAnimation();
-		if (ctx.hasUI) ctx.ui.setFooter(undefined);
+		if (ctx.hasUI) {
+			ctx.ui.setFooter(undefined);
+			ctx.ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, undefined);
+		}
 	});
 
 	pi.on("resources_discover", async () => {
@@ -9307,7 +9599,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"/ralph-epic-switch  Switch the active epic marker.",
 					"/ralph-epic-next    Preview/select the next unblocked child spec; --peek previews, --switch updates the marker, --start begins it.",
 					"/ralph-epic-cancel  Cancel active epic execution state safely; --delete-child-specs also removes child spec dirs after confirmation.",
-					"/ralph-start        Create or resume a spec; supports --fresh, --quick, --autonomous, --skip-research, --tasks-size fine|coarse, --next-epic-spec.",
+					"/ralph-start        Create or resume a spec; supports --fresh, --quick, --autonomous, --skip-research, --tasks-size fine|coarse, --next-epic-spec, and `--` before markdown goals.",
 					"/ralph-research     Generate research.md with ralph-research-analyst.",
 					"/ralph-requirements Generate requirements.md with ralph-product-manager.",
 					"/ralph-design       Generate design.md with ralph-architect-reviewer.",

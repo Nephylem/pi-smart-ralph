@@ -171,7 +171,7 @@
   - _Requirements: FR-3, FR-7, AC-1.2, AC-2.3_
   - _Design: `extensions/ralph-specum/index.ts`; Data Flow step 3_
 
-- [ ] 2.5 [GREEN] Pass test: integrate workspace preflight into coordinator flow
+- [x] 2.5 [GREEN] Pass test: integrate workspace preflight into coordinator flow
   - **Do**:
     1. Compute the workspace report in `extensions/ralph-specum/index.ts` before executor dispatch.
     2. Pass topology/preflight context into the execution path.
