@@ -21,15 +21,14 @@ let activeCase = requestedCase;
 
 const acceptanceChecklistCaseKey = 'acceptance-checklist';
 const cleanupCaseKey = 'cleanup';
-const acceptanceChecklistCases = [
-  'topology-classification-fixtures',
-  'commit-mode-derivation',
-  'relaxed-completion-validation-fixtures',
-  'topology-blocker-priority-contract',
-  'red-pass-evidence-contract',
-  'executor-topology-contract',
-  'planner-template-contract',
-];
+const acceptanceChecklistCoverage = {
+  topologyEnums: ['topology-classification-fixtures'],
+  commitNone: ['commit-mode-derivation'],
+  relaxedBlockerPriority: ['relaxed-completion-validation-fixtures', 'topology-blocker-priority-contract'],
+  promptContracts: ['executor-topology-contract', 'planner-template-contract'],
+  redPass: ['red-pass-evidence-contract'],
+};
+const acceptanceChecklistCases = Object.values(acceptanceChecklistCoverage).flat();
 const verifierTempPrefixes = [
   'task-blockers-topology-',
   'task-blockers-normalization-',
@@ -547,16 +546,26 @@ async function verifyPlannerTemplateContract() {
 }
 
 async function verifyAcceptanceChecklist() {
-  for (const caseName of acceptanceChecklistCases) {
-    const verifyCase = cases.get(caseName);
-    if (typeof verifyCase !== 'function') {
-      throw new Error(`acceptance checklist is missing verifier case ${caseName}`);
+  for (const [coverageName, coverageCases] of Object.entries(acceptanceChecklistCoverage)) {
+    if (!Array.isArray(coverageCases) || coverageCases.length === 0) {
+      throw new Error(`acceptance checklist coverage ${coverageName} must list at least one verifier case`);
     }
 
-    const result = await runVerifierCase(caseName, verifyCase);
-    if (!result.ok) {
-      throw result.error;
+    for (const caseName of coverageCases) {
+      const verifyCase = cases.get(caseName);
+      if (typeof verifyCase !== 'function') {
+        throw new Error(`acceptance checklist is missing verifier case ${caseName}`);
+      }
+
+      const result = await runVerifierCase(caseName, verifyCase);
+      if (!result.ok) {
+        throw result.error;
+      }
     }
+  }
+
+  if (!supportedCaseNames.includes(cleanupCaseKey)) {
+    expectedFail('acceptance checklist must expose a focused `cleanup` case so package verification can prove temp artifacts are removed.');
   }
 
   const packageJsonPath = join(root, 'package.json');
