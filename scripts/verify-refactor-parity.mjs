@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const root = process.cwd();
@@ -9,6 +11,7 @@ let activeCase = requestedCase;
 
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
+  ['spec-resolution', verifySpecResolution],
 ]);
 
 async function main() {
@@ -123,6 +126,64 @@ async function verifyCommandRegistration() {
   }
 }
 
+async function verifySpecResolution() {
+  const resolveRefactorSpecPlan = await loadResolveRefactorSpecPlan();
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-spec-resolution-'));
+
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const configuredSpecRoot = join(projectRoot, 'custom-specs');
+    const explicitSpecRoot = join(configuredSpecRoot, 'explicit-target');
+    const currentSpecRoot = join(configuredSpecRoot, 'current-target');
+    const emptySpecRoot = join(configuredSpecRoot, 'empty-target');
+
+    mkdirSync(join(projectRoot, '.pi'), { recursive: true });
+    mkdirSync(explicitSpecRoot, { recursive: true });
+    mkdirSync(currentSpecRoot, { recursive: true });
+    mkdirSync(emptySpecRoot, { recursive: true });
+
+    writeFileSync(join(projectRoot, '.pi', 'ralph-specum.local.md'), ['---', 'specs_dirs:', '  - ./custom-specs', '---', ''].join('\n'), 'utf8');
+    writeFileSync(join(explicitSpecRoot, 'requirements.md'), '# Explicit target\n', 'utf8');
+    writeFileSync(join(currentSpecRoot, 'design.md'), '# Current target\n', 'utf8');
+    writeFileSync(join(configuredSpecRoot, '.current-spec'), 'current-target\n', 'utf8');
+    writeFileSync(join(emptySpecRoot, 'notes.md'), 'no refactorable artifacts\n', 'utf8');
+
+    const explicitPlan = await resolveRefactorSpecPlan({ cwd: projectRoot, reference: 'explicit-target' });
+    assertEqual(explicitPlan?.spec?.absolutePath ?? explicitPlan?.specPath, explicitSpecRoot, 'configured-root explicit spec path');
+    assertEqual(explicitPlan?.spec?.rootAbsolutePath ?? explicitPlan?.specRoot, configuredSpecRoot, 'configured-root explicit spec root');
+    assertArrayEqual(explicitPlan?.availableFiles ?? explicitPlan?.artifacts, ['requirements'], 'explicit artifact inventory');
+
+    const currentPlan = await resolveRefactorSpecPlan({ cwd: projectRoot, reference: null });
+    assertEqual(currentPlan?.spec?.absolutePath ?? currentPlan?.specPath, currentSpecRoot, 'configured-root current spec path');
+    assertArrayEqual(currentPlan?.availableFiles ?? currentPlan?.artifacts, ['design'], 'current-spec artifact inventory');
+
+    const emptyBefore = hashDirectory(emptySpecRoot);
+    let emptyError = null;
+    try {
+      await resolveRefactorSpecPlan({ cwd: projectRoot, reference: 'empty-target' });
+    } catch (error) {
+      emptyError = error;
+    }
+
+    if (!emptyError) {
+      throw new Error('specs with no refactorable artifacts must fail before writes');
+    }
+
+    const emptyMessage = String(emptyError?.message ?? emptyError);
+    if (!/requirements\.md|design\.md|tasks\.md|artifact/i.test(emptyMessage)) {
+      throw new Error(`no-artifact failure must mention refactorable artifacts; got ${emptyMessage}`);
+    }
+
+    const emptyAfter = hashDirectory(emptySpecRoot);
+    assertEqual(emptyAfter, emptyBefore, 'no-artifact guard must not write files');
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -132,6 +193,17 @@ async function loadParseRefactorArgs() {
   }
 
   return parseRefactorArgs;
+}
+
+async function loadResolveRefactorSpecPlan() {
+  const helper = await loadRefactorHelper();
+  const resolveRefactorSpecPlan = helper?.resolveRefactorSpecPlan;
+
+  if (typeof resolveRefactorSpecPlan !== 'function') {
+    expectedFail('resolveRefactorSpecPlan is not exported from extensions/ralph-specum/refactor.ts yet.');
+  }
+
+  return resolveRefactorSpecPlan;
 }
 
 async function loadRefactorHelper() {
@@ -149,6 +221,46 @@ function stringifyParseResult(result) {
     if (value instanceof Error) return { message: value.message };
     return value;
   });
+}
+
+function hashDirectory(directoryPath) {
+  const hash = createHash('sha256');
+  appendDirectoryHash(hash, directoryPath, '.');
+  return hash.digest('hex');
+}
+
+function appendDirectoryHash(hash, absolutePath, relativePath) {
+  const entries = readDirectoryEntries(absolutePath);
+  for (const entry of entries) {
+    const childRelativePath = relativePath === '.' ? entry.name : `${relativePath}/${entry.name}`;
+    const childPath = join(absolutePath, entry.name);
+    hash.update(`${childRelativePath}:${entry.type}\n`);
+    if (entry.type === 'dir') {
+      appendDirectoryHash(hash, childPath, childRelativePath);
+      continue;
+    }
+    hash.update(readFileSync(childPath));
+  }
+}
+
+function readDirectoryEntries(directoryPath) {
+  return readdirSync(directoryPath, { withFileTypes: true })
+    .map((entry) => ({ name: entry.name, type: entry.isDirectory() ? 'dir' : 'file' }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function assertEqual(actual, expected, label) {
+  if (actual !== expected) {
+    throw new Error(`${label} mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+function assertArrayEqual(actual, expected, label) {
+  const actualValue = Array.isArray(actual) ? actual : [];
+  const expectedValue = Array.isArray(expected) ? expected : [];
+  if (JSON.stringify(actualValue) !== JSON.stringify(expectedValue)) {
+    throw new Error(`${label} mismatch: expected ${JSON.stringify(expectedValue)}, got ${JSON.stringify(actualValue)}`);
+  }
 }
 
 function isExpectedMissingHelperError(error) {

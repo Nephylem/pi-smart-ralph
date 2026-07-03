@@ -36,7 +36,7 @@
   - _Requirements: FR-1, FR-3, AC-1.1, AC-1.3_
   - _Design: `extensions/ralph-specum/refactor.ts` deep module_
 
-- [ ] Q1 [VERIFY] Quality check: command surface verifier
+- [x] Q1 [VERIFY] Quality check: command surface verifier
   - **Do**:
     1. Run the dedicated verifier implementing the research `command registration smoke` and `fixture/state smoke` tooling rows.
   - **Files**: None
@@ -48,7 +48,7 @@
 
 ## Phase 2: Spec resolution and artifact discovery
 
-- [ ] 1.4 [RED] Failing verifier: configured-root resolution and no-artifact guard
+- [x] 1.4 [RED] Failing verifier: configured-root resolution and no-artifact guard
   - **Do**:
     1. Add a `spec-resolution` case to `scripts/verify-refactor-parity.mjs` using temp spec roots.
     2. Assert explicit spec resolution uses configured-root helpers and that specs with no refactorable artifacts fail without writes.
