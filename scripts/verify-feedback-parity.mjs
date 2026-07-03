@@ -19,7 +19,7 @@ const acceptanceChecklistCases = [
   'github-execution',
   'package-wiring',
 ];
-const acceptanceChecklistIsolationMode = 'shared-process';
+const acceptanceChecklistIsolationMode = 'isolated-subcases';
 const verifierTempPrefixes = ['feedback-parity-'];
 
 const cases = new Map([
@@ -600,7 +600,13 @@ async function verifyAcceptanceChecklist() {
     if (typeof verifyCase !== 'function') {
       expectedFail(`acceptance checklist is missing verifier case: ${caseName}`);
     }
-    await verifyCase();
+
+    cleanupVerifierTempFixtures();
+    const result = await runVerifierCase(caseName, verifyCase);
+    cleanupVerifierTempFixtures();
+    if (!result.ok) {
+      throw result.error;
+    }
   }
 }
 

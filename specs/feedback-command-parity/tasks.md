@@ -291,7 +291,7 @@
   - _Requirements: NFR-1, NFR-2, AC-1.1, AC-1.2, AC-1.3, AC-1.4, AC-2.1, AC-2.2, AC-2.3, AC-2.4, AC-3.1, AC-3.2, AC-3.3, AC-4.1, AC-4.2_
   - _Design: `scripts/verify-feedback-parity.mjs` acceptance bundle_
 
-- [ ] 4.2 [GREEN] Pass test: stabilize bundled acceptance coverage and fixture isolation
+- [x] 4.2 [GREEN] Pass test: stabilize bundled acceptance coverage and fixture isolation
   - **Do**:
     1. Ensure the acceptance bundle runs all required sub-cases in one invocation.
     2. Fix any remaining fixture leakage or cross-case coupling surfaced by the bundle.
