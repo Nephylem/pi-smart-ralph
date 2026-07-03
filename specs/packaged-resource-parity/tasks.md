@@ -456,7 +456,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: FR-12, FR-13, AC-4.1, AC-4.2, AC-4.4_
   - _Design: Security Considerations, Documentation_
 
-- [ ] C7 [VERIFY] Quality check: docs and package verification
+- [x] C7 [VERIFY] Quality check: docs and package verification
   - **Do**:
     1. Run the discovered package verification command after documentation updates.
   - **Files**: None
@@ -468,7 +468,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
 
 ## Phase 6: E2E Package Verification and Quality Gates
 
-- [ ] VE1 [VERIFY] Package startup/build verification using discovered prepack command
+- [x] VE1 [VERIFY] Package startup/build verification using discovered prepack command
   - **Do**:
     1. Run `npm run prepack` from `research.md` Quality Commands and Verification Tooling.
     2. Treat this as the package-resource startup/build gate for this library/Pi extension package.
@@ -479,7 +479,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: AC-3.1, NFR-1, NFR-4_
   - _Design: Prepack verifier_
 
-- [ ] VE2 [VERIFY] Package dry-run content verification using discovered npm pack command
+- [x] VE2 [VERIFY] Package dry-run content verification using discovered npm pack command
   - **Do**:
     1. Run the dry-run verifier that relies on the `npm pack --dry-run --json` command discovered in `research.md` Verification Tooling.
     2. Confirm required resources are included and runtime/spec state is excluded.
@@ -490,7 +490,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: AC-3.3, AC-3.4, NFR-3, NFR-5_
   - _Design: Dry-run pack verifier_
 
-- [ ] V4 [VERIFY] Full local CI
+- [x] V4 [VERIFY] Full local CI
   - **Do**:
     1. Run all discovered local quality/package gates for this spec.
     2. Use `npm run prepack` and the dry-run verifier because research found no lint, typecheck, test, build, or CI command.
@@ -501,7 +501,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-2, NFR-3, NFR-4, NFR-5_
   - _Design: Test Strategy, Dry-run pack verifier_
 
-- [ ] V5 [VERIFY] CI pipeline passes
+- [x] V5 [VERIFY] CI pipeline passes
   - **Do**:
     1. Run the discovered package verification gates used as CI-equivalent evidence because `research.md` found no CI command.
     2. Confirm no additional CI workflow command was introduced.
@@ -512,7 +512,7 @@ Assumption: `.progress.md` has no Intent Classification; this plan treats the wo
   - _Requirements: NFR-1, NFR-4, NFR-5_
   - _Design: Test Strategy_
 
-- [ ] V6 [VERIFY] AC checklist
+- [x] V6 [VERIFY] AC checklist
   - **Do**:
     1. Run package verification to cover manifest shape, coverage, status, notes, piPath, checksum, resource roots, schema, agents, and asset consistency.
     2. Run dry-run verification to cover pack inclusion and exclusion acceptance criteria.

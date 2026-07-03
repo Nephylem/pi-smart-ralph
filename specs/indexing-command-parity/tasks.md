@@ -548,7 +548,7 @@
   - _Requirements: FR-9, NFR-4, AC-4.4_
   - _Design: Index path resolver; Security Considerations_
 
-- [ ] Q11 [VERIFY] Quality check: additional behavior package verification
+- [x] Q11 [VERIFY] Quality check: additional behavior package verification
   - **Do**:
     1. Run discovered package verification commands after additional behavior checks.
   - **Files**: None
@@ -560,7 +560,7 @@
 
 ## Phase 3: E2E Verification
 
-- [ ] VE1 [VERIFY] Startup/build verification: package prepack includes index verifier
+- [x] VE1 [VERIFY] Startup/build verification: package prepack includes index verifier
   - **Do**:
     1. Run the discovered `npm run prepack` package verification command from research.md Quality Commands.
     2. Confirm it executes the dedicated index verifier added by this spec.
@@ -571,7 +571,7 @@
   - _Requirements: FR-14, AC-7.2, AC-7.3_
   - _Design: Test Strategy; Smoke verifier_
 
-- [ ] VE2 [VERIFY] Behavior verification: focused index smoke suite
+- [x] VE2 [VERIFY] Behavior verification: focused index smoke suite
   - **Do**:
     1. Run the dedicated index verifier script based on research.md fixture scanner, dry-run, and changed-files smoke rows.
     2. Confirm all focused fixture cases pass in one run.
@@ -582,7 +582,7 @@
   - _Requirements: FR-14, AC-7.1, AC-7.2_
   - _Design: Test Strategy; Smoke verifier_
 
-- [ ] VE3 [VERIFY] Cleanup verification: temp fixture cleanup is automatic
+- [x] VE3 [VERIFY] Cleanup verification: temp fixture cleanup is automatic
   - **Do**:
     1. Run the verifier cleanup case based on the research.md temp-fixture smoke strategy.
     2. Assert verifier-created temporary directories are removed by the verifier.
@@ -595,7 +595,7 @@
 
 ## Phase 4: Quality Gates
 
-- [ ] V4 [VERIFY] Full local CI
+- [x] V4 [VERIFY] Full local CI
   - **Do**:
     1. Run all discovered local package verification commands.
   - **Files**: None
@@ -605,7 +605,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] V5 [VERIFY] CI pipeline passes
+- [x] V5 [VERIFY] CI pipeline passes
   - **Do**:
     1. Re-run the discovered package verification command set used as the repository CI substitute in research.md.
   - **Files**: None
@@ -615,7 +615,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] V6 [VERIFY] AC checklist
+- [x] V6 [VERIFY] AC checklist
   - **Do**:
     1. Add and run an `acceptance-checklist` verifier case covering the acceptance criteria that can be asserted from generated fixtures and source inspection.
     2. Confirm command registration, dry-run, component artifacts, state/summary, skip/force, changed, external seams, and package wiring all pass.
@@ -628,7 +628,7 @@
 
 ## Phase 5: PR Lifecycle
 
-- [ ] 5.1 [VERIFY] Commit readiness check
+- [x] 5.1 [VERIFY] Commit readiness check
   - **Do**:
     1. Run final discovered package verification commands before handoff.
     2. Confirm no generated temp fixture files are left in the repository.

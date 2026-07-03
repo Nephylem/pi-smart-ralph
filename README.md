@@ -194,6 +194,8 @@ If the subagent output is missing the required signal, includes a contradiction 
 
 `/ralph-triage <epic> <goal>` uses `ralph-triage-analyst` to decompose large work into a dependency-aware epic. Depending on `--output`, the coordinator can write spec files, create/update GitHub issues after confirmation, or both.
 
+Triage flags are parsed only before `<epic>`. After the epic name, the rest of the command is captured as raw goal text, so lengthy Markdown goals may contain quotes, code fences, and `--` sequences without being parsed as flags.
+
 Epic state is stored under:
 
 ```text
@@ -416,6 +418,8 @@ For a small smoke test:
 | `/ralph-epic-next [--switch\|--start] [epic]` | Select the next unblocked child spec. |
 | `/ralph-epic-cancel [epic]` | Cancel active epic execution state safely. |
 | `/ralph-start --next-epic-spec` | Begin the next unblocked child spec from the active epic. |
+
+Place triage flags before `<epic>`; anything after `<epic>` is treated as raw goal Markdown, not option syntax.
 
 ---
 

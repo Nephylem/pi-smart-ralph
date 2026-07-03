@@ -2647,13 +2647,23 @@ function formatSwitchSummary(spec: SpecEntry, pointerValue: string, options: Ral
 	return lines.join("\n");
 }
 
-function tokenizeCommandArgs(args: string): { tokens: string[]; error?: string } {
-	const tokens: string[] = [];
+type CommandArgToken = {
+	token: string;
+	nextIndex: number;
+	error?: string;
+};
+
+function readCommandArgToken(args: string, startIndex = 0): CommandArgToken | null {
+	let index = startIndex;
+	while (index < args.length && /\s/.test(args[index] ?? "")) index += 1;
+	if (index >= args.length) return null;
+
 	let current = "";
 	let quote: "'" | '"' | null = null;
 	let escaping = false;
 
-	for (const char of args) {
+	for (; index < args.length; index += 1) {
+		const char = args[index] ?? "";
 		if (escaping) {
 			current += char;
 			escaping = false;
@@ -2675,19 +2685,27 @@ function tokenizeCommandArgs(args: string): { tokens: string[]; error?: string }
 			quote = char;
 			continue;
 		}
-		if (/\s/.test(char)) {
-			if (current) {
-				tokens.push(current);
-				current = "";
-			}
-			continue;
-		}
+		if (/\s/.test(char)) break;
 		current += char;
 	}
 
 	if (escaping) current += "\\";
-	if (quote) return { tokens: [], error: `Unclosed ${quote} quote in arguments.` };
-	if (current) tokens.push(current);
+	if (quote) return { token: "", nextIndex: index, error: `Unclosed ${quote} quote in arguments.` };
+	return { token: current, nextIndex: index };
+}
+
+function tokenizeCommandArgs(args: string): { tokens: string[]; error?: string } {
+	const tokens: string[] = [];
+	let cursor = 0;
+
+	while (true) {
+		const result = readCommandArgToken(args, cursor);
+		if (!result) break;
+		if (result.error) return { tokens: [], error: result.error };
+		if (result.token) tokens.push(result.token);
+		cursor = result.nextIndex;
+	}
+
 	return { tokens };
 }
 
@@ -6067,44 +6085,64 @@ function triageOutputIncludesGithub(output: unknown): boolean {
 }
 
 function parseTriageArgs(args: string): TriageArguments {
-	const tokenized = tokenizeCommandArgs(args);
-	if (tokenized.error) return emptyTriageArguments(tokenized.error);
-
-	const positionals: string[] = [];
 	const warnings: string[] = [];
 	let fresh = false;
 	let yes = false;
 	let output: TriageOutput = "spec-files";
+	let cursor = 0;
 
-	for (let index = 0; index < tokenized.tokens.length; index += 1) {
-		const token = tokenized.tokens[index];
+	while (true) {
+		const result = readCommandArgToken(args, cursor);
+		if (!result) {
+			return {
+				epicName: null,
+				goal: "",
+				fresh,
+				yes,
+				output,
+				warnings,
+			};
+		}
+		if (result.error) return emptyTriageArguments(result.error);
+
+		const token = result.token;
 		if (token === "--fresh") {
 			fresh = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--yes" || token === "-y") {
 			yes = true;
+			cursor = result.nextIndex;
 			continue;
 		}
 		if (token === "--output" || token.startsWith("--output=")) {
-			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			let value: string | undefined;
+			if (token.includes("=")) {
+				value = token.slice(token.indexOf("=") + 1);
+				cursor = result.nextIndex;
+			} else {
+				const valueResult = readCommandArgToken(args, result.nextIndex);
+				if (valueResult?.error) return emptyTriageArguments(valueResult.error);
+				value = valueResult?.token;
+				cursor = valueResult?.nextIndex ?? result.nextIndex;
+			}
 			if (!value || value.startsWith("--")) return emptyTriageArguments("--output requires spec-files, github-issues, or both.");
 			if (!TRIAGE_OUTPUT_VALUES.has(value)) return emptyTriageArguments(`Invalid --output value '${value}'. Use spec-files, github-issues, or both.`);
 			output = value as TriageOutput;
 			continue;
 		}
 		if (token.startsWith("--")) return emptyTriageArguments(`Unknown option: ${token}`);
-		positionals.push(token);
-	}
 
-	return {
-		epicName: positionals[0] ?? null,
-		goal: positionals.slice(1).join(" ").trim(),
-		fresh,
-		yes,
-		output,
-		warnings,
-	};
+		return {
+			epicName: token || null,
+			goal: args.slice(result.nextIndex).trim(),
+			fresh,
+			yes,
+			output,
+			warnings,
+		};
+	}
 }
 
 function emptyTriageArguments(error: string): TriageArguments {

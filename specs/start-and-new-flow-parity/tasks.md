@@ -509,7 +509,7 @@
   - _Requirements: FR-11, AC-5.1, AC-5.2_
   - _Design: Smoke verification script; Integration Tests_
 
-- [ ] Q8 [VERIFY] Quality check: full smoke package verification
+- [x] Q8 [VERIFY] Quality check: full smoke package verification
   - **Do**:
     1. Run package verification after the full smoke coverage cycle.
   - **Files**: None
@@ -533,7 +533,7 @@
 
 ## Phase 5: VE End-to-End Verification for Library/Pi Extension Package
 
-- [ ] VE1 [VERIFY] Package/build verification startup using discovered `npm run prepack`
+- [x] VE1 [VERIFY] Package/build verification startup using discovered `npm run prepack`
   - **Do**:
     1. Use `research.md` Verification Tooling row `npm script | npm run prepack | package.json` as the package startup/build verification surrogate for this library/Pi extension.
   - **Files**: None
@@ -543,7 +543,7 @@
   - _Requirements: FR-11, NFR-4, AC-5.1, AC-5.2, AC-5.3_
   - _Design: Integration Tests; E2E Tests_
 
-- [ ] VE2 [VERIFY] Package dry-run verification using discovered `npm run verify:pack`
+- [x] VE2 [VERIFY] Package dry-run verification using discovered `npm run verify:pack`
   - **Do**:
     1. Use `research.md` Verification Tooling row `npm script | npm run verify:pack | package.json` to verify the package dry-run after implementation.
   - **Files**: None
@@ -553,7 +553,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Integration Tests; E2E Tests_
 
-- [ ] VE3 [VERIFY] Smoke fixture cleanup evidence using discovered `npm run prepack`
+- [x] VE3 [VERIFY] Smoke fixture cleanup evidence using discovered `npm run prepack`
   - **Do**:
     1. Use the smoke verifier cleanup assertions introduced in task 4.3 and run them through the research-discovered `npm run prepack` command.
   - **Files**: None
@@ -565,7 +565,7 @@
 
 ## Phase 6: Quality Gates
 
-- [ ] V4 [VERIFY] Full local CI
+- [x] V4 [VERIFY] Full local CI
   - **Do**:
     1. Run all research-discovered local package verification commands.
   - **Files**: None
@@ -575,7 +575,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Quality Gates; Integration Tests_
 
-- [ ] V5 [VERIFY] CI pipeline passes
+- [x] V5 [VERIFY] CI pipeline passes
   - **Do**:
     1. Use package dry-run verification as the CI surrogate because `research.md` found no `.github/workflows` directory or CI command.
   - **Files**: None
@@ -585,7 +585,7 @@
   - _Requirements: NFR-4, AC-5.3_
   - _Design: Quality Gates; Test Strategy_
 
-- [ ] V6 [VERIFY] AC checklist
+- [x] V6 [VERIFY] AC checklist
   - **Do**:
     1. Run the smoke verifier through `prepack` to cover AC-1.1 through AC-5.2.
     2. Run package dry-run verification to cover AC-5.3.
@@ -598,7 +598,7 @@
 
 ## Phase 7: PR Lifecycle Readiness
 
-- [ ] 7.1 [VERIFY] PR readiness package gate
+- [x] 7.1 [VERIFY] PR readiness package gate
   - **Do**:
     1. Confirm the working implementation is ready for repository review using the discovered local verification commands.
     2. Ensure no task requires edits under the legacy Smart Ralph plugin path.
@@ -609,7 +609,7 @@
   - _Requirements: NFR-4, NFR-5, AC-5.3_
   - _Design: Quality Gates; File Structure_
 
-- [ ] 7.2 [VERIFY] Post-review fix loop gate
+- [x] 7.2 [VERIFY] Post-review fix loop gate
   - **Do**:
     1. After any review fixes, rerun the discovered local verification commands.
     2. Keep fixes scoped to files listed in this plan unless a reviewer requests an explicitly related source file.

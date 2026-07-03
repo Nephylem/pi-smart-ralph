@@ -12,6 +12,7 @@ pnpm-debug.log*
 .pi/
 tasks/
 subagents.json
+specs/
 
 # OS/editor noise
 .DS_Store

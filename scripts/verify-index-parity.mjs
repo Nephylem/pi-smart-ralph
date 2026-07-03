@@ -10,6 +10,9 @@ const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
 let activeCase = requestedCase;
 
+const cleanupCaseKey = 'cleanup';
+const acceptanceChecklistCaseKey = 'acceptance-checklist';
+
 const cases = new Map([
   ['parser-unknown', verifyParserUnknown],
   ['parser-options', verifyParserOptions],
@@ -24,6 +27,7 @@ const cases = new Map([
   ['external-adapters', verifyExternalAdapters],
   ['command-registration', verifyCommandRegistration],
   ['package-wiring', verifyPackageWiring],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
 
 async function main() {
@@ -43,6 +47,17 @@ async function main() {
     }
 
     console.log(`PASS index parity verifier: ${summaries.length}/${cases.size} cases passed`);
+    return;
+  }
+
+  if (requestedCase === cleanupCaseKey) {
+    const result = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!result.ok) {
+      printCaseFailure(result);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${requestedCase}`);
     return;
   }
 
@@ -488,6 +503,63 @@ async function verifyDryRunExisting() {
     assertExistingIndexFilesUnchanged(corruptBefore);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyCleanupCase() {
+  const helper = await loadIndexingHelper();
+  const runRalphIndex = helper?.runRalphIndex;
+
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempPrefix = 'ralph-index-parity-cleanup-';
+  const initialFixtureRoots = new Set(listCleanupFixtureRoots(tempPrefix));
+
+  const fixtureRoot = mkdtempSync(join(tmpdir(), `${tempPrefix}`));
+  const tempRoots = [fixtureRoot];
+  let caseError = null;
+
+  try {
+    const projectRoot = join(fixtureRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(fixtureRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    writeFileSync(join(servicesRoot, 'accounts.service.ts'), 'export class AccountsService { list() { return []; } }\n', 'utf8');
+
+    const runResult = await runRalphIndex({
+      cwd: projectRoot,
+      specRoot,
+      args: ['--path', scanRoot, '--type', 'services', '--quick'],
+    });
+
+    if (runResult?.ok !== true) {
+      expectedFail(`cleanup fixture verification should run index successfully; got ${JSON.stringify(runResult)}`);
+    }
+
+    const summaryPath = join(specRoot, '.index', 'index.md');
+    if (!existsSync(summaryPath)) {
+      expectedFail('cleanup fixture verification should create an index summary before cleanup validation');
+    }
+  } catch (error) {
+    caseError = error;
+  } finally {
+    for (const temporaryRoot of tempRoots) {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  }
+
+  const remainingCleanupRoots = listCleanupFixtureRoots(tempPrefix).filter((root) => !initialFixtureRoots.has(root));
+  if (remainingCleanupRoots.length > 0) {
+    expectedFail(`cleanup fixture verification must remove temporary directories; found persistent fixture roots: ${remainingCleanupRoots.join(', ')}`);
+  }
+
+  if (caseError) {
+    throw caseError;
   }
 }
 
@@ -1135,6 +1207,27 @@ async function verifyPackageWiring() {
   }
 }
 
+async function verifyAcceptanceChecklist() {
+  const acceptanceChecklistCases = [
+    verifyParserOptions,
+    verifyPaths,
+    verifyScanner,
+    verifyDryRun,
+    verifyDryRunExisting,
+    verifyPathSafety,
+    verifyRenderContract,
+    verifyHashSkipForce,
+    verifyChangedGit,
+    verifyExternalAdapters,
+    verifyCommandRegistration,
+    verifyPackageWiring,
+  ];
+
+  for (const verifyCase of acceptanceChecklistCases) {
+    await verifyCase();
+  }
+}
+
 async function verifyParserOptions() {
   const parseIndexArgs = await loadParseIndexArgs();
 
@@ -1190,6 +1283,13 @@ async function verifyParserOptions() {
 function runFixtureGitCommand(cwd, args) {
   assertNonDestructiveFixtureGitArgs(args);
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function listCleanupFixtureRoots(prefix) {
+  const entries = readdirSync(tmpdir(), { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
+    .map((entry) => join(tmpdir(), entry.name));
 }
 
 function fixtureGitChangedPaths(cwd) {

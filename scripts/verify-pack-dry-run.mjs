@@ -55,7 +55,7 @@ function collectPackFiles(packJson) {
   }));
 }
 
-const result = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+const result = spawnSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
   cwd: process.cwd(),
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
