@@ -302,7 +302,7 @@
   - _Requirements: FR-10, NFR-1, AC-5.1, AC-5.2_
   - _Design: Index planner; Edge Cases_
 
-- [ ] 1.21 [YELLOW] Refactor: make action selection deterministic
+- [x] 1.21 [YELLOW] Refactor: make action selection deterministic
   - **Do**:
     1. Extract action selection for create, update, and skip.
     2. Preserve deterministic counts for component and state entries.

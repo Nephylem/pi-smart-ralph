@@ -451,9 +451,14 @@ async function verifyRenderContract() {
 async function verifyHashSkipForce() {
   const helper = await loadIndexingHelper();
   const runRalphIndex = helper?.runRalphIndex;
+  const selectIndexWriteAction = helper?.selectIndexWriteAction;
 
   if (typeof runRalphIndex !== 'function') {
     expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof selectIndexWriteAction !== 'function') {
+    expectedFail('selectIndexWriteAction must be exported so create/update/skip selection is isolated.');
   }
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-hash-skip-force-'));
@@ -481,6 +486,22 @@ async function verifyHashSkipForce() {
       expectedFail(`initial run must create a component artifact; got ${JSON.stringify(firstComponentWrite)}`);
     }
 
+    assertEqual(
+      selectIndexWriteAction({ targetPath: join(specRoot, '.index', 'missing.md'), unchanged: false, force: false }),
+      'create',
+      'isolated action helper create branch',
+    );
+    assertEqual(
+      selectIndexWriteAction({ targetPath: componentPath, unchanged: true, force: false }),
+      'skip',
+      'isolated action helper skip branch',
+    );
+    assertEqual(
+      selectIndexWriteAction({ targetPath: componentPath, unchanged: true, force: true }),
+      'update',
+      'isolated action helper force update branch',
+    );
+
     const firstContent = readFileSync(componentPath, 'utf8');
     const firstMtimeMs = statSync(componentPath).mtimeMs;
 
@@ -491,6 +512,8 @@ async function verifyHashSkipForce() {
 
     const secondComponentWrite = findComponentWrite(secondResult.writes, servicePath);
     assertEqual(secondComponentWrite.action, 'skip', 'unchanged component write action');
+    // Summary/state are refreshed on each run, so indexed timestamps may drift; deterministic assertions focus
+    // on component action counts and skipped artifact preservation instead of full state byte equality.
     assertEqual(secondResult.state?.created, 0, 'unchanged run created count');
     if (!String(secondComponentWrite.reason ?? '').includes('unchanged')) {
       expectedFail(`unchanged skip write must explain that the source hash is unchanged; got ${JSON.stringify(secondComponentWrite)}`);

@@ -95,6 +95,12 @@ export interface PlannedWrite {
   sourcePath?: string;
 }
 
+export interface SelectIndexWriteActionInput {
+  targetPath: string;
+  unchanged: boolean;
+  force: boolean;
+}
+
 export interface IndexStateV1 {
   indexed: string;
   componentCount: number;
@@ -328,10 +334,15 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
       priorComponentHashes.get(component.sourceDisplayPath) ??
       priorComponentHashes.get(component.sourcePath) ??
       readComponentArtifactHash(component.artifactPath);
-    const action = chooseWriteAction(component.artifactPath, priorHash === component.hash, input.options.force);
-    if (action === 'create') created += 1;
-    if (action === 'update') updated += 1;
-    if (action === 'skip') skipped += 1;
+    const action = selectIndexWriteAction({
+      targetPath: component.artifactPath,
+      unchanged: priorHash === component.hash,
+      force: input.options.force,
+    });
+    const componentActionCounts = countPlannedActions([action]);
+    created += componentActionCounts.create;
+    updated += componentActionCounts.update;
+    skipped += componentActionCounts.skip;
     writes.push({
       kind: INDEX_WRITE_KINDS.component,
       action,
@@ -343,11 +354,12 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
     });
   }
 
-  const summaryAction = chooseWriteAction(input.paths.summaryPath, false, input.options.force);
-  const stateAction = chooseWriteAction(input.paths.stateWritePath, false, input.options.force);
+  const summaryAction = selectIndexWriteAction({ targetPath: input.paths.summaryPath, unchanged: false, force: input.options.force });
+  const stateAction = selectIndexWriteAction({ targetPath: input.paths.stateWritePath, unchanged: false, force: input.options.force });
   const includeContractWriteCounts = !input.options.force && skipped === 0;
-  const contractCreated = includeContractWriteCounts ? countActions([summaryAction, stateAction], 'create') : 0;
-  const contractUpdated = includeContractWriteCounts ? countActions([summaryAction, stateAction], 'update') : 0;
+  const contractActionCounts = includeContractWriteCounts ? countPlannedActions([summaryAction, stateAction]) : { create: 0, update: 0, skip: 0 };
+  const contractCreated = contractActionCounts.create;
+  const contractUpdated = contractActionCounts.update;
 
   const categories = countComponentsByCategory(input.components);
   const state: IndexStateV1 = {
@@ -392,9 +404,12 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   return { writes, state };
 }
 
-function chooseWriteAction(pathValue: string, unchanged: boolean, force: boolean): IndexAction {
-  if (unchanged && !force) return 'skip';
-  if (existsSync(pathValue)) return 'update';
+export function selectIndexWriteAction(input: SelectIndexWriteActionInput): IndexAction {
+  const targetExists = existsSync(input.targetPath);
+  // Deterministic action priority: an unchanged source may skip only when its artifact still exists;
+  // explicit force disables that shortcut, and existing target state then chooses update over create.
+  if (input.unchanged && targetExists && !input.force) return 'skip';
+  if (targetExists) return 'update';
   return 'create';
 }
 
@@ -421,8 +436,12 @@ function readComponentArtifactHash(artifactPath: string): string | undefined {
   return hashLine?.replace(/^\s*hash:\s*/, '').trim() || undefined;
 }
 
-function countActions(actions: IndexAction[], expectedAction: IndexAction): number {
-  return actions.filter((action) => action === expectedAction).length;
+function countPlannedActions(actions: IndexAction[]): Record<IndexAction, number> {
+  return {
+    create: actions.filter((action) => action === 'create').length,
+    update: actions.filter((action) => action === 'update').length,
+    skip: actions.filter((action) => action === 'skip').length,
+  };
 }
 
 function countComponentsByCategory(components: ComponentEntry[]): Record<string, number> {
