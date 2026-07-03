@@ -10,6 +10,7 @@ let activeCase = requestedCase;
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
   ['draft-fallback', verifyDraftFallback],
+  ['headless-input', verifyHeadlessInput],
 ]);
 
 async function main() {
@@ -192,6 +193,93 @@ async function verifyDraftFallback() {
 
   if (failures.length > 0) {
     expectedFail(`draft fallback verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function verifyHeadlessInput() {
+  const feedbackModulePath = join(root, 'extensions', 'ralph-specum', 'feedback.ts');
+  const feedback = await loadFeedbackHelper();
+  const failures = [];
+
+  if (typeof feedback?.createFeedbackCommandHandler !== 'function') {
+    failures.push('feedback.ts must export createFeedbackCommandHandler to exercise runtime input handling');
+  }
+
+  if (feedback?.createFeedbackCommandHandler) {
+    const notifications = [];
+    const handler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+      notifications.push(message);
+    });
+
+    let promptedTitle = null;
+    let promptedBody = null;
+    let promptCount = 0;
+
+    await handler('   ', {
+      hasUI: true,
+      ui: {
+        input: async (title, prompt) => {
+          promptCount += 1;
+          promptedTitle = title;
+          promptedBody = prompt;
+          return 'Prompted feedback from UI';
+        },
+      },
+    });
+
+    if (promptCount !== 1) {
+      failures.push(`missing-message UI flow must prompt exactly once; got ${promptCount}`);
+    }
+
+    if (promptedTitle !== 'Feedback message') {
+      failures.push(`missing-message UI prompt title mismatch: ${JSON.stringify(promptedTitle)}`);
+    }
+
+    if (typeof promptedBody !== 'string' || !/feedback/i.test(promptedBody)) {
+      failures.push(`missing-message UI prompt body must mention feedback guidance; got ${JSON.stringify(promptedBody)}`);
+    }
+
+    const promptedNotification = notifications[0] ?? '';
+    if (!promptedNotification.includes('Prompted feedback from UI')) {
+      failures.push('UI prompt result must flow into the draft message instead of reporting missing input');
+    }
+
+    if (promptedNotification.includes('No feedback message provided yet.')) {
+      failures.push('UI prompt path must not continue with the empty-message fallback after input is provided');
+    }
+
+    const headlessNotifications = [];
+    let writeAttemptCount = 0;
+    const headlessHandler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+      headlessNotifications.push(message);
+    });
+
+    await headlessHandler('', {
+      hasUI: false,
+      runner: {
+        run: async () => {
+          writeAttemptCount += 1;
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      },
+    });
+
+    if (writeAttemptCount !== 0) {
+      failures.push(`headless missing-message flow must stop before any GitHub write attempt; got ${writeAttemptCount}`);
+    }
+
+    const headlessMessage = headlessNotifications[0] ?? '';
+    if (!/Usage:\s*\/ralph-feedback/i.test(headlessMessage)) {
+      failures.push('headless missing-message flow must return explicit usage guidance');
+    }
+
+    if (!/no GitHub issue will be created|no remote write/i.test(headlessMessage)) {
+      failures.push('headless missing-message flow must explain the no-write outcome');
+    }
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`headless input verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
   }
 }
 

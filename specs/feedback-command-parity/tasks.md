@@ -82,7 +82,7 @@
   - _Requirements: FR-2, FR-4, FR-5, AC-1.2, AC-1.3, AC-1.4_
   - _Design: `extensions/ralph-specum/feedback.ts` deep module_
 
-- [ ] Q2 [VERIFY] Quality check: draft contract verifier
+- [x] Q2 [VERIFY] Quality check: draft contract verifier
   - **Do**:
     1. Run the dedicated draft/fallback verifier.
     2. Confirm the fixed target repo remains package-metadata-driven.
@@ -95,7 +95,7 @@
 
 ## Phase 2: Red-Green-Yellow Cycles - Input safety and confirmation
 
-- [ ] 2.1 [RED] Failing verifier: missing-message prompt and headless usage guard
+- [x] 2.1 [RED] Failing verifier: missing-message prompt and headless usage guard
   - **Do**:
     1. Add a `headless-input` case to `scripts/verify-feedback-parity.mjs` with stubbed UI and headless fixtures.
     2. Assert UI runs prompt once for missing message and headless runs stop with usage/no-write guidance before any GitHub write attempt.
