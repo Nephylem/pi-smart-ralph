@@ -408,8 +408,48 @@ export function buildRefactorCoordinatorStatePatch(updatedFiles: RefactorArtifac
 		: { validationError: null };
 }
 
+export type RefactorLocalCommitPlan = {
+	enabled: boolean;
+	remoteWritesAllowed: false;
+	relativeSpecPath: string | null;
+	message: string;
+	stageArgs: string[];
+	commitArgs: string[];
+};
+
 export function buildRefactorLocalCommitMessage(specName: string): string {
 	return `feat(ralph-refactor): update ${specName} spec artifacts`;
+}
+
+export function buildRefactorLocalCommitPlan(
+	specName: string,
+	relativeSpecPath: string | null,
+	commitSpec: boolean | undefined,
+): RefactorLocalCommitPlan {
+	const message = buildRefactorLocalCommitMessage(specName);
+	if (commitSpec !== true || !relativeSpecPath) {
+		return {
+			enabled: false,
+			remoteWritesAllowed: false,
+			relativeSpecPath,
+			message,
+			stageArgs: [],
+			commitArgs: [],
+		};
+	}
+
+	return {
+		enabled: true,
+		remoteWritesAllowed: false,
+		relativeSpecPath,
+		message,
+		stageArgs: ["add", "--all", "--", relativeSpecPath],
+		commitArgs: ["commit", "-m", message, "--", relativeSpecPath],
+	};
+}
+
+export function formatRefactorLocalCommitWarning(specName: string, error: string): string {
+	return `Refactor updated ${specName}, but local git commit failed: ${error}`;
 }
 
 export function formatRefactorCascadeOutcome(

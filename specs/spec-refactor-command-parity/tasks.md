@@ -438,7 +438,7 @@
   - _Requirements: FR-16, FR-17, AC-4.5, AC-4.6_
   - _Design: local git commit flow; no-push guard_
 
-- [ ] 5.6 [YELLOW] Refactor: isolate git side-effect helpers and warnings
+- [x] 5.6 [YELLOW] Refactor: isolate git side-effect helpers and warnings
   - **Do**:
     1. Extract commit-scoping and warning helpers so git behavior stays explicit and easy to verify.
     2. Keep remote-write prevention documented in the helper surface.

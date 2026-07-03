@@ -74,7 +74,7 @@ import {
 	buildRefactorCoordinatorStatePatch,
 	buildRefactorArtifactProgressUpdate,
 	buildRefactorFilePromptPlan,
-	buildRefactorLocalCommitMessage,
+	buildRefactorLocalCommitPlan,
 	buildRefactorRequest,
 	buildRefactorSectionPromptPlan,
 	buildRefactorSpecialistPrompt,
@@ -86,6 +86,7 @@ import {
 	formatRefactorCompletionValidationError,
 	formatRefactorExecutionError,
 	formatRefactorHeadlessDecisionError,
+	formatRefactorLocalCommitWarning,
 	REFACTOR_COMMAND_DESCRIPTION,
 	formatPendingRefactorMessage,
 	formatRefactorParseError,
@@ -6019,15 +6020,14 @@ function hasStagedGitChangesInScope(root: string, relativePath: string): boolean
 }
 
 function commitRefactorSpecIfDirty(spec: SpecEntry, commitSpec: boolean | undefined): CoordinatorProgressCommitResult {
-	if (commitSpec !== true) return { committed: false };
-
 	const root = gitRootForPath(spec.absolutePath);
 	if (!root) return { committed: false };
 
-	const relativeSpecPath = gitRelativePath(root, spec.absolutePath);
-	if (!relativeSpecPath || !hasGitChangesInScope(root, relativeSpecPath)) return { committed: false };
+	const commitPlan = buildRefactorLocalCommitPlan(spec.name, gitRelativePath(root, spec.absolutePath), commitSpec);
+	if (!commitPlan.enabled || !commitPlan.relativeSpecPath) return { committed: false };
+	if (!hasGitChangesInScope(root, commitPlan.relativeSpecPath)) return { committed: false };
 
-	const add = runGitCommand(root, ["add", "--all", "--", relativeSpecPath]);
+	const add = runGitCommand(root, commitPlan.stageArgs);
 	if (!add.ok) {
 		return {
 			committed: false,
@@ -6035,15 +6035,18 @@ function commitRefactorSpecIfDirty(spec: SpecEntry, commitSpec: boolean | undefi
 		};
 	}
 
-	if (!hasStagedGitChangesInScope(root, relativeSpecPath)) return { committed: false };
+	if (!hasStagedGitChangesInScope(root, commitPlan.relativeSpecPath)) return { committed: false };
+	if (commitPlan.remoteWritesAllowed) {
+		return { committed: false, error: "Refactor local commit plan must not allow remote git writes." };
+	}
 
-	const commit = runGitCommand(root, ["commit", "-m", buildRefactorLocalCommitMessage(spec.name), "--", relativeSpecPath]);
+	const commit = runGitCommand(root, commitPlan.commitArgs);
 	if (!commit.ok) {
 		return {
 			committed: false,
 			error: normalizeWhitespace(commit.stderr || commit.stdout || `git commit exited with status ${commit.status ?? "unknown"}`),
 		};
-	}
+		}
 
 	return { committed: true, hash: gitShortHead(root) };
 }
@@ -9265,7 +9268,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 			const commitResult = commitRefactorSpecIfDirty(plan.spec, state.commitSpec);
 			if (commitResult.error) {
-				await notify(ctx, `Refactor updated ${plan.spec.name}, but local git commit failed: ${commitResult.error}`, "warning");
+				await notify(ctx, formatRefactorLocalCommitWarning(plan.spec.name, commitResult.error), "warning");
 			}
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");
