@@ -1,4 +1,6 @@
-const REFACTOR_ALLOWED_FILES = Object.freeze(["requirements", "design", "tasks"]);
+export const REFACTOR_ALLOWED_FILES = Object.freeze(["requirements", "design", "tasks"]);
+export const REFACTOR_USAGE = "/ralph-refactor [spec] [--file=requirements|design|tasks]";
+export const REFACTOR_COMMAND_DESCRIPTION = "Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks]";
 
 function emptyRefactorOptions() {
 	return {
@@ -36,7 +38,22 @@ export function parseRefactorArgs(args = []) {
 		options.reference = token;
 	}
 
-	return { ok: true, options };
+	return okParse(options);
+}
+
+export function formatRefactorUsage() {
+	return `Usage: ${REFACTOR_USAGE}`;
+}
+
+export function formatRefactorParseError(error) {
+	const message = error instanceof Error ? error.message : String(error ?? "Unknown /ralph-refactor parse error");
+	return `${message}\n${formatRefactorUsage()}`;
+}
+
+export function formatPendingRefactorMessage(options) {
+	const target = options?.reference ? ` for ${options.reference}` : "";
+	const scope = options?.file ? ` with --file=${options.file}` : "";
+	return `Ralph refactor command registered${target}${scope}. Artifact update flow is not implemented yet.`;
 }
 
 function readFileOptionValue(args, index, token) {
@@ -64,6 +81,10 @@ function readFileOptionValue(args, index, token) {
 	}
 
 	return { ok: true, value, index };
+}
+
+function okParse(options) {
+	return { ok: true, options };
 }
 
 function failParse(options, message) {

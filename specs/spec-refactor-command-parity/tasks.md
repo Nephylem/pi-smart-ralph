@@ -25,7 +25,7 @@
   - _Requirements: FR-1, FR-3, AC-1.1, AC-1.3_
   - _Design: `extensions/ralph-specum/index.ts`; `extensions/ralph-specum/refactor.ts`_
 
-- [ ] 1.3 [YELLOW] Refactor: centralize usage text and parse result helpers
+- [x] 1.3 [YELLOW] Refactor: centralize usage text and parse result helpers
   - **Do**:
     1. Extract reusable usage/help text constants and parse-result helpers into `refactor.ts`.
     2. Keep command registration logic thin in `index.ts`.

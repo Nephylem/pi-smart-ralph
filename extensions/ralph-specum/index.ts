@@ -68,7 +68,7 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
-import { parseRefactorArgs } from "./refactor.ts";
+import { REFACTOR_COMMAND_DESCRIPTION, formatPendingRefactorMessage, formatRefactorParseError, parseRefactorArgs } from "./refactor.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -9004,7 +9004,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("ralph-refactor", {
-		description: "Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks]",
+		description: REFACTOR_COMMAND_DESCRIPTION,
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
 			const tokenized = tokenizeCommandArgs(args);
@@ -9015,13 +9015,11 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 			const parsed = parseRefactorArgs(tokenized.tokens);
 			if (!parsed.ok) {
-				await notify(ctx, `${parsed.error.message}\nUsage: /ralph-refactor [spec] [--file=requirements|design|tasks]`, "warning");
+				await notify(ctx, formatRefactorParseError(parsed.error), "warning");
 				return;
 			}
 
-			const target = parsed.options.reference ? ` for ${parsed.options.reference}` : "";
-			const scope = parsed.options.file ? ` with --file=${parsed.options.file}` : "";
-			await notify(ctx, `Ralph refactor command registered${target}${scope}. Artifact update flow is not implemented yet.`, "info");
+			await notify(ctx, formatPendingRefactorMessage(parsed.options), "info");
 		},
 	});
 
