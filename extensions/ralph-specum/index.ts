@@ -67,6 +67,7 @@ import {
 import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
+import { runRalphIndex } from "./indexing.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -2539,6 +2540,20 @@ function formatSpecResolutionError(reference: string, error: unknown, options: R
 	return [message, "", "Searched roots:", ...roots.map((root) => `- ${formatRootLabel(root)}`)].join("\n");
 }
 
+function formatRalphIndexCommandResult(result: Awaited<ReturnType<typeof runRalphIndex>>): string {
+	const lines = [
+		result.ok ? "Ralph index complete." : "Ralph index failed.",
+		`Mode: ${result.dryRun ? "dry-run" : "write"}`,
+		`Index root: ${result.indexRoot}`,
+		`Summary: ${result.summaryPath}`,
+		`State: ${result.statePath}`,
+		`Writes: ${result.writes.length}`,
+		result.message,
+	];
+	if (result.error) lines.push(`Error: ${result.error}`);
+	return lines.filter(Boolean).join("\n");
+}
+
 function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): { message: string; type: "info" | "warning" } {
 	const options = pathOptions(ctx);
 	const validation = validateRalphEnvironment(pi, ctx.cwd);
@@ -2593,6 +2608,7 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"- /ralph-design [spec]                Generate design.md",
 		"- /ralph-tasks [spec]                 Generate canonical tasks.md",
 		"- /ralph-implement [spec]             Execute tasks.md through Ralph subagents",
+		"- /ralph-index [--path <dir>] [--type controllers,services,models,helpers,migrations,other] [--exclude <pattern>] [--dry-run] [--force] [--changed] [--quick]  Generate searchable component and external index artifacts",
 		"- /ralph-switch <spec-name-or-path>  Switch active spec",
 		"- /ralph-cancel [spec-name-or-path]   Clear execution state for a spec",
 		"- /ralph-model [auto|provider|model] Switch Ralph's inherited Pi model profile",
@@ -8155,6 +8171,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"/ralph-design        Generate design.md with ralph-architect-reviewer.",
 					"/ralph-tasks         Generate canonical tasks.md with ralph-task-planner.",
 					"/ralph-implement     Execute tasks.md through Ralph subagents.",
+					"/ralph-index         Generate searchable index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, and --quick.",
 					"/ralph-status        Show specs across configured roots.",
 					"/ralph-switch        Switch the active spec marker.",
 					"/ralph-cancel        Clear execution state for a spec.",
@@ -8456,6 +8473,20 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		description: "Execute tasks.md through Ralph subagents",
 		getArgumentCompletions: specArgumentCompletions,
 		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "implement", () => runImplementCommand(pi, args, ctx)),
+	});
+
+	pi.registerCommand("ralph-index", {
+		description: "Generate searchable component and external index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, and --quick",
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const tokenized = tokenizeCommandArgs(args);
+			if (tokenized.error) {
+				await notify(ctx, tokenized.error, "warning");
+				return;
+			}
+			const result = await runRalphIndex({ cwd: ctx.cwd, args: tokenized.tokens });
+			await notify(ctx, formatRalphIndexCommandResult(result), result.ok ? "info" : "warning");
+		},
 	});
 
 	pi.registerCommand("ralph-status", {

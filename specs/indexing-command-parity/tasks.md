@@ -428,7 +428,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: `/ralph-index` command registration_
 
-- [ ] 1.29 [GREEN] Pass test: register `/ralph-index` command and help text
+- [x] 1.29 [GREEN] Pass test: register `/ralph-index` command and help text
   - **Do**:
     1. Import the indexing runner into `extensions/ralph-specum/index.ts`.
     2. Register `ralph-index` with a Pi-native command handler.
