@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -13,6 +13,7 @@ const cases = new Map([
   ['parser-options', verifyParserOptions],
   ['paths', verifyPaths],
   ['scanner', verifyScanner],
+  ['dry-run', verifyDryRun],
 ]);
 
 async function main() {
@@ -234,6 +235,62 @@ async function verifyScanner() {
   }
 }
 
+async function verifyDryRun() {
+  const helper = await loadIndexingHelper();
+  const runRalphIndex = helper?.runRalphIndex;
+
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-dry-run-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(tempRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const servicePath = join(servicesRoot, 'accounts.service.ts');
+    writeFileSync(servicePath, 'export class AccountsService { list() { return []; } }\n', 'utf8');
+
+    const result = await runRalphIndex({
+      cwd: projectRoot,
+      specRoot,
+      args: ['--path', scanRoot, '--type', 'services', '--dry-run', '--quick'],
+    });
+
+    if (result?.ok !== true || result?.dryRun !== true) {
+      expectedFail(`dry-run helper must return an ok dry-run result; got ${JSON.stringify(result)}`);
+    }
+
+    const writes = result?.writes;
+    if (!Array.isArray(writes)) {
+      expectedFail(`dry-run result must include planned writes; got ${JSON.stringify(result)}`);
+    }
+
+    assertPlannedWrite(writes, 'component', servicePath);
+    assertPlannedWrite(writes, 'summary', 'index.md');
+    assertPlannedWrite(writes, 'state', 'index-state.json');
+
+    const reportedPlan = `${result?.message ?? ''}\n${writes
+      .map((write) => `${write.action ?? ''} ${write.kind ?? ''} ${write.path ?? ''}`)
+      .join('\n')}`;
+    for (const expectedText of ['create', 'component', 'summary', 'state']) {
+      if (!reportedPlan.includes(expectedText)) {
+        expectedFail(`dry-run plan must report ${expectedText}; got ${reportedPlan}`);
+      }
+    }
+
+    if (existsSync(join(specRoot, '.index'))) {
+      expectedFail('dry-run must not create a .index/ directory or files.');
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function verifyParserOptions() {
   const parseIndexArgs = await loadParseIndexArgs();
 
@@ -284,6 +341,21 @@ async function verifyParserOptions() {
   assertMissingValueMessage(parseIndexArgs(['--path']), '--path');
   assertMissingValueMessage(parseIndexArgs(['--type=']), '--type');
   assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
+}
+
+function assertPlannedWrite(writes, expectedKind, expectedPathFragment) {
+  const write = writes.find((candidate) => {
+    const candidatePath = String(candidate?.path ?? '');
+    return candidate?.kind === expectedKind && candidatePath.includes(expectedPathFragment);
+  });
+
+  if (!write) {
+    expectedFail(`dry-run plan must include a ${expectedKind} write containing ${expectedPathFragment}; got ${JSON.stringify(writes)}`);
+  }
+
+  if (!['create', 'update', 'skip'].includes(write.action)) {
+    expectedFail(`dry-run ${expectedKind} write must include an action; got ${JSON.stringify(write)}`);
+  }
 }
 
 function assertMissingValueMessage(result, optionName) {

@@ -186,7 +186,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.13 [RED] Failing test: dry-run plans writes and writes nothing
+- [x] 1.13 [RED] Failing test: dry-run plans writes and writes nothing
   - **Do**:
     1. Add a `dry-run` verifier case with a temp fixture and temp spec root.
     2. Assert planned component, summary, and state actions are reported.
