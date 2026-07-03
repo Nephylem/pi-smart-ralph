@@ -50,7 +50,7 @@ This spec is not complete until ALL criteria are met:
 4. **Goal-Driven**: Emphasize **Done when** and **Verify** over **Do** steps. The Do is guidance; the Done when is the contract. Transform imperative commands into declarative success criteria. Instead of "Add validation" write "Done when: invalid inputs return 400 with error message."
 5. **Scoped Verification by Default**: For ordinary implementation/refactor tasks, `Verify` should target only touched files/modules/tests whenever that can prove the task. Save broad repo-wide lint/typecheck/test commands for `Q*`, `V*`, `VE*`, and final gates.
 6. **Python Order Matters**: For Python implementation/refactor tasks, prefer `black --check` on touched files before module/file `mypy`, then targeted `pytest` when applicable so formatter blockers surface locally first.
-7. **Topology-Aware Commits**: When task files and required spec artifacts cannot share one repo or cannot be committed together from one repo, use `Commit: None` instead of an impossible combined commit. Keep spec-root references configurable from `<basePath>` rather than hardcoding paths.
+7. **Topology-Aware Commits**: Use `Commit: None` for `multi_repo`, `repo_plus_nonrepo`, and `no_repo` tasks. Keep conventional commit messages for `single_repo`, and keep spec-root references configurable from `<basePath>`.
 
 ### Bad vs. Good Examples
 
@@ -152,12 +152,12 @@ GOOD:
   - **Verify**: `pnpm test -- --grep "login.*timeout"`
   - **Commit**: `fix(auth): green - fix login timeout handling`
 
-- [ ] 1.2b Topology-aware spec update without a shared repo commit
+- [ ] 1.2b Topology-aware spec update
   - **Do**:
     1. Update only spec artifacts using `<basePath>`-relative references.
-    2. Use `Commit: None` because task files and required spec artifacts cannot share one repo and cannot be committed together from one repo.
+    2. Use `Commit: None` for `multi_repo`, `repo_plus_nonrepo`, and `no_repo` workspaces.
   - **Files**: `<basePath>/tasks.md`, `<basePath>/.progress.md`
-  - **Done when**: The task stays executable in a split-repo or spec-outside-repo workspace without an impossible combined commit.
+  - **Done when**: The task stays executable outside `single_repo` workspaces.
   - **Verify**: `<discovered command proving the spec-only change>`
   - **Commit**: None
 
@@ -198,9 +198,9 @@ Focus: Validate the idea works end-to-end. Skip tests, accept hardcoded values.
 - [ ] 1.1b {{Topology-aware task example}}
   - **Do**:
     1. Keep spec-root references configurable from `<basePath>`.
-    2. Use `Commit: None` when task files and required spec artifacts cannot share one repo.
+    2. Use `Commit: None` for `multi_repo`, `repo_plus_nonrepo`, and `no_repo` tasks.
   - **Files**: {{Exact file paths to create/modify}}
-  - **Done when**: The task can complete even when files cannot be committed together from one repo.
+  - **Done when**: The task can complete outside `single_repo` workspaces.
   - **Verify**: {{Discovered command that proves the behavior}}
   - **Commit**: None
   - _Requirements: FR-2, AC-2.1_

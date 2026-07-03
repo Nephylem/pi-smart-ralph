@@ -364,7 +364,7 @@
   - _Requirements: FR-6, NFR-4, AC-2.2_
   - _Design: Prompt contracts; File Structure_
 
-- [ ] 4.6 [YELLOW] Refactor: keep planner examples concise and canonical
+- [x] 4.6 [YELLOW] Refactor: keep planner examples concise and canonical
   - **Do**:
     1. Remove redundant wording from planner and template examples.
     2. Keep topology terms and commit markers identical to runtime/verifier strings.

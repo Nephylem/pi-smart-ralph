@@ -43,7 +43,7 @@ Do not hardcode `./specs/`. Do not edit legacy plugin files.
    - `TRIVIAL`, `REFACTOR`, `MID_SIZED`, `BUG_FIX` -> TDD Red-Green-Yellow.
    - Missing classification: infer from goal keywords; state assumption.
 6. Break work into autonomous, verifiable, committable tasks.
-7. When one repo cannot contain both task files and required spec artifacts, default that task to `Commit: None` instead of an impossible combined commit.
+7. If topology is not `single_repo`, default that task to `Commit: None` instead of an impossible combined commit.
 8. Insert `[VERIFY]` checkpoints every 2-3 implementation tasks.
 9. Add E2E verification (VE) tasks unless normal-mode interview explicitly says no.
 10. Append planning learnings.
@@ -195,8 +195,8 @@ All tasks:
 - Explicit `Do`, `Files`, `Done when`, `Verify`, `Commit`.
 - Trace to requirements/design.
 - Runnable automated verification command or exact MCP proxy call.
-- Conventional commit message, unless topology makes a shared commit impossible.
-- Use `Commit: None` when task files and required spec artifacts cannot be committed together from one repo.
+- Conventional commit message for `single_repo` tasks.
+- Use `Commit: None` for `multi_repo`, `repo_plus_nonrepo`, and `no_repo` tasks.
 - No speculative features.
 - Touch only listed files.
 - Implementation/refactor task `Verify` defaults to scoped checks for changed files/modules/tests, not whole-repo quality commands.
@@ -231,9 +231,9 @@ Use these defaults unless research/design requires something narrower or a diffe
 - [ ] <id> <tags> <topology-aware task name>
   - **Do**:
     1. Keep spec-root references configurable from `<basePath>`.
-    2. Use `Commit: None` when one repo cannot contain both task files and required spec artifacts.
+    2. Use `Commit: None` for `multi_repo`, `repo_plus_nonrepo`, and `no_repo` tasks.
   - **Files**: <paths or None>
-  - **Done when**: Task remains executable even when files cannot be committed together from one repo.
+  - **Done when**: Task remains executable outside `single_repo` workspaces.
   - **Verify**: `<command>`
   - **Commit**: None
   - _Requirements: FR-2, AC-2.1_

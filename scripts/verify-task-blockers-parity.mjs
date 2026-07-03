@@ -549,8 +549,8 @@ function assertPlannerSurfaceContract({ surfaceName, source }) {
     expectedFail(`${surfaceName} must steer non-shared-repo tasks toward \`Commit: None\`.`);
   }
 
-  if (!/one repo cannot contain both task files and required spec artifacts|cannot be committed together from one repo/i.test(source)) {
-    expectedFail(`${surfaceName} must describe the non-shared-repo condition that defaults tasks to \`Commit: None\`.`);
+  if (!/single_repo/.test(source) || !/multi_repo/.test(source) || !/repo_plus_nonrepo/.test(source) || !/no_repo/.test(source)) {
+    expectedFail(`${surfaceName} must use the canonical topology enum names in commit guidance.`);
   }
 }
 
@@ -563,8 +563,8 @@ function assertTemplateSurfaceContract({ surfaceName, source }) {
     expectedFail(`${surfaceName} must include a canonical \`Commit: None\` example for non-shared-repo tasks.`);
   }
 
-  if (!/task files and required spec artifacts cannot share one repo|cannot be committed together from one repo|topology-aware/i.test(source)) {
-    expectedFail(`${surfaceName} must explain why non-shared-repo tasks use \`Commit: None\` instead of an impossible combined commit.`);
+  if (!/single_repo/.test(source) || !/multi_repo/.test(source) || !/repo_plus_nonrepo/.test(source) || !/no_repo/.test(source)) {
+    expectedFail(`${surfaceName} must use the canonical topology enum names in commit guidance.`);
   }
 }
 
