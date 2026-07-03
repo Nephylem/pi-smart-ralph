@@ -385,6 +385,15 @@ export function formatRefactorCascadeProgressEntry(
 	return `- ${formatRefactorCascadeOutcome(sourceFile, targetFile, decision, reason)}`;
 }
 
+export function formatRefactorArtifactProgressEntry(file: RefactorArtifact, evidence?: string): string {
+	const details = evidence ? ` Evidence: ${evidence}` : "";
+	return `- Refactor updated ${file}.md.${details}`;
+}
+
+export function shouldResetRefactorTaskIndex(updatedFiles: RefactorArtifact[]): boolean {
+	return updatedFiles.includes("tasks");
+}
+
 export function formatRefactorCascadeOutcome(
 	sourceFile: RefactorArtifact,
 	targetFile: RefactorArtifact,

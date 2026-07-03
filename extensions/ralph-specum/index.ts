@@ -80,6 +80,7 @@ import {
 	auditRefactorSpecMutationScope,
 	formatRefactorCascadeOutcome,
 	formatRefactorCascadeProgressEntry,
+	formatRefactorArtifactProgressEntry,
 	formatRefactorCompletionValidationError,
 	formatRefactorExecutionError,
 	formatRefactorHeadlessDecisionError,
@@ -95,6 +96,7 @@ import {
 	resolveRefactorSpecPlan,
 	restoreRefactorSpecDirectory,
 	snapshotRefactorSpecDirectory,
+	shouldResetRefactorTaskIndex,
 } from "./refactor.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
@@ -9087,7 +9089,10 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 						);
 						return null;
 					}
-					return completionValidation;
+					return {
+						...completionValidation,
+						changedFiles: audit.changedFiles,
+					};
 				} catch (error) {
 					restoreRefactorSpecDirectory(specSnapshot);
 					await notify(ctx, formatRefactorExecutionError(error), "warning");
@@ -9148,8 +9153,12 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 			};
 			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
 			const pendingCascades: Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }> = [];
+			const updatedFiles: Array<"requirements" | "design" | "tasks"> = [];
+			const updateEvidence: string[] = [];
 			const primaryCompletion = await runRefactorStep(request);
 			if (!primaryCompletion) return;
+			updatedFiles.push(selectedFilePlan.selectedFile);
+			if (primaryCompletion.evidence) updateEvidence.push(primaryCompletion.evidence);
 			enqueueCascadeSteps(
 				selectedFilePlan.selectedFile,
 				primaryCompletion.cascadeNeeded,
@@ -9177,12 +9186,43 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				const cascadeRequest = buildApprovedRefactorCascadeRequest(plan, cascade.targetFile, { cwd: ctx.cwd });
 				const cascadeCompletion = await runRefactorStep(cascadeRequest);
 				if (!cascadeCompletion) return;
+				updatedFiles.push(cascade.targetFile);
+				if (cascadeCompletion.evidence) updateEvidence.push(cascadeCompletion.evidence);
 				enqueueCascadeSteps(
 					cascade.targetFile,
 					cascadeCompletion.cascadeNeeded,
 					cascadeCompletion.cascadeReason ?? "Downstream refactor requested.",
 					pendingCascades,
 				);
+			}
+
+			appendProgress(
+				plan.spec,
+				[
+					"",
+					`### Refactor update (${new Date().toISOString()})`,
+					...updatedFiles.map((file, index) => formatRefactorArtifactProgressEntry(file, updateEvidence[index])),
+				].join("\n"),
+				{ cwd: ctx.cwd },
+			);
+
+			const shouldResetTaskIndex = shouldResetRefactorTaskIndex(updatedFiles);
+			let state = readRalphState(plan.spec, { cwd: ctx.cwd });
+			state = mergeRalphState(
+				plan.spec,
+				shouldResetTaskIndex
+					? { taskIndex: 0, validationError: null }
+					: { validationError: null },
+				{ cwd: ctx.cwd },
+			);
+			if (shouldResetTaskIndex) {
+				try {
+					const mirror = mirrorTasksToNativeTaskCards(pi, ctx, plan.spec, { cwd: ctx.cwd });
+					state = mergeRalphState(plan.spec, { taskIndex: 0, ...nativeTaskMirrorStatePatch(mirror) }, { cwd: ctx.cwd });
+				} catch (error) {
+					state = mergeRalphState(plan.spec, { taskIndex: 0, ...nativeTaskMirrorFailurePatch(state, error) }, { cwd: ctx.cwd });
+					await notify(ctx, `Refactor updated tasks.md, but native pi-tasks mirroring failed:\n${formatError(error)}`, "warning");
+				}
 			}
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");

@@ -380,7 +380,7 @@
   - _Requirements: FR-12, FR-13, FR-14, AC-4.1, AC-4.2, AC-4.3, AC-4.4_
   - _Design: coordinator state/progress layer; native task mirror_
 
-- [ ] 5.2 [GREEN] Pass test: merge state safely and append progress outcomes
+- [x] 5.2 [GREEN] Pass test: merge state safely and append progress outcomes
   - **Do**:
     1. Use existing atomic state/progress helpers for coordinator-owned writes.
     2. Preserve required metadata fields during merges.
