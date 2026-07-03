@@ -508,7 +508,7 @@ function githubIssueListArgs(repository: GithubRepository | undefined): string[]
 	return withRepository(["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,body,url"], repository);
 }
 
-function githubIssueCreateArgs(title: string, body: string, labels: string[], repository: GithubRepository | undefined): string[] {
+export function githubIssueCreateArgs(title: string, body: string, labels: string[], repository: GithubRepository | undefined): string[] {
 	return withRepository(["issue", "create", "--title", title, "--body", body, ...labels.flatMap((label) => ["--label", label])], repository);
 }
 

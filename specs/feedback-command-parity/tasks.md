@@ -198,7 +198,7 @@
   - _Requirements: FR-4, FR-6, FR-8, AC-2.3, AC-3.3_
   - _Design: `feedback.ts` create path; shared GitHub adapter reuse_
 
-- [ ] 3.2 [GREEN] Pass test: reuse GitHub helpers for readiness, labels, and confirmed create
+- [x] 3.2 [GREEN] Pass test: reuse GitHub helpers for readiness, labels, and confirmed create
   - **Do**:
     1. Reuse `detectGithub(...)`, `selectGithubLabels(...)`, `parseGithubIssueNumber(...)`, and the shared runner surface for confirmed writes.
     2. Call `gh issue create` only after confirmation succeeds.

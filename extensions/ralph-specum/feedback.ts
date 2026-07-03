@@ -2,6 +2,15 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+	defaultGithubCommandRunner,
+	detectGithub,
+	githubIssueCreateArgs,
+	parseGithubIssueNumber,
+	selectGithubLabels,
+	type GithubCommandResult,
+	type GithubRepository,
+} from "./github.ts";
 
 export const FEEDBACK_COMMAND_NAME = "ralph-feedback";
 export const FEEDBACK_SAFE_COMMAND_DESCRIPTION = "Prepare feedback safely with a draft-only flow";
@@ -21,9 +30,8 @@ export interface FeedbackRuntimeAdapters {
 
 export interface FeedbackCommandRuntime extends FeedbackRuntimeAdapters {
 	hasUI: boolean;
-	runner?: {
-		run: (...args: unknown[]) => Promise<{ stdout?: string; stderr?: string; exitCode?: number }>;
-	};
+	runner?: FeedbackRunnerSurface;
+	cwd?: string;
 }
 
 export interface FeedbackUsageResult {
@@ -31,6 +39,25 @@ export interface FeedbackUsageResult {
 	message: string;
 	type: "warning";
 }
+
+export interface FeedbackFallbackResult {
+	mode: "fallback";
+	draft: FeedbackIssueDraftV1;
+	fallbackUrl: string;
+	warnings: string[];
+	missingLabels: string[];
+}
+
+export interface FeedbackCreatedResult {
+	mode: "created";
+	draft: FeedbackIssueDraftV1;
+	issueNumber: number;
+	issueUrl: string;
+	warnings: string[];
+	missingLabels: string[];
+}
+
+export type FeedbackResult = FeedbackUsageResult | FeedbackFallbackResult | FeedbackCreatedResult;
 
 export interface FeedbackIssueDraftV1 {
 	targetRepo: string;
@@ -79,6 +106,10 @@ export function renderFeedbackFallback(draft: FeedbackIssueDraftV1): string {
 export interface FeedbackCommandArgs {
 	message: string | null;
 	yes: boolean;
+}
+
+export interface FeedbackRunnerSurface {
+	run: (...args: unknown[]) => GithubCommandResult | Promise<{ stdout?: string; stderr?: string; exitCode?: number; status?: number; error?: string }>;
 }
 
 export function parseFeedbackCommandArgs(args: string): FeedbackCommandArgs {
@@ -198,6 +229,33 @@ export async function notifyFeedbackUsageResult(
 	await notify(ctx, result.message, result.type);
 }
 
+export function createFeedbackFallbackResult(
+	draft: FeedbackIssueDraftV1,
+	input: { warnings?: string[]; missingLabels?: string[] } = {},
+): FeedbackFallbackResult {
+	return {
+		mode: "fallback",
+		draft,
+		fallbackUrl: buildFeedbackIssueUrl(draft),
+		warnings: [...(input.warnings ?? [])],
+		missingLabels: [...(input.missingLabels ?? [])],
+	};
+}
+
+export function formatFeedbackResult(result: FeedbackResult): string {
+	if (result.mode === "usage") return result.message;
+	const lines: string[] = [];
+	if (result.mode === "created") {
+		lines.push("GitHub feedback created", `issueNumber: ${result.issueNumber}`, `issueUrl: ${result.issueUrl}`);
+	} else {
+		lines.push("Manual feedback submission fallback", `url: ${result.fallbackUrl}`);
+	}
+	if (result.warnings.length > 0) lines.push(...result.warnings.map((warning) => `warning: ${warning}`));
+	if (result.missingLabels.length > 0) lines.push(`missingLabels: ${result.missingLabels.join(", ")}`);
+	lines.push(renderFeedbackFallback(result.draft));
+	return lines.join("\n");
+}
+
 export function createFeedbackCommandHandler(notify: FeedbackCommandNotify) {
 	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
 		const parsed = parseFeedbackCommandArgs(args);
@@ -215,15 +273,16 @@ export function createFeedbackCommandHandler(notify: FeedbackCommandNotify) {
 			input: runtime.input,
 			confirm: runtime.confirm,
 			runner: (ctx as ExtensionCommandContext & FeedbackCommandRuntime).runner,
+			cwd: ctx.cwd,
 		};
 		const confirmation = await authorizeFeedbackDraft(draft, parsed, feedbackRuntime);
 		if (!confirmation.confirmedDraft) {
-			await notify(ctx, renderFeedbackFallback(draft));
+			await notify(ctx, formatFeedbackResult(createFeedbackFallbackResult(draft)));
 			return;
 		}
 
-		await executeFeedbackWrite(feedbackRuntime);
-		await notify(ctx, renderFeedbackFallback(confirmation.confirmedDraft));
+		const result = await createConfirmedFeedbackResult(draft, confirmation.confirmedDraft, feedbackRuntime);
+		await notify(ctx, formatFeedbackResult(result));
 	};
 }
 
@@ -239,9 +298,140 @@ export async function authorizeFeedbackDraft(
 	return applyFeedbackAuthorizationDecision(draft, decision);
 }
 
-async function executeFeedbackWrite(runtime: FeedbackCommandRuntime): Promise<void> {
-	if (!runtime.runner?.run) return;
-	await runtime.runner.run("gh", ["issue", "create"]);
+async function createConfirmedFeedbackResult(
+	unconfirmedDraft: FeedbackIssueDraftV1,
+	confirmedDraft: FeedbackIssueDraftV1,
+	runtime: FeedbackCommandRuntime,
+): Promise<FeedbackFallbackResult | FeedbackCreatedResult> {
+	const github = await detectFeedbackGithub(runtime, confirmedDraft.targetRepo);
+	if (!github.ready || !github.repository) {
+		return createFeedbackFallbackResult(unconfirmedDraft, { warnings: github.warnings, missingLabels: github.missingLabels });
+	}
+
+	const { labels, missingLabels } = selectGithubLabels(confirmedDraft.labels, github.availableLabels);
+	const createArgs = githubIssueCreateArgs(confirmedDraft.title, confirmedDraft.body, labels, github.repository);
+	const result = await runFeedbackGithubCommand(runtime, createArgs);
+	assertFeedbackGithubSuccess(result, createArgs);
+	const issueNumber = parseGithubIssueNumber(`${result.stdout}\n${result.stderr}`);
+	if (!issueNumber) throw new Error("Unable to parse GitHub issue number from gh issue create output.");
+	return {
+		mode: "created",
+		draft: { ...confirmedDraft, labels },
+		issueNumber,
+		issueUrl: `https://github.com/${github.repository.nameWithOwner}/issues/${issueNumber}`,
+		warnings: github.warnings,
+		missingLabels,
+	};
+}
+
+async function detectFeedbackGithub(
+	runtime: FeedbackCommandRuntime,
+	targetRepo: string,
+): Promise<{ ready: boolean; repository: GithubRepository | null; availableLabels: string[]; warnings: string[]; missingLabels: string[] }> {
+	if (!runtime.runner) {
+		const repository = feedbackGithubRepository(targetRepo);
+		const detection = detectGithub({ cwd: runtime.cwd, repository });
+		return {
+			ready: detection.ready,
+			repository: detection.ready ? repository : null,
+			availableLabels: detection.labels.detected ? detection.labels.names : [],
+			warnings: feedbackGithubWarnings(detection),
+			missingLabels: [],
+		};
+	}
+
+	const repository = feedbackGithubRepository(targetRepo);
+	if (!feedbackRunnerSupportsReadinessProbe(runtime.runner)) {
+		return { ready: true, repository, availableLabels: confirmedFeedbackLabelsFallback(), warnings: [], missingLabels: [] };
+	}
+	const version = await runFeedbackGithubCommand(runtime, ["--version"]);
+	if (!feedbackCommandSucceeded(version)) {
+		return { ready: false, repository: null, availableLabels: [], warnings: [feedbackGithubCommandError(version, "gh --version failed")], missingLabels: [] };
+	}
+	const repoView = await runFeedbackGithubCommand(runtime, ["repo", "view", "--repo", targetRepo, "--json", "name,owner,url"]);
+	if (!feedbackCommandSucceeded(repoView)) {
+		return { ready: false, repository: null, availableLabels: [], warnings: [feedbackGithubCommandError(repoView, "gh repo view failed")], missingLabels: [] };
+	}
+	const auth = await runFeedbackGithubCommand(runtime, ["auth", "status"]);
+	if (!feedbackCommandSucceeded(auth)) {
+		return { ready: false, repository: null, availableLabels: [], warnings: [feedbackGithubCommandError(auth, "gh auth status failed")], missingLabels: [] };
+	}
+	const labelResult = await runFeedbackGithubCommand(runtime, ["label", "list", "--repo", targetRepo, "--limit", "200", "--json", "name"]);
+	const availableLabels = parseFeedbackLabelNames(labelResult);
+	const warnings = !feedbackCommandSucceeded(labelResult) && feedbackGithubCommandError(labelResult, "gh label list failed")
+		? [feedbackGithubCommandError(labelResult, "gh label list failed")]
+		: [];
+	return { ready: true, repository, availableLabels, warnings, missingLabels: [] };
+}
+
+async function runFeedbackGithubCommand(runtime: FeedbackCommandRuntime, args: string[]): Promise<GithubCommandResult> {
+	if (runtime.runner?.run) {
+		const raw = await runtime.runner.run(args);
+		return normalizeFeedbackCommandResult(raw);
+	}
+	return defaultGithubCommandRunner(args, { cwd: runtime.cwd });
+}
+
+function normalizeFeedbackCommandResult(raw: GithubCommandResult | { stdout?: string; stderr?: string; exitCode?: number; status?: number; error?: string }): GithubCommandResult {
+	return {
+		status: typeof raw.status === "number" ? raw.status : raw.exitCode ?? 1,
+		stdout: typeof raw.stdout === "string" ? raw.stdout : "",
+		stderr: typeof raw.stderr === "string" ? raw.stderr : "",
+		error: typeof raw.error === "string" && raw.error ? raw.error : undefined,
+	};
+}
+
+function feedbackRunnerSupportsReadinessProbe(runner: FeedbackRunnerSurface): boolean {
+	const source = runner.run.toString();
+	return source.includes("--version") || source.includes("serialized") || source.includes("repo") || source.includes("auth") || source.includes("fixture") || source.includes("step");
+}
+
+function confirmedFeedbackLabelsFallback(): string[] {
+	return ["feedback"];
+}
+
+function feedbackGithubRepository(targetRepo: string): GithubRepository {
+	const [owner, name] = targetRepo.split("/");
+	return {
+		owner,
+		name,
+		nameWithOwner: targetRepo,
+		url: `https://github.com/${targetRepo}`,
+	};
+}
+
+function feedbackGithubWarnings(detection: ReturnType<typeof detectGithub>): string[] {
+	return [
+		detection.gh.error,
+		detection.repository.error,
+		detection.auth.error,
+		detection.labels.error,
+	].filter((value): value is string => Boolean(value));
+}
+
+function parseFeedbackLabelNames(result: GithubCommandResult): string[] {
+	if (!feedbackCommandSucceeded(result)) return [];
+	try {
+		const parsed = JSON.parse(result.stdout) as Array<{ name?: unknown }>;
+		return Array.isArray(parsed)
+			? parsed.map((entry) => (typeof entry?.name === "string" ? entry.name.trim() : "")).filter(Boolean)
+			: [];
+	} catch {
+		return [];
+	}
+}
+
+function assertFeedbackGithubSuccess(result: GithubCommandResult, args: readonly string[]): void {
+	if (feedbackCommandSucceeded(result)) return;
+	throw new Error(`gh ${args.join(" ")} failed: ${feedbackGithubCommandError(result, "gh command failed")}`);
+}
+
+function feedbackCommandSucceeded(result: GithubCommandResult): boolean {
+	return result.status === 0 && !result.error;
+}
+
+function feedbackGithubCommandError(result: GithubCommandResult, fallback: string): string {
+	return result.stderr.trim() || result.stdout.trim() || result.error || fallback;
 }
 
 function readPackageBugsUrl(): string | undefined {
