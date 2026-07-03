@@ -69,6 +69,7 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
+import { runFeedbackCommand } from "./feedback.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
@@ -3623,10 +3624,12 @@ function formatStartSummary(
 	progressPath: string,
 	summaryMetadata: StartSummaryMetadata,
 	warnings: string[],
+	nextCommandOverride?: string,
 ): string {
 	const quickMode = booleanField(state, "quickMode") === true;
 	const autonomousMode = booleanField(state, "autonomousMode") === true;
 	const mode = quickMode ? (autonomousMode ? "quick/autonomous" : "quick") : autonomousMode ? "autonomous" : "normal";
+	const nextCommand = nextCommandOverride ?? `${startPhaseCommand(phase)}${quickMode ? " --quick" : ""}`;
 	const lines = [
 		`${isNew ? "Created" : "Resuming"} spec: ${spec.name}`,
 		"",
@@ -3638,7 +3641,7 @@ function formatStartSummary(
 		`Branch decision: ${formatBranchSummary(summaryMetadata)}`,
 		`Discovery: ${summaryMetadata.discoveryCounts.relatedSpecs} related spec(s), ${summaryMetadata.discoveryCounts.discoveredSkills} skill(s)`,
 		`Next phase: ${phase}`,
-		`Next command: ${startPhaseCommand(phase)}${quickMode ? " --quick" : ""}`,
+		`Next command: ${nextCommand}`,
 		`Files: ${formatArtifactIndicators(spec)}`,
 	];
 
@@ -4118,11 +4121,40 @@ async function runStartCommand(
 		return;
 	}
 
-	const pointer = writeCurrentSpec(spec, options);
-	await notify(ctx, formatStartSummary(pointer.spec, resolved.target.isNew, phase, state, pointer.value, progressPath, startSummaryMetadata, parsed.warnings));
-	if (quickOrAutonomous) {
-		await runQuickFlow(pi, ctx, pointer.spec, parsed, options);
+	const currentMarkerBeforeStart = readCurrentSpecValue(options);
+	const currentSpecBeforeStart = currentMarkerBeforeStart ? resolveCurrentSpec(options) : null;
+	const preserveCurrentSpecMarker = Boolean(
+		parsed.reference
+		&& currentMarkerBeforeStart
+		&& currentSpecBeforeStart?.exists
+		&& currentSpecBeforeStart.absolutePath !== spec.absolutePath,
+	);
+	const nextCommandOverride = preserveCurrentSpecMarker
+		? `${startPhaseCommand(phase)}${quickOrAutonomous ? " --quick" : ""} ${spec.path}`
+		: undefined;
+	if (preserveCurrentSpecMarker) {
+		parsed.warnings.push(`Preserved active current spec marker '${currentMarkerBeforeStart}' while starting '${spec.name}'. Use explicit spec reference '${spec.path}' for follow-up commands.`);
+	} else {
+		writeCurrentSpec(spec, options);
 	}
+	await notify(
+		ctx,
+		formatStartSummary(
+			spec,
+			resolved.target.isNew,
+			phase,
+			state,
+			preserveCurrentSpecMarker ? `${currentMarkerBeforeStart} (preserved)` : spec.name,
+			progressPath,
+			startSummaryMetadata,
+			parsed.warnings,
+			nextCommandOverride,
+		),
+	);
+	if (quickOrAutonomous) {
+		await runQuickFlow(pi, ctx, spec, parsed, options, { preserveCurrentSpecMarker });
+	}
+}
 }
 
 function parseCancelArgs(args: string): CancelArguments {
@@ -4332,7 +4364,6 @@ const RALPH_TOKEN_BAR_WIDTH = 16;
 const RALPH_SUBAGENT_WIDGET_KEY = "ralph-subagents";
 const RALPH_SUBAGENT_WIDGET_BAR_WIDTH = 10;
 const RALPH_SUBAGENT_WIDGET_MAX_LINES = 6;
-const RALPH_SUBAGENT_WIDGET_LINGER_MS = 5_000;
 const RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const ralphSubagentWidgetState: {
 	tracked: Map<string, RalphTrackedSubagentEntry>;
@@ -4513,19 +4544,15 @@ function readActiveSubagentRecords(): RalphSubagentRecord[] {
 		.sort((left, right) => left.startedAt - right.startedAt);
 }
 
-function readLingeringSubagentRecords(now = Date.now()): RalphSubagentRecord[] {
-	const lingering: RalphSubagentRecord[] = [];
-	for (const [id, entry] of ralphSubagentWidgetState.tracked.entries()) {
+function readLingeringSubagentRecords(_now = Date.now()): RalphSubagentRecord[] {
+	const finished: RalphSubagentRecord[] = [];
+	for (const entry of ralphSubagentWidgetState.tracked.values()) {
 		const record = resolveTrackedSubagentRecord(entry);
 		if (record.status === "running" || record.status === "queued") continue;
 		if (!record.completedAt) continue;
-		if (now - record.completedAt > RALPH_SUBAGENT_WIDGET_LINGER_MS) {
-			ralphSubagentWidgetState.tracked.delete(id);
-			continue;
-		}
-		lingering.push(record);
+		finished.push(record);
 	}
-	return lingering.sort((left, right) => (right.completedAt ?? 0) - (left.completedAt ?? 0));
+	return finished.sort((left, right) => (right.completedAt ?? 0) - (left.completedAt ?? 0));
 }
 
 function formatSubagentWidgetFinishedState(
@@ -4558,8 +4585,10 @@ function formatSubagentWidgetLine(
 	}
 	if (record.status !== "running") {
 		const finished = formatSubagentWidgetFinishedState(record, theme);
+		const progress = formatSubagentWidgetProgress(record);
+		const tools = `${record.toolUses} tool${record.toolUses === 1 ? "" : "s"}`;
 		const elapsed = formatFooterElapsed(record.startedAt);
-		return `${theme.fg("accent", "[")} ${finished.icon} ${name} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("accent", "]")}`;
+		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "·")} ${theme.fg("dim", tools)} ${theme.fg("dim", "·")} ${theme.fg("dim", elapsed)} ${theme.fg("dim", "]")}`;
 	}
 	const icon = theme.fg("accent", frame);
 	const progress = formatSubagentWidgetProgress(record);
@@ -5798,6 +5827,7 @@ async function runQuickFlow(
 	spec: SpecEntry,
 	parsed: StartArguments,
 	options: RalphPathOptions,
+	invocation: { preserveCurrentSpecMarker?: boolean } = {},
 ): Promise<void> {
 	const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
 	const dependencyError = quickFlowDependencyError(pi, ctx.cwd, agentBootstrap);
@@ -5818,7 +5848,7 @@ async function runQuickFlow(
 			summaries.push(`- ${artifact}.md passed review after ${result.iterations} iteration(s).`);
 		}
 
-		writeCurrentSpec(spec, options);
+		if (!invocation.preserveCurrentSpecMarker) writeCurrentSpec(spec, options);
 		await notify(
 			ctx,
 			[
@@ -5826,10 +5856,12 @@ async function runQuickFlow(
 				"",
 				...summaries,
 				"",
-				"Starting implementation...",
+				invocation.preserveCurrentSpecMarker
+					? `Starting implementation with explicit spec target (${spec.path}) while preserving the current marker...`
+					: "Starting implementation...",
 			].join("\n"),
 		);
-		await runImplementCommand(pi, "", ctx);
+		await runImplementCommand(pi, invocation.preserveCurrentSpecMarker ? spec.path : "", ctx, invocation);
 	} catch (error) {
 		try {
 			appendProgress(
@@ -6589,6 +6621,14 @@ function buildImplementationPrompt(
 	const workspaceGuidance = definition.completionSignal === "TASK_COMPLETE"
 		? (workspaceReport.promptGuidance ?? fallbackWorkspaceGuidance)
 		: [];
+	const redTaskInstructions = /\[RED\]/i.test(`${task.rawTitle}\n${task.subject}`)
+		? [
+			"RED-task completion instructions:",
+			"- This is an expected-failure task. Final success output must include a keyed proof line that contains RED_PASS, preferably exactly `verify: RED_PASS`.",
+			"- Only report RED_PASS when the failing test or verification failed in the expected way.",
+		]
+		: [];
+
 	return [
 		`You are running one Smart Ralph implementation-loop task as ${definition.agentName}.`,
 		"",
@@ -6609,6 +6649,7 @@ function buildImplementationPrompt(
 		...workspaceGuidance,
 		"",
 		...agentSpecificImplementationInstructions(definition),
+		...(redTaskInstructions.length > 0 ? ["", ...redTaskInstructions] : []),
 		"",
 		"Current Ralph state:",
 		"~~~json",
@@ -7225,7 +7266,12 @@ function completeEpicChildAfterImplementation(spec: SpecEntry, finalState: Ralph
 	}
 }
 
-async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext): Promise<void> {
+async function runImplementCommand(
+	pi: ExtensionAPI,
+	args: string,
+	ctx: ExtensionCommandContext,
+	invocation: { preserveCurrentSpecMarker?: boolean } = {},
+): Promise<void> {
 	await ctx.waitForIdle();
 	const parsed = parseImplementArgs(args);
 	if (parsed.error) {
@@ -7248,7 +7294,7 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 	}
 
 	const spec = resolved.target.spec;
-	writeCurrentSpec(spec, options);
+	if (!invocation.preserveCurrentSpecMarker) writeCurrentSpec(spec, options);
 
 	let state: RalphState | null = resolved.target.state;
 	let taskData: { tasksPath: string; content: string; tasks: ParsedNativeTask[] };
@@ -9678,6 +9724,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"",
 					"Commands:",
 					"/ralph-help     Show this help.",
+					"/ralph-feedback    Prepare feedback safely with a draft-only flow; no remote submission yet.",
 					"/ralph-triage       Create or resume an epic; --output spec-files|github-issues|both; --yes confirms GitHub writes.",
 					"/ralph-epic-status  Show active epic readiness; --json prints machine state, --repair fills missing stubs.",
 					"/ralph-epic-switch  Switch the active epic marker.",
@@ -9699,6 +9746,11 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				].join("\n"),
 			);
 		},
+	});
+
+	pi.registerCommand("ralph-feedback", {
+		description: "Prepare feedback safely with a draft-only flow",
+		handler: async (args, ctx) => runFeedbackCommand(args, ctx, notify),
 	});
 
 	pi.registerCommand("ralph-model", {

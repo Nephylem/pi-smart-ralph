@@ -13,7 +13,7 @@
   - _Requirements: FR-1, FR-3, AC-4.1_
   - _Design: `extensions/ralph-specum/index.ts`; `scripts/verify-feedback-parity.mjs`_
 
-- [ ] 1.2 [GREEN] Pass test: register `/ralph-feedback` and initial help text
+- [x] 1.2 [GREEN] Pass test: register `/ralph-feedback` and initial help text
   - **Do**:
     1. Create `extensions/ralph-specum/feedback.ts` with the minimum exported command helpers the verifier needs.
     2. Register `ralph-feedback` in `extensions/ralph-specum/index.ts` and add matching `/ralph-help` text.
