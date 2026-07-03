@@ -244,7 +244,7 @@
   - _Requirements: FR-6, FR-8, AC-3.2, AC-3.3, AC-4.1, AC-4.2, AC-4.3_
   - _Design: Template/frontmatter renderer; Index planner_
 
-- [ ] 1.17 [GREEN] Pass test: write component, state, and summary artifacts atomically
+- [x] 1.17 [GREEN] Pass test: write component, state, and summary artifacts atomically
   - **Do**:
     1. Render component Markdown with schema-required frontmatter and template-equivalent body.
     2. Render `index-state.json` with component entries and run counts.

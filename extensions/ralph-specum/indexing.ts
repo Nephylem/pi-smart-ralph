@@ -429,11 +429,11 @@ function createEmptyIndexState(paths: IndexPaths, options: IndexOptions, indexed
 }
 
 function renderComponentSpec(component: ComponentEntry, indexedAt: string): string {
-  return `---\ntype: component\ngenerated: true\nsource: ${component.sourceDisplayPath}\nhash: ${component.hash}\ncategory: ${component.category}\nindexed: ${indexedAt}\n---\n\n# ${component.name}\n\n- Source: ${component.sourceDisplayPath}\n- Category: ${component.category}\n- Hash: ${component.hash}\n`;
+  return `---\ntype: component\ngenerated: true\nsource: ${component.sourceDisplayPath}\nhash: ${component.hash}\ncategory: ${component.category}\nindexed: ${indexedAt}\n---\n\n# ${component.name}\n\n## Summary\n\nIndexed ${component.category} component from ${component.sourceDisplayPath}.\n\n## Source\n\n- Path: ${component.sourceDisplayPath}\n- Category: ${component.category}\n- Hash: ${component.hash}\n- Indexed: ${indexedAt}\n`;
 }
 
 function renderIndexSummary(state: IndexStateV1): string {
-  return `# Index Summary\n\n- Generated at: ${state.indexed}\n- Components: ${state.componentCount}\n- External: ${state.externalCount}\n- Created: ${state.created}\n- Updated: ${state.updated}\n- Skipped: ${state.skipped}\n`;
+  return `# Index Summary\n\n- generated-at: ${state.indexed}\n- component count: ${state.componentCount}\n- external count: ${state.externalCount}\n- created: ${state.created}\n- updated: ${state.updated}\n- skipped: ${state.skipped}\n`;
 }
 
 export interface WriteIndexPlanOptions {
