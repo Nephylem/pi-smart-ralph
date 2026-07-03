@@ -1336,10 +1336,12 @@ const ralphFooterState: {
 	ctx: ExtensionCommandContext | null;
 	subagent: RalphFooterSubagentState | null;
 	gitInfoCache: Map<string, { expiresAt: number; value: RalphGitWorkspaceInfo }>;
+	mcpCountCache: Map<string, { expiresAt: number; value: number }>;
 } = {
 	ctx: null,
 	subagent: null,
 	gitInfoCache: new Map(),
+	mcpCountCache: new Map(),
 };
 
 function formatRalphElapsed(startedAt: number): string {
@@ -1433,24 +1435,24 @@ function footerThinkingColor(level: ReturnType<ExtensionAPI["getThinkingLevel"]>
 }
 
 function formatFooterBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, content: string, color: string = "text"): string {
-	return `${theme.fg("accent", "【")}${theme.fg(color as any, theme.bold(content))}${theme.fg("accent", "】")}`;
+	return `${theme.fg("accent", "[")}${theme.fg(color as any, theme.bold(content))}${theme.fg("accent", "]")}`;
 }
 
-function formatFooterBar(current: number, max: number, width = 11): string {
+function formatFooterBar(current: number, max: number, width = 12): string {
 	if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) {
-		return `【>${"―".repeat(Math.max(0, width - 1))}】`;
+		return `[>${"-".repeat(Math.max(0, width - 1))}]`;
 	}
 	const percent = Math.max(0, Math.min(1, current / max));
 	const filled = percent >= 1 ? width : Math.max(0, Math.floor(percent * width));
 	let bar: string;
 	if (filled <= 0) {
-		bar = `>${"―".repeat(Math.max(0, width - 1))}`;
+		bar = `>${"-".repeat(Math.max(0, width - 1))}`;
 	} else if (filled >= width) {
-		bar = "═".repeat(width);
+		bar = "=".repeat(width);
 	} else {
-		bar = `${"═".repeat(filled)}>${"―".repeat(Math.max(0, width - filled - 1))}`;
+		bar = `${"=".repeat(filled)}>${"-".repeat(Math.max(0, width - filled - 1))}`;
 	}
-	return `【${bar}】`;
+	return `[${bar}]`;
 }
 
 function formatFooterProgress(current: number, max: number): string {
@@ -1534,23 +1536,50 @@ function readFooterConversationUsage(ctx: ExtensionCommandContext): { input: num
 
 function formatFooterIoBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, usage: { input: number; output: number; cost: number }): string {
 	const content = [
-		theme.fg("muted", "╰┈➤ "),
+		theme.fg("muted", "📊 "),
 		theme.fg("syntaxFunction", `▼I ${formatTokenCount(usage.input)}`),
 		theme.fg("muted", " "),
 		theme.fg("syntaxString", `▲O ${formatTokenCount(usage.output)}`),
 		theme.fg("muted", " "),
 		theme.fg("syntaxNumber", `$${usage.cost.toFixed(3)}`),
 	].join("");
-	return `${theme.fg("accent", "【")}${content}${theme.fg("accent", "】")}`;
+	return `${theme.fg("accent", "[")}${content}${theme.fg("accent", "]")}`;
+}
+
+function countMcpServersInConfig(path: string): number {
+	if (!existsSync(path)) return 0;
+		try {
+		const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+		const servers = raw.mcpServers ?? raw["mcp-servers"];
+		return servers && typeof servers === "object" && !Array.isArray(servers) ? Object.keys(servers).length : 0;
+	} catch {
+		return 0;
+	}
+}
+
+function readConfiguredMcpServerCount(cwd: string): number {
+	const cached = ralphFooterState.mcpCountCache.get(cwd);
+	if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+	const configPaths = [
+		join(homedir(), ".config", "mcp", "mcp.json"),
+		join(homedir(), ".pi", "agent", "mcp.json"),
+		resolve(cwd, ".mcp.json"),
+		resolve(cwd, ".pi", "mcp.json"),
+	];
+	const value = Math.max(0, configPaths.reduce((max, path) => Math.max(max, countMcpServersInConfig(path)), 0));
+		ralphFooterState.mcpCountCache.set(cwd, { expiresAt: Date.now() + 5_000, value });
+	return value;
 }
 
 function formatFooterMcpBadge(
 	theme: { fg(color: any, text: string): string; bold(text: string): string },
 	registry: ToolRegistryState,
+	cwd: string,
 ): string {
-	const total = registry.allToolNames.has("mcp") ? 1 : 0;
-	const active = registry.activeToolNames.has("mcp") ? 1 : 0;
-	return formatFooterBadge(theme, `⚙️ mcp ${active}/${total || 1}`, active > 0 ? "success" : "warning");
+	const total = readConfiguredMcpServerCount(cwd);
+	const active = total > 0 && registry.activeToolNames.has("mcp") ? total : 0;
+	return formatFooterBadge(theme, `⚙  mcp ${active}/${total}`, active > 0 ? "success" : "dim");
 }
 
 function formatSubagentFooterUsage(record?: {
@@ -1587,38 +1616,35 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 			invalidate() {},
 			render(width: number): string[] {
 				const branch = footerData.getGitBranch() ?? "no git";
-				const gitInfo = detectGitWorkspaceInfo(ctx.cwd);
 				const summary = readRalphFooterSpecSummary(ctx);
 				const thinking = pi.getThinkingLevel();
 				const thinkingColor = footerThinkingColor(thinking);
 				const modelLabel = ctx.model?.id ?? "no-model";
-				const topLine = [
+				const topParts = [
 					formatFooterBadge(theme, `${theme.fg("muted", "📁 ")}${theme.fg("syntaxFunction", ralphFooterProjectDirectory(ctx))}`),
-					formatFooterBadge(theme, `${theme.fg("muted", "𖣂 worktree ")}${theme.fg("syntaxVariable", gitInfo.worktreeName ?? "no worktree")}`),
 					formatFooterBadge(theme, `${theme.fg("muted", "𖦥 ")}${theme.fg("syntaxString", branch)}`),
 					formatFooterBadge(theme, `${theme.fg("muted", "👾 ")}${theme.fg("syntaxType", modelLabel)} ${theme.fg("muted", "💭 ")}${theme.fg(thinkingColor, thinking)}`),
-					formatFooterBadge(theme, `${theme.fg("muted", "📋 ")}${theme.fg("mdHeading", summary.epicName)}`),
-					formatFooterBadge(theme, `${theme.fg("muted", "🎯 ")}${theme.fg("success", summary.specName)}`),
-				].join(" ");
+					formatFooterBadge(theme, summary.epicName === "no epic"
+						? `${theme.fg("muted", "📋 no epic")}`
+						: `${theme.fg("muted", "📋 ")}${theme.fg("mdHeading", summary.epicName)}`,
+						summary.epicName === "no epic" ? "dim" : "text"),
+					formatFooterBadge(theme, summary.specName === "no spec"
+						? `${theme.fg("muted", "🎯 no spec")}`
+						: `${theme.fg("muted", "🎯 ")}${theme.fg("success", summary.specName)}`,
+						summary.specName === "no spec" ? "dim" : "text"),
+				];
+				const topLine = topParts.join(" ");
 				const registry = getToolRegistryState(pi);
 				const mainUsage = readFooterConversationUsage(ctx);
-				const active = ralphFooterState.subagent;
-				const manager = active ? getRalphSubagentManager() : undefined;
-				const record = active ? manager?.getRecord(active.agentId) : undefined;
-				const subagentName = active?.agentName ?? "No subagent";
-				const subagentUsage = formatSubagentFooterUsage(record);
-				const subagentTools = record?.toolUses ?? 0;
-				const subagentStartedAt = record?.startedAt ?? active?.startedAt ?? Date.now();
-				const bottomLine = [
+				const bottomParts = [
 					theme.fg("text", formatMainContextUsage(ctx)),
-					formatFooterIoBadge(theme, mainUsage),
-					formatFooterMcpBadge(theme, registry),
-					theme.fg("muted", "|"),
-					`${theme.fg("toolTitle", theme.bold(subagentName))} ${theme.fg("muted", "🤖")} ${theme.fg("text", subagentUsage)}`,
-					theme.fg("dim", `· 🔨 ${subagentTools} tools`),
-					theme.fg("dim", `· ⏰ ${formatFooterElapsed(subagentStartedAt)}`),
+					(mainUsage.input > 0 || mainUsage.output > 0 || mainUsage.cost > 0)
+						? formatFooterIoBadge(theme, mainUsage)
+						: formatFooterBadge(theme, theme.fg("muted", "📊 idle"), "dim"),
+					formatFooterMcpBadge(theme, registry, ctx.cwd),
+					formatFooterBadge(theme, theme.fg("muted", "🤖 idle"), "dim"),
 				].join(" ");
-				return [truncateToWidth(topLine, width, "…"), truncateToWidth(bottomLine, width, "…")];
+				return [truncateToWidth(topLine, width, "…"), truncateToWidth(bottomParts, width, "…")];
 			},
 		};
 	});
