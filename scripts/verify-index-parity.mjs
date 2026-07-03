@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -11,6 +12,7 @@ const cases = new Map([
   ['parser-unknown', verifyParserUnknown],
   ['parser-options', verifyParserOptions],
   ['paths', verifyPaths],
+  ['scanner', verifyScanner],
 ]);
 
 async function main() {
@@ -135,6 +137,74 @@ async function verifyPaths() {
     if (priorStatePath !== undefined) {
       assertEqual(priorStatePath, aliasStatePath, 'compatibility alias state source path');
     }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyScanner() {
+  const helper = await loadIndexingHelper();
+  const parseIndexArgs = helper?.parseIndexArgs;
+  const resolveIndexPaths = helper?.resolveIndexPaths;
+  const scanComponentFiles = helper?.scanComponentFiles;
+
+  if (typeof parseIndexArgs !== 'function') {
+    expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof resolveIndexPaths !== 'function') {
+    expectedFail('resolveIndexPaths is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof scanComponentFiles !== 'function') {
+    expectedFail('scanComponentFiles is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-scanner-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const specRoot = join(tempRoot, 'specs');
+    const servicesRoot = join(scanRoot, 'services');
+    const controllersRoot = join(scanRoot, 'controllers');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(controllersRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const servicePath = join(servicesRoot, 'accounts.service.ts');
+    const serviceSource = 'export class AccountsService {\n  list() { return []; }\n}\n';
+    writeFileSync(servicePath, serviceSource, 'utf8');
+    writeFileSync(join(controllersRoot, 'accounts.controller.ts'), 'export class AccountsController {}\n', 'utf8');
+    writeFileSync(join(servicesRoot, 'excluded.service.ts'), 'export class ExcludedService {}\n', 'utf8');
+
+    const parseResult = parseIndexArgs([
+      '--path',
+      scanRoot,
+      '--type',
+      'services',
+      '--exclude',
+      '*excluded.service.ts',
+      '--quick',
+    ]);
+
+    if (parseResult?.ok !== true) {
+      expectedFail(`scanner options must parse successfully; got ${stringifyParseResult(parseResult)}`);
+    }
+
+    const paths = resolveIndexPaths({ cwd: projectRoot, scanPath: parseResult.options.scanPath, specRoot });
+    const scanResult = await scanComponentFiles({ paths, options: parseResult.options });
+    const components = scanResult?.components ?? scanResult?.entries ?? scanResult;
+
+    if (!Array.isArray(components)) {
+      expectedFail(`scanComponentFiles must return an array or { components }; got ${JSON.stringify(scanResult)}`);
+    }
+
+    assertEqual(components.length, 1, 'scanner service-only component count');
+    const [component] = components;
+    assertEqual(component.category, 'services', 'service component category');
+    assertEqual(component.sourcePath, resolve(servicePath), 'service source path');
+    assertEqual(component.sourceDisplayPath, 'src/services/accounts.service.ts', 'normalized service source display path');
+    assertEqual(component.hash, sha256(serviceSource), 'service source SHA-256 hash');
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -269,6 +339,10 @@ function stringifyParseResult(result) {
     if (value instanceof Error) return { message: value.message };
     return value;
   });
+}
+
+function sha256(content) {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 function isExpectedMissingHelperError(error) {

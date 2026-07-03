@@ -130,7 +130,7 @@
   - _Requirements: FR-8, FR-9, NFR-4, AC-4.4_
   - _Design: Index path resolver; Security Considerations_
 
-- [ ] Q3 [VERIFY] Quality check: path package verification
+- [x] Q3 [VERIFY] Quality check: path package verification
   - **Do**:
     1. Run discovered package verification commands after path resolver changes.
   - **Files**: None
@@ -140,7 +140,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.10 [RED] Failing test: scan services, excludes, and hashes
+- [x] 1.10 [RED] Failing test: scan services, excludes, and hashes
   - **Do**:
     1. Add a `scanner` verifier case with service, controller, and excluded files.
     2. Assert `--type services` returns only matching service files.
