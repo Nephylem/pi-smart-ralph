@@ -194,7 +194,7 @@
   - _Requirements: FR-3, FR-7, NFR-1_
   - _Design: `ImplementationCoordinator`; one focused helper decision_
 
-- [ ] Q4 [VERIFY] Quality check: coordinator preflight
+- [x] Q4 [VERIFY] Quality check: coordinator preflight
   - **Do**:
     1. Run the discovered `verify:index` command after coordinator preflight changes.
   - **Files**: None
@@ -206,7 +206,7 @@
 
 ## Phase 3: Completion validation and expected-failure handling
 
-- [ ] 3.1 [RED] Failing test: non-`single_repo` tasks relax impossible combined commits and prefer topology blockers
+- [x] 3.1 [RED] Failing test: non-`single_repo` tasks relax impossible combined commits and prefer topology blockers
   - **Do**:
     1. Add completion-validation cases for `multi_repo`, `repo_plus_nonrepo`, and `no_repo` tasks.
     2. Assert impossible combined commits do not hard-fail valid completions.

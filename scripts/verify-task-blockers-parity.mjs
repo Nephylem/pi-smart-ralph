@@ -25,6 +25,8 @@ const cases = new Map([
   ['topology-input-normalization', verifyTopologyInputNormalization],
   ['commit-mode-derivation', verifyCommitModeDerivation],
   ['coordinator-preflight-contract', verifyCoordinatorPreflightContract],
+  ['relaxed-completion-validation-fixtures', verifyRelaxedCompletionValidationFixtures],
+  ['topology-blocker-priority-contract', verifyTopologyBlockerPriorityContract],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -360,6 +362,89 @@ async function verifyCoordinatorPreflightContract() {
   const executionSection = indexSource.match(/const definition = implementationSubagentDefinition\(task\);[\s\S]*?const prompt = buildImplementationPrompt\(task, definition, spec, state, options\);/);
   if (!executionSection || !/analyzeTaskWorkspace/.test(executionSection[0])) {
     expectedFail('coordinator must compute workspace topology in the execution flow before building the executor prompt.');
+  }
+}
+
+async function verifyRelaxedCompletionValidationFixtures() {
+  const helper = loadTaskCompletionHelper();
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-relaxed-completion-'));
+
+  try {
+    const multiRepoOuter = createGitFixture(join(fixtureRoot, 'multi-repo', 'outer'));
+    const multiRepoInner = createGitFixture(join(fixtureRoot, 'multi-repo', 'outer', 'nested-repo'));
+    const repoPlusNonRepo = createGitFixture(join(fixtureRoot, 'repo-plus-nonrepo', 'repo'));
+    const noRepoRoot = join(fixtureRoot, 'no-repo');
+    mkdirSync(noRepoRoot, { recursive: true });
+
+    const casesToVerify = [
+      {
+        name: 'multi_repo',
+        expectedTopology: 'multi_repo',
+        expectedCommitReason: 'multi_repo',
+        input: createWorkspaceInput({
+          specDir: join(multiRepoOuter, 'specs', 'relaxed'),
+          taskFiles: [join(multiRepoInner, 'src', 'task.ts')],
+          commitDirective: '`feat(task-blockers): split repo fixture`',
+        }),
+      },
+      {
+        name: 'repo_plus_nonrepo',
+        expectedTopology: 'repo_plus_nonrepo',
+        expectedCommitReason: 'repo_plus_nonrepo',
+        input: createWorkspaceInput({
+          specDir: join(fixtureRoot, 'repo-plus-nonrepo', 'external-spec'),
+          taskFiles: [join(repoPlusNonRepo, 'src', 'task.ts')],
+          commitDirective: '`feat(task-blockers): mixed fixture`',
+        }),
+      },
+      {
+        name: 'no_repo',
+        expectedTopology: 'no_repo',
+        expectedCommitReason: 'no_repo',
+        input: createWorkspaceInput({
+          specDir: join(noRepoRoot, 'specs', 'relaxed'),
+          taskFiles: [join(noRepoRoot, 'src', 'task.ts')],
+          commitDirective: '`feat(task-blockers): no repo fixture`',
+        }),
+      },
+    ];
+
+    for (const testCase of casesToVerify) {
+      materializeWorkspaceInput(testCase.input);
+      const report = helper.analyzeTaskWorkspace(testCase.input);
+      assertTopologyCase(testCase, report);
+      assertCommitModeCase({ ...testCase, expectedCommitMode: 'topology_relaxed' }, report);
+    }
+
+    const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
+    if (!/commit_reason/i.test(indexSource)) {
+      expectedFail('completion validation must parse `commit_reason` so multi_repo, repo_plus_nonrepo, and no_repo tasks can finish with `commit: none` plus topology evidence.');
+    }
+
+    const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
+    if (!validationSection || !/workspaceReport|task-completion|topology_relaxed|commitReason/.test(validationSection[0])) {
+      expectedFail('completion validation must reuse the workspace topology report when deciding whether non-single_repo `commit: none` completions are valid.');
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+async function verifyTopologyBlockerPriorityContract() {
+  const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
+  const helperSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'task-completion.ts'), 'utf8');
+  const failureReasonSection = indexSource.match(/function detectExplicitFailureReason\([\s\S]*?\n}\n\nfunction extractCompletionEvidence/);
+
+  if (!failureReasonSection) {
+    expectedFail('parity coverage could not locate detectExplicitFailureReason for blocker-priority assertions.');
+  }
+
+  if (!/TaskCompletionAssessment/.test(helperSource)) {
+    expectedFail('task-completion helper must define TaskCompletionAssessment so topology-aware blocker decisions are testable.');
+  }
+
+  if (!/multi_repo|repo_plus_nonrepo|no_repo|topology_relaxed|commit topology|split_repo_workspace/i.test(failureReasonSection[0])) {
+    expectedFail('blocker selection must prefer topology/commit-topology reasons ahead of generic verification noise for non-single_repo failures.');
   }
 }
 
