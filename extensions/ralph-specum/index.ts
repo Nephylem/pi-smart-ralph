@@ -5888,10 +5888,12 @@ const taskCompletionHelpers = analyzeTaskWorkspace as typeof analyzeTaskWorkspac
 		verificationBlocker?: string | null;
 		fallbackBlocker: string;
 	}) => string;
+	hasExpectedFailureProof: (output: string, proofToken?: string) => boolean;
 };
 
 const assessTaskCompletionOutput = taskCompletionHelpers.assessTaskCompletionOutput;
 const selectTaskCompletionBlocker = taskCompletionHelpers.selectTaskCompletionBlocker;
+const hasExpectedFailureProof = taskCompletionHelpers.hasExpectedFailureProof;
 
 type CompletionValidation = {
 	ok: boolean;
@@ -6755,7 +6757,7 @@ function detectExplicitFailureReason(
 	});
 }
 
-function extractCompletionEvidence(output: string, signal: CompletionSignal): string | null {
+function extractCompletionEvidence(output: string, signal: CompletionSignal, requireRedPass = false): string | null {
 	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 	const keyedEvidence: string[] = [];
 	const passEvidence: string[] = [];
@@ -6766,6 +6768,10 @@ function extractCompletionEvidence(output: string, signal: CompletionSignal): st
 		if (signal === "VERIFICATION_PASS" && /\bPASS\b/i.test(line) && !/^VERIFICATION_PASS\b/.test(line)) {
 			passEvidence.push(line);
 		}
+	}
+
+	if (requireRedPass) {
+		return hasExpectedFailureProof(output, "RED_PASS") ? "RED_PASS" : null;
 	}
 
 	const candidates = signal === "VERIFICATION_PASS" ? [...keyedEvidence, ...passEvidence] : keyedEvidence;
@@ -6779,6 +6785,7 @@ function extractCompletionEvidence(output: string, signal: CompletionSignal): st
 function validateSubagentCompletion(
 	completion: SubagentCompletion,
 	definition: ImplementationSubagentDefinition,
+	task?: ParsedNativeTask,
 	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
 ): CompletionValidation {
 	const output = subagentCompletionOutput(completion);
@@ -6801,11 +6808,34 @@ function validateSubagentCompletion(
 		};
 	}
 
-	const evidence = extractCompletionEvidence(output, definition.completionSignal);
+	const requiresExpectedFailureProof = definition.completionSignal === "TASK_COMPLETE" && Boolean(task) && /\[RED\]/i.test(`${task.rawTitle}\n${task.subject}`);
+	const evidence = extractCompletionEvidence(output, definition.completionSignal, requiresExpectedFailureProof);
 	if (!evidence) {
-		return { ok: false, signal: definition.completionSignal, error: "Completion signal lacked verification evidence.", output };
+		return {
+			ok: false,
+			signal: definition.completionSignal,
+			error: requiresExpectedFailureProof
+				? "[RED] completion signal lacked keyed expected-failure proof (`verify: RED_PASS`)."
+				: "Completion signal lacked verification evidence.",
+			output,
+		};
 	}
 
+	if (requiresExpectedFailureProof) {
+		const unexpectedFailureSignal = output.split(/\r?\n/)
+			.map((line) => line.trim())
+			.find((line) => /^(?:VERIFICATION_FAIL|USER_INPUT_REQUIRED|TASK_MODIFICATION_REQUEST)\b/i.test(line));
+		if (unexpectedFailureSignal) {
+			return {
+				ok: false,
+				signal: definition.completionSignal,
+				error: detectExplicitFailureReason(output, definition, workspaceReport)
+					?? `Expected-failure proof RED_PASS cannot override explicit failure signal: ${unexpectedFailureSignal}.`,
+				output,
+			};
+		}
+	}
+ 
 	const completionAssessment = assessTaskCompletionOutput(output, workspaceReport);
 	if (!completionAssessment.ok) {
 		return {
@@ -7354,7 +7384,7 @@ async function runImplementCommand(pi: ExtensionAPI, args: string, ctx: Extensio
 					return startRalphSubagentStatusTicker(ctx, `implement ${task.activeForm}`, definition.agentName, agentId);
 				});
 				completionOutput = subagentCompletionOutput(completion);
-				validation = validateSubagentCompletion(completion, definition, workspaceReport);
+				validation = validateSubagentCompletion(completion, definition, task, workspaceReport);
 			} catch (error) {
 				validation = {
 					ok: false,

@@ -262,7 +262,7 @@
   - _Requirements: FR-8, FR-10, AC-3.1, AC-3.3_
   - _Design: keyed evidence helpers; Technical Decisions_
 
-- [ ] 3.5 [GREEN] Pass test: accept keyed `RED_PASS` and reject proofless failures
+- [x] 3.5 [GREEN] Pass test: accept keyed `RED_PASS` and reject proofless failures
   - **Do**:
     1. Extend `TASK_COMPLETE` evidence parsing to accept keyed expected-failure proof.
     2. Keep verification failure behavior unchanged when keyed proof is absent.

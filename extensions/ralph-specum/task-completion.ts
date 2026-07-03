@@ -35,6 +35,12 @@ export interface TaskCompletionAssessment {
   blocker?: string;
 }
 
+export interface TaskCompletionEvidenceFields {
+  commit?: string;
+  commitReason?: string;
+  keyedEvidence: string[];
+}
+
 export interface TaskCompletionBlockerSelection {
   topologyBlocker?: string | null;
   modificationBlocker?: string | null;
@@ -152,7 +158,7 @@ function selectTaskCompletionBlocker(selection) {
 }
 
 function parseTaskCompletionFields(output) {
-  const completionFields = {};
+  const completionFields = { keyedEvidence: [] };
 
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -167,10 +173,24 @@ function parseTaskCompletionFields(output) {
     const commitReasonMatch = trimmed.match(/^commit_reason:\s*(.+)$/i);
     if (commitReasonMatch) {
       completionFields.commitReason = String(commitReasonMatch[1] ?? "").replace(/`/g, "").trim().toLowerCase();
+      continue;
+    }
+
+    const keyedEvidenceMatch = trimmed.match(/^(?:verify|verification|evidence):\s*(.+)$/i);
+    if (keyedEvidenceMatch) {
+      completionFields.keyedEvidence.push(String(keyedEvidenceMatch[1] ?? "").replace(/`/g, "").trim());
     }
   }
 
   return completionFields;
+}
+
+function hasExpectedFailureProof(output, proofToken = 'RED_PASS') {
+  const normalizedToken = String(proofToken ?? '').replace(/`/g, '').trim().toLowerCase();
+  if (!normalizedToken) return false;
+
+  const completionFields = parseTaskCompletionFields(output);
+  return completionFields.keyedEvidence.some((value) => value.toLowerCase() === normalizedToken);
 }
 
 function assessTaskCompletionOutput(
@@ -210,7 +230,7 @@ function assessTaskCompletionOutput(
   };
 }
 
-Object.assign(analyzeTaskWorkspace, { assessTaskCompletionOutput, selectTaskCompletionBlocker });
+Object.assign(analyzeTaskWorkspace, { assessTaskCompletionOutput, selectTaskCompletionBlocker, hasExpectedFailureProof });
 
 function deriveCommitGuidance(topology, commitDirective) {
   const normalizedDirective = normalizeCommitDirective(commitDirective);
