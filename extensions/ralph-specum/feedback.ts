@@ -19,6 +19,13 @@ export interface FeedbackRuntimeAdapters {
 	confirm?: FeedbackConfirmAdapter;
 }
 
+export interface FeedbackCommandRuntime extends FeedbackRuntimeAdapters {
+	hasUI: boolean;
+	runner?: {
+		run: (...args: unknown[]) => Promise<{ stdout?: string; stderr?: string; exitCode?: number }>;
+	};
+}
+
 export interface FeedbackUsageResult {
 	mode: "usage";
 	message: string;
@@ -115,6 +122,16 @@ export function createFeedbackRuntimeAdapters(ctx: ExtensionCommandContext): Fee
 	};
 }
 
+export function cloneFeedbackDraftWithConfirmation(
+	draft: FeedbackIssueDraftV1,
+	confirmedBy: Exclude<FeedbackConfirmedBy, "unconfirmed">,
+): FeedbackIssueDraftV1 {
+	return {
+		...draft,
+		confirmedBy,
+	};
+}
+
 export async function resolveFeedbackMessageFromRuntime(
 	message: string | null | undefined,
 	runtime: FeedbackRuntimeAdapters,
@@ -156,8 +173,48 @@ export function createFeedbackCommandHandler(notify: FeedbackCommandNotify) {
 			return;
 		}
 
-		await notify(ctx, formatFeedbackDraftOnlyMessage(message));
+		const draft = buildFeedbackDraft(message, { targetRepo: resolveFeedbackTargetRepo(FEEDBACK_TARGET_BUGS_URL) });
+		const feedbackRuntime = {
+			hasUI: ctx.hasUI,
+			input: runtime.input,
+			confirm: runtime.confirm,
+			runner: (ctx as ExtensionCommandContext & FeedbackCommandRuntime).runner,
+		};
+		const confirmation = await authorizeFeedbackDraft(draft, parsed, feedbackRuntime);
+		if (!confirmation.confirmedDraft) {
+			await notify(ctx, renderFeedbackFallback(draft));
+			return;
+		}
+
+		await executeFeedbackWrite(feedbackRuntime);
+		await notify(ctx, renderFeedbackFallback(confirmation.confirmedDraft));
 	};
+}
+
+export async function authorizeFeedbackDraft(
+	draft: FeedbackIssueDraftV1,
+	args: FeedbackCommandArgs,
+	runtime: FeedbackCommandRuntime,
+): Promise<{ confirmedDraft: FeedbackIssueDraftV1 | null }> {
+	if (runtime.hasUI && runtime.confirm) {
+		const confirmed = await runtime.confirm("Submit feedback to GitHub?", renderFeedbackFallback(draft));
+		return {
+			confirmedDraft: confirmed ? cloneFeedbackDraftWithConfirmation(draft, "ui") : null,
+		};
+	}
+
+	if (args.yes) {
+		return {
+			confirmedDraft: cloneFeedbackDraftWithConfirmation(draft, "yes-flag"),
+		};
+	}
+
+	return { confirmedDraft: null };
+}
+
+async function executeFeedbackWrite(runtime: FeedbackCommandRuntime): Promise<void> {
+	if (!runtime.runner?.run) return;
+	await runtime.runner.run("gh", ["issue", "create"]);
 }
 
 function readPackageBugsUrl(): string | undefined {

@@ -129,7 +129,7 @@
   - _Requirements: FR-7, AC-3.1, AC-3.2_
   - _Design: `feedback.ts` runtime surface_
 
-- [ ] Q3 [VERIFY] Quality check: input safety verifier
+- [x] Q3 [VERIFY] Quality check: input safety verifier
   - **Do**:
     1. Run the verifier covering prompt and headless no-write behavior.
   - **Files**: None
@@ -150,7 +150,7 @@
   - _Requirements: FR-2, FR-3, AC-1.1, AC-2.1, AC-2.2, AC-2.4_
   - _Design: confirmation gate; `FeedbackConfirmedBy`_
 
-- [ ] 2.5 [GREEN] Pass test: implement UI/`--yes` confirmation gating
+- [x] 2.5 [GREEN] Pass test: implement UI/`--yes` confirmation gating
   - **Do**:
     1. Build the initial unconfirmed draft before any write path.
     2. Require Pi UI confirmation for interactive runs and `--yes` for noninteractive runs.
