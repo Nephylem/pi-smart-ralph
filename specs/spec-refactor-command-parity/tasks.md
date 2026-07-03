@@ -346,7 +346,7 @@
   - _Requirements: FR-11, AC-3.4, AC-3.5_
   - _Design: coordinator cascade sequencing; bounded downstream steps_
 
-- [ ] 4.6 [YELLOW] Refactor: centralize cascade decisions and absent-downstream handling
+- [x] 4.6 [YELLOW] Refactor: centralize cascade decisions and absent-downstream handling
   - **Do**:
     1. Extract cascade decision and missing-downstream-artifact handling into focused helpers.
     2. Ensure the same helper emits consistent log text for skip/reject outcomes.

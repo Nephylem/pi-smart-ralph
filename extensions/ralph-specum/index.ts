@@ -78,6 +78,7 @@ import {
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
 	auditRefactorSpecMutationScope,
+	formatRefactorCascadeOutcome,
 	formatRefactorCascadeProgressEntry,
 	formatRefactorCompletionValidationError,
 	formatRefactorExecutionError,
@@ -90,7 +91,7 @@ import {
 	parseRefactorArgs,
 	parseRefactorCompletion,
 	parseRefactorFilePromptSelection,
-	resolveRefactorCascadeTargets,
+	resolveRefactorCascadeSteps,
 	resolveRefactorSpecPlan,
 	restoreRefactorSpecDirectory,
 	snapshotRefactorSpecDirectory,
@@ -9126,59 +9127,62 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				return;
 			}
 
+			const appendCascadeProgress = (sourceFile: "requirements" | "design" | "tasks", targetFile: "requirements" | "design" | "tasks", decision: "approved" | "rejected" | "skipped", reason: string) => {
+				appendProgress(
+					plan.spec,
+					[
+						"",
+						`### Refactor cascade decision (${new Date().toISOString()})`,
+						formatRefactorCascadeProgressEntry(sourceFile, targetFile, decision, reason),
+					].join("\n"),
+					{ cwd: ctx.cwd },
+				);
+			};
+			const enqueueCascadeSteps = (sourceFile: "requirements" | "design" | "tasks", cascadeNeeded: string | undefined, reason: string, pendingCascades: Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }>) => {
+				const resolution = resolveRefactorCascadeSteps(sourceFile, cascadeNeeded, plan.availableFiles, reason);
+				for (const skipped of resolution.skipped) {
+					appendCascadeProgress(skipped.sourceFile, skipped.targetFile, "skipped", skipped.reason);
+					void notify(ctx, formatRefactorCascadeOutcome(skipped.sourceFile, skipped.targetFile, "skipped", skipped.reason), "warning");
+				}
+				pendingCascades.push(...resolution.pending);
+			};
 			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
 			const pendingCascades: Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }> = [];
 			const primaryCompletion = await runRefactorStep(request);
 			if (!primaryCompletion) return;
-
-			for (const targetFile of resolveRefactorCascadeTargets(selectedFilePlan.selectedFile, primaryCompletion.cascadeNeeded, plan.availableFiles)) {
-				pendingCascades.push({
-					sourceFile: selectedFilePlan.selectedFile,
-					targetFile,
-					reason: primaryCompletion.cascadeReason ?? "Downstream refactor requested.",
-				});
-			}
+			enqueueCascadeSteps(
+				selectedFilePlan.selectedFile,
+				primaryCompletion.cascadeNeeded,
+				primaryCompletion.cascadeReason ?? "Downstream refactor requested.",
+				pendingCascades,
+			);
 
 			while (pendingCascades.length > 0) {
 				const cascade = pendingCascades.shift();
 				if (!cascade) continue;
 
-				let approved = false;
+				let decision: "approved" | "rejected" | "skipped" = "skipped";
 				if (ctx.hasUI) {
 					const promptPlan = buildRefactorCascadePrompt(cascade.sourceFile, cascade.targetFile, cascade.reason);
-					approved = await ctx.ui.confirm(promptPlan.title, promptPlan.message);
+					decision = await ctx.ui.confirm(promptPlan.title, promptPlan.message) ? "approved" : "rejected";
 				} else {
-					await notify(
-						ctx,
-						`Headless /ralph-refactor run skipped downstream cascade ${cascade.sourceFile} -> ${cascade.targetFile}: ${cascade.reason}`,
-						"warning",
-					);
+					await notify(ctx, formatRefactorCascadeOutcome(cascade.sourceFile, cascade.targetFile, "skipped", cascade.reason), "warning");
 				}
 
-				if (!approved) {
-					appendProgress(
-						plan.spec,
-						[
-							"",
-							`### Refactor cascade decision (${new Date().toISOString()})`,
-							formatRefactorCascadeProgressEntry(cascade.sourceFile, cascade.targetFile, "rejected", cascade.reason),
-						].join("\n"),
-						{ cwd: ctx.cwd },
-					);
+				if (decision !== "approved") {
+					appendCascadeProgress(cascade.sourceFile, cascade.targetFile, decision, cascade.reason);
 					continue;
 				}
 
 				const cascadeRequest = buildApprovedRefactorCascadeRequest(plan, cascade.targetFile, { cwd: ctx.cwd });
 				const cascadeCompletion = await runRefactorStep(cascadeRequest);
 				if (!cascadeCompletion) return;
-
-				for (const nextTarget of resolveRefactorCascadeTargets(cascade.targetFile, cascadeCompletion.cascadeNeeded, plan.availableFiles)) {
-					pendingCascades.push({
-						sourceFile: cascade.targetFile,
-						targetFile: nextTarget,
-						reason: cascadeCompletion.cascadeReason ?? "Downstream refactor requested.",
-					});
-				}
+				enqueueCascadeSteps(
+					cascade.targetFile,
+					cascadeCompletion.cascadeNeeded,
+					cascadeCompletion.cascadeReason ?? "Downstream refactor requested.",
+					pendingCascades,
+				);
 			}
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");

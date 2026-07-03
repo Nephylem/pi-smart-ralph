@@ -59,7 +59,18 @@ export type RefactorSelectedFilePlan = {
 };
 
 export type RefactorCascadePolicy = "detect-only" | "approved" | "skipped";
-export type RefactorCascadeDecision = "approved" | "rejected";
+export type RefactorCascadeDecision = "approved" | "rejected" | "skipped";
+
+export type RefactorCascadeStep = {
+	sourceFile: RefactorArtifact;
+	targetFile: RefactorArtifact;
+	reason: string;
+};
+
+export type RefactorCascadeResolution = {
+	pending: RefactorCascadeStep[];
+	skipped: RefactorCascadeStep[];
+};
 
 export type RefactorRequestFile = {
 	kind: RefactorArtifact;
@@ -312,14 +323,29 @@ export function resolveRefactorCascadeTargets(
 	cascadeNeeded: string | undefined,
 	availableFiles: RefactorArtifact[],
 ): RefactorArtifact[] {
+	return resolveRefactorCascadeSteps(sourceFile, cascadeNeeded, availableFiles).pending.map((step) => step.targetFile);
+}
+
+export function resolveRefactorCascadeSteps(
+	sourceFile: RefactorArtifact,
+	cascadeNeeded: string | undefined,
+	availableFiles: RefactorArtifact[],
+	reason = "Downstream refactor requested.",
+): RefactorCascadeResolution {
 	const downstreamTargets = new Set(downstreamRefactorArtifacts(sourceFile));
-	if (downstreamTargets.size === 0) return [];
+	if (downstreamTargets.size === 0) return { pending: [], skipped: [] };
 	const available = new Set(availableFiles);
-	return tokenizeCascadeNeeded(cascadeNeeded).filter((artifact): artifact is RefactorArtifact => {
-		return REFACTOR_ALLOWED_FILES.includes(artifact as RefactorArtifact)
-			&& downstreamTargets.has(artifact as RefactorArtifact)
-			&& available.has(artifact as RefactorArtifact);
-	}) as RefactorArtifact[];
+	const pending: RefactorCascadeStep[] = [];
+	const skipped: RefactorCascadeStep[] = [];
+	for (const artifact of tokenizeCascadeNeeded(cascadeNeeded)) {
+		if (!REFACTOR_ALLOWED_FILES.includes(artifact as RefactorArtifact)) continue;
+		const targetFile = artifact as RefactorArtifact;
+		if (!downstreamTargets.has(targetFile)) continue;
+		const step = { sourceFile, targetFile, reason };
+		if (available.has(targetFile)) pending.push(step);
+		else skipped.push(step);
+	}
+	return { pending, skipped };
 }
 
 export function buildRefactorCascadePrompt(
@@ -356,8 +382,21 @@ export function formatRefactorCascadeProgressEntry(
 	decision: RefactorCascadeDecision,
 	reason: string,
 ): string {
-	const outcome = decision === "approved" ? "approved" : "rejected/skipped";
-	return `- Refactor cascade ${outcome}: ${sourceFile} -> ${targetFile}. Reason: ${reason}`;
+	return `- ${formatRefactorCascadeOutcome(sourceFile, targetFile, decision, reason)}`;
+}
+
+export function formatRefactorCascadeOutcome(
+	sourceFile: RefactorArtifact,
+	targetFile: RefactorArtifact,
+	decision: RefactorCascadeDecision,
+	reason: string,
+): string {
+	const outcome = decision === "approved"
+		? "Refactor cascade approved"
+		: decision === "skipped"
+			? "Refactor cascade skipped"
+			: "Refactor cascade rejected";
+	return `${outcome}: ${sourceFile} -> ${targetFile}. Reason: ${reason}`;
 }
 
 export function parseRefactorCompletion(output: string): RefactorCompletionParseResult {
