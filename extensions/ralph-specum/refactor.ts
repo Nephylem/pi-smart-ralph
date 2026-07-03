@@ -41,8 +41,11 @@ export type RefactorSelectedSectionPlan = {
 };
 
 export type RefactorSelectedFilePlan = {
-	selectedFile: RefactorArtifact;
+	selectedFile: RefactorArtifact | null;
+	artifactPath: string | null;
+	requiresFileChoice: boolean;
 	availableSections: string[];
+	requiresSectionChoice: boolean;
 	progressLearnings: string[];
 };
 
@@ -133,23 +136,26 @@ export function formatRefactorArtifactList(artifacts) {
 }
 
 export function buildRefactorSelectionPlan(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null = null): RefactorSelectionPlan {
-	const selectedFile = selectRequestedArtifact(plan, requestedFile);
-	const availableSections = selectedFile ? listRefactorSections(plan.artifactPaths[selectedFile]) : [];
+	const selectedFilePlan = buildRefactorSelectedFilePlan(plan, requestedFile);
 	return {
-		selectedFile,
-		requiresFileChoice: selectedFile === null,
-		availableSections,
-		requiresSectionChoice: availableSections.length > 0,
+		selectedFile: selectedFilePlan.selectedFile,
+		requiresFileChoice: selectedFilePlan.requiresFileChoice,
+		availableSections: [...selectedFilePlan.availableSections],
+		requiresSectionChoice: selectedFilePlan.requiresSectionChoice,
 	};
 }
 
-export function buildRefactorSelectedFilePlan(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null = null): RefactorSelectedFilePlan | null {
-	const selection = buildRefactorSelectionPlan(plan, requestedFile);
-	if (!selection.selectedFile) return null;
+export function buildRefactorSelectedFilePlan(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null = null): RefactorSelectedFilePlan {
+	const selectedFile = selectRequestedArtifact(plan, requestedFile);
+	const availableSections = selectedFile ? listRefactorSections(plan.artifactPaths[selectedFile]) : [];
+	const progressLearnings = extractProgressLearnings(readProgress(plan.spec));
 	return {
-		selectedFile: selection.selectedFile,
-		availableSections: [...selection.availableSections],
-		progressLearnings: extractProgressLearnings(readProgress(plan.spec)),
+		selectedFile,
+		artifactPath: selectedFile ? plan.artifactPaths[selectedFile] : null,
+		requiresFileChoice: selectedFile === null,
+		availableSections,
+		requiresSectionChoice: availableSections.length > 0,
+		progressLearnings,
 	};
 }
 

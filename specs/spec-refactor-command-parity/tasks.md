@@ -163,7 +163,7 @@
   - _Requirements: FR-4, FR-8, AC-1.4, AC-2.3, AC-2.4_
   - _Design: `extensions/ralph-specum/refactor.ts`; coordinator plan assembly_
 
-- [ ] 2.6 [YELLOW] Refactor: normalize selected-file plan and progress-learning extraction
+- [x] 2.6 [YELLOW] Refactor: normalize selected-file plan and progress-learning extraction
   - **Do**:
     1. Consolidate selected-file planning and learning extraction into a single helper surface.
     2. Reuse the same normalized plan for later specialist-request cases.

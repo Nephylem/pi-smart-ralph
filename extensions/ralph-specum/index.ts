@@ -73,7 +73,6 @@ import {
 	buildRefactorSectionPromptPlan,
 	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
-	buildRefactorSelectionPlan,
 	formatRefactorHeadlessDecisionError,
 	REFACTOR_COMMAND_DESCRIPTION,
 	formatPendingRefactorMessage,
@@ -9041,43 +9040,31 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			let selectionPlan = buildRefactorSelectionPlan(plan, parsed.options.file);
-			if (selectionPlan.requiresFileChoice) {
+			let selectedFilePlan = buildRefactorSelectedFilePlan(plan, parsed.options.file);
+			if (selectedFilePlan.requiresFileChoice) {
 				if (!ctx.hasUI) {
-					await notify(ctx, formatRefactorHeadlessDecisionError(plan, selectionPlan), "warning");
+					await notify(ctx, formatRefactorHeadlessDecisionError(plan, selectedFilePlan), "warning");
 					return;
 				}
 
 				const filePromptPlan = buildRefactorFilePromptPlan(plan);
 				const selectedLabel = await ctx.ui.select(filePromptPlan.title, filePromptPlan.options);
 				const selectedFile = parseRefactorFilePromptSelection(selectedLabel);
-				selectionPlan = buildRefactorSelectionPlan(plan, selectedFile);
+				selectedFilePlan = buildRefactorSelectedFilePlan(plan, selectedFile);
 			}
 
-			const selectedFilePlan = selectionPlan.selectedFile
-				? buildRefactorSelectedFilePlan(plan, selectionPlan.selectedFile)
+			let selectedSectionPlan = selectedFilePlan.selectedFile
+				? buildRefactorSelectedSectionPlan(selectedFilePlan, null)
 				: null;
-			const sectionSelectionPlan = selectedFilePlan
-				? {
-					...selectionPlan,
-					selectedFile: selectedFilePlan.selectedFile,
-					availableSections: [...selectedFilePlan.availableSections],
-					requiresSectionChoice: selectedFilePlan.availableSections.length > 0,
-				}
-				: selectionPlan;
-
-			let selectedSectionPlan = sectionSelectionPlan.selectedFile
-				? buildRefactorSelectedSectionPlan(sectionSelectionPlan, null)
-				: null;
-			if (sectionSelectionPlan.requiresSectionChoice) {
+			if (selectedFilePlan.requiresSectionChoice) {
 				if (!ctx.hasUI) {
-					await notify(ctx, formatRefactorHeadlessDecisionError(plan, sectionSelectionPlan), "warning");
+					await notify(ctx, formatRefactorHeadlessDecisionError(plan, selectedFilePlan), "warning");
 					return;
 				}
 
-				const sectionPromptPlan = buildRefactorSectionPromptPlan(sectionSelectionPlan);
+				const sectionPromptPlan = buildRefactorSectionPromptPlan(selectedFilePlan);
 				const selectedSection = sectionPromptPlan ? await ctx.ui.select(sectionPromptPlan.title, sectionPromptPlan.options) : null;
-				selectedSectionPlan = buildRefactorSelectedSectionPlan(sectionSelectionPlan, selectedSection);
+				selectedSectionPlan = buildRefactorSelectedSectionPlan(selectedFilePlan, selectedSection);
 			}
 
 			void selectedFilePlan;
