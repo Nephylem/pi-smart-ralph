@@ -173,7 +173,7 @@
   - _Requirements: FR-2, FR-3, AC-1.1, AC-2.1, AC-2.2, AC-2.4_
   - _Design: `feedback.ts` confirmation helpers_
 
-- [ ] Q4 [VERIFY] Quality check: confirmation-flow verifier
+- [x] Q4 [VERIFY] Quality check: confirmation-flow verifier
   - **Do**:
     1. Run the dedicated confirmation verifier.
     2. Confirm no-write reasons stay aligned with the triage-style safety pattern.
@@ -186,7 +186,7 @@
 
 ## Phase 3: Red-Green-Yellow Cycles - GitHub execution and package wiring
 
-- [ ] 3.1 [RED] Failing verifier: GitHub readiness fallback and confirmed create args
+- [x] 3.1 [RED] Failing verifier: GitHub readiness fallback and confirmed create args
   - **Do**:
     1. Add a `github-execution` case to `scripts/verify-feedback-parity.mjs` with mocked runner and readiness fixtures.
     2. Assert `gh` missing, auth failure, or repo detection failure returns manual fallback with zero writes.

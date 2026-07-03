@@ -12,6 +12,7 @@ const cases = new Map([
   ['draft-fallback', verifyDraftFallback],
   ['headless-input', verifyHeadlessInput],
   ['confirmation-flow', verifyConfirmationFlow],
+  ['github-execution', verifyGithubExecution],
 ]);
 
 async function main() {
@@ -394,6 +395,142 @@ async function verifyConfirmationFlow() {
 
   if (failures.length > 0) {
     expectedFail(`confirmation flow verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
+  }
+}
+
+async function verifyGithubExecution() {
+  const feedbackModulePath = join(root, 'extensions', 'ralph-specum', 'feedback.ts');
+  const feedback = await loadFeedbackHelper();
+  const failures = [];
+
+  if (typeof feedback?.createFeedbackCommandHandler !== 'function') {
+    failures.push('feedback.ts must export createFeedbackCommandHandler to exercise GitHub execution behavior');
+  }
+
+  if (feedback?.createFeedbackCommandHandler) {
+    const readinessFixtures = [
+      {
+        name: 'gh missing',
+        commands: [
+          { stdout: '', stderr: 'gh: command not found', exitCode: 127 },
+        ],
+      },
+      {
+        name: 'auth failure',
+        commands: [
+          { stdout: 'gh version 2.0.0', stderr: '', exitCode: 0 },
+          { stdout: JSON.stringify({ name: 'pi-smart-ralph', owner: { login: 'Nephylem' }, url: 'https://github.com/Nephylem/pi-smart-ralph' }), stderr: '', exitCode: 0 },
+          { stdout: '', stderr: 'authentication required', exitCode: 1 },
+        ],
+      },
+      {
+        name: 'repo detection failure',
+        commands: [
+          { stdout: 'gh version 2.0.0', stderr: '', exitCode: 0 },
+          { stdout: '', stderr: 'not a git repository', exitCode: 1 },
+        ],
+      },
+    ];
+
+    for (const fixture of readinessFixtures) {
+      const notifications = [];
+      const commandCalls = [];
+      let step = 0;
+      const handler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+        notifications.push(message);
+      });
+
+      await handler('Need GitHub readiness fallback --yes', {
+        hasUI: false,
+        runner: {
+          run: async (...args) => {
+            commandCalls.push(args);
+            const result = fixture.commands[step] ?? { stdout: '', stderr: '', exitCode: 0 };
+            step += 1;
+            return result;
+          },
+        },
+      });
+
+      const writeCalls = commandCalls.filter((args) => String(args[0]) === 'gh' || String(args[0]) === 'issue' || JSON.stringify(args).includes('issue'));
+      if (writeCalls.length !== 0) {
+        failures.push(`${fixture.name} must return fallback with zero gh issue create writes; got ${writeCalls.length}`);
+      }
+
+      const message = notifications[0] ?? '';
+      if (!message.includes('Manual feedback submission fallback')) {
+        failures.push(`${fixture.name} must surface manual fallback output`);
+      }
+      if (!message.includes('confirmedBy: unconfirmed')) {
+        failures.push(`${fixture.name} fallback must preserve confirmedBy: unconfirmed`);
+      }
+    }
+
+    const createdNotifications = [];
+    const createCalls = [];
+    const createdHandler = feedback.createFeedbackCommandHandler(async (_ctx, message) => {
+      createdNotifications.push(message);
+    });
+
+    await createdHandler('Need GitHub execution coverage --yes', {
+      hasUI: false,
+      runner: {
+        run: async (...args) => {
+          createCalls.push(args);
+          const serialized = JSON.stringify(args);
+          if (serialized.includes('--version')) {
+            return { stdout: 'gh version 2.0.0', stderr: '', exitCode: 0 };
+          }
+          if (serialized.includes('repo') && serialized.includes('view')) {
+            return {
+              stdout: JSON.stringify({ name: 'pi-smart-ralph', owner: { login: 'Nephylem' }, url: 'https://github.com/Nephylem/pi-smart-ralph' }),
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          if (serialized.includes('auth') && serialized.includes('status')) {
+            return { stdout: 'Logged in to github.com as nephylem', stderr: '', exitCode: 0 };
+          }
+          if (serialized.includes('label') && serialized.includes('list')) {
+            return { stdout: JSON.stringify([{ name: 'feedback' }, { name: 'bug' }]), stderr: '', exitCode: 0 };
+          }
+          if (serialized.includes('issue') && serialized.includes('create')) {
+            return { stdout: 'https://github.com/Nephylem/pi-smart-ralph/issues/321', stderr: '', exitCode: 0 };
+          }
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      },
+    });
+
+    const createCall = createCalls.find((args) => JSON.stringify(args).includes('issue') && JSON.stringify(args).includes('create'));
+    if (!createCall) {
+      failures.push('confirmed execution must call gh issue create after readiness succeeds');
+    } else {
+      const serialized = JSON.stringify(createCall);
+      const expectedTokens = ['Nephylem/pi-smart-ralph', 'Feedback:', 'Feedback submitted via /ralph-feedback.', 'feedback'];
+      const missingTokens = expectedTokens.filter((token) => !serialized.includes(token));
+      if (missingTokens.length > 0) {
+        failures.push(`gh issue create args must include repo, title, body, and available labels only; missing ${missingTokens.join(', ')}`);
+      }
+      if (serialized.includes('missing-label')) {
+        failures.push('gh issue create args must omit unavailable labels');
+      }
+    }
+
+    const createdMessage = createdNotifications[0] ?? '';
+    if (!/issues\/321/.test(createdMessage)) {
+      failures.push('confirmed execution must surface the parsed created issue URL');
+    }
+    if (!/issueNumber:\s*321|#321/.test(createdMessage)) {
+      failures.push('confirmed execution must surface the parsed created issue number');
+    }
+    if (!createdMessage.includes('confirmedBy: yes-flag')) {
+      failures.push('confirmed execution result must preserve confirmedBy: yes-flag');
+    }
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`github execution verification failed for ${feedbackModulePath}: ${failures.join('; ')}`);
   }
 }
 
