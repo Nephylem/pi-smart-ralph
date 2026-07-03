@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { findSpec, requireCurrentSpec, type RalphPathOptions, type SpecEntry } from "./paths.ts";
+import { readProgress } from "./state.ts";
 
 export const REFACTOR_ALLOWED_FILES = Object.freeze(["requirements", "design", "tasks"]);
 export const REFACTOR_USAGE = "/ralph-refactor [spec] [--file=requirements|design|tasks]";
@@ -37,6 +38,12 @@ export type RefactorSelectedSectionPlan = {
 	selectedFile: RefactorArtifact;
 	availableSections: string[];
 	selectedSections: string[];
+};
+
+export type RefactorSelectedFilePlan = {
+	selectedFile: RefactorArtifact;
+	availableSections: string[];
+	progressLearnings: string[];
 };
 
 function emptyRefactorOptions() {
@@ -136,6 +143,16 @@ export function buildRefactorSelectionPlan(plan: RefactorSpecPlan, requestedFile
 	};
 }
 
+export function buildRefactorSelectedFilePlan(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null = null): RefactorSelectedFilePlan | null {
+	const selection = buildRefactorSelectionPlan(plan, requestedFile);
+	if (!selection.selectedFile) return null;
+	return {
+		selectedFile: selection.selectedFile,
+		availableSections: [...selection.availableSections],
+		progressLearnings: extractProgressLearnings(readProgress(plan.spec)),
+	};
+}
+
 export function listRefactorSections(artifactPath: string): string[] {
 	if (!artifactPath || !existsSync(artifactPath)) return [];
 	const content = readFileSync(artifactPath, "utf8");
@@ -182,6 +199,26 @@ export function buildRefactorSelectedSectionPlan(selection: RefactorSelectionPla
 		availableSections: [...selection.availableSections],
 		selectedSections,
 	};
+}
+
+function extractProgressLearnings(progressContent: string): string[] {
+	if (!progressContent.trim()) return [];
+	const learnings: string[] = [];
+	const lines = progressContent.split(/\r?\n/);
+	let inLearnings = false;
+	for (const line of lines) {
+		if (/^##\s+Learnings\s*$/i.test(line.trim())) {
+			inLearnings = true;
+			continue;
+		}
+		if (inLearnings && /^##\s+/.test(line.trim())) {
+			inLearnings = false;
+		}
+		if (!inLearnings) continue;
+		const bullet = line.match(/^\s*-\s+(.+?)\s*$/);
+		if (bullet) learnings.push(bullet[1]);
+	}
+	return learnings;
 }
 
 function selectRequestedArtifact(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null): RefactorArtifact | null {

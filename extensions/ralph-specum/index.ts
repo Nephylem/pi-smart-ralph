@@ -71,6 +71,7 @@ import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import {
 	buildRefactorFilePromptPlan,
 	buildRefactorSectionPromptPlan,
+	buildRefactorSelectedFilePlan,
 	buildRefactorSelectedSectionPlan,
 	buildRefactorSelectionPlan,
 	formatRefactorHeadlessDecisionError,
@@ -9053,20 +9054,33 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				selectionPlan = buildRefactorSelectionPlan(plan, selectedFile);
 			}
 
-			let selectedSectionPlan = selectionPlan.selectedFile
-				? buildRefactorSelectedSectionPlan(selectionPlan, null)
+			const selectedFilePlan = selectionPlan.selectedFile
+				? buildRefactorSelectedFilePlan(plan, selectionPlan.selectedFile)
 				: null;
-			if (selectionPlan.requiresSectionChoice) {
+			const sectionSelectionPlan = selectedFilePlan
+				? {
+					...selectionPlan,
+					selectedFile: selectedFilePlan.selectedFile,
+					availableSections: [...selectedFilePlan.availableSections],
+					requiresSectionChoice: selectedFilePlan.availableSections.length > 0,
+				}
+				: selectionPlan;
+
+			let selectedSectionPlan = sectionSelectionPlan.selectedFile
+				? buildRefactorSelectedSectionPlan(sectionSelectionPlan, null)
+				: null;
+			if (sectionSelectionPlan.requiresSectionChoice) {
 				if (!ctx.hasUI) {
-					await notify(ctx, formatRefactorHeadlessDecisionError(plan, selectionPlan), "warning");
+					await notify(ctx, formatRefactorHeadlessDecisionError(plan, sectionSelectionPlan), "warning");
 					return;
 				}
 
-				const sectionPromptPlan = buildRefactorSectionPromptPlan(selectionPlan);
+				const sectionPromptPlan = buildRefactorSectionPromptPlan(sectionSelectionPlan);
 				const selectedSection = sectionPromptPlan ? await ctx.ui.select(sectionPromptPlan.title, sectionPromptPlan.options) : null;
-				selectedSectionPlan = buildRefactorSelectedSectionPlan(selectionPlan, selectedSection);
+				selectedSectionPlan = buildRefactorSelectedSectionPlan(sectionSelectionPlan, selectedSection);
 			}
 
+			void selectedFilePlan;
 			void selectedSectionPlan;
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");

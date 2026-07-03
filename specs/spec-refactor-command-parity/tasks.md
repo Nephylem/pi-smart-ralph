@@ -151,7 +151,7 @@
   - _Requirements: FR-4, FR-8, AC-2.3, AC-2.4_
   - _Design: `extensions/ralph-specum/refactor.ts`; command planner_
 
-- [ ] 2.5 [GREEN] Pass test: narrow scope to one artifact and feed learnings into the plan
+- [x] 2.5 [GREEN] Pass test: narrow scope to one artifact and feed learnings into the plan
   - **Do**:
     1. Short-circuit unrelated file prompts when `--file` already selects the artifact.
     2. Read `.progress.md` learnings and include them in the selected-file refactor plan.
