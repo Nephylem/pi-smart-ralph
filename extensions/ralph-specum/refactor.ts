@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { findSpec, requireCurrentSpec, type RalphPathOptions, type SpecEntry } from "./paths.ts";
 
@@ -20,6 +20,13 @@ export type RefactorArtifactInventory = {
 export type RefactorSpecPlan = {
 	spec: SpecEntry;
 } & RefactorArtifactInventory;
+
+export type RefactorSelectionPlan = {
+	selectedFile: RefactorArtifact | null;
+	requiresFileChoice: boolean;
+	availableSections: string[];
+	requiresSectionChoice: boolean;
+};
 
 function emptyRefactorOptions() {
 	return {
@@ -105,6 +112,37 @@ export function inventoryRefactorArtifacts(specPath): RefactorArtifactInventory 
 
 export function formatRefactorArtifactList(artifacts) {
 	return artifacts.join(", ");
+}
+
+export function buildRefactorSelectionPlan(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null = null): RefactorSelectionPlan {
+	const selectedFile = selectRequestedArtifact(plan, requestedFile);
+	const availableSections = selectedFile ? listRefactorSections(plan.artifactPaths[selectedFile]) : [];
+	return {
+		selectedFile,
+		requiresFileChoice: selectedFile === null,
+		availableSections,
+		requiresSectionChoice: availableSections.length > 0,
+	};
+}
+
+export function listRefactorSections(artifactPath: string): string[] {
+	if (!artifactPath || !existsSync(artifactPath)) return [];
+	const content = readFileSync(artifactPath, "utf8");
+	const sections = content
+		.split(/\r?\n/)
+		.map((line) => line.match(/^##+\s+(.+?)\s*$/)?.[1]?.trim() ?? null)
+		.filter((value): value is string => Boolean(value));
+	return sections;
+}
+
+export function formatRefactorHeadlessDecisionError(plan: RefactorSpecPlan, selection: RefactorSelectionPlan) {
+	const fileHint = selection.requiresFileChoice ? `choose a file (${formatRefactorArtifactList(plan.availableFiles)})` : `choose section(s) for ${selection.selectedFile}`;
+	return `Headless /ralph-refactor run needs user decisions to ${fileHint}. Re-run with interactive UI${selection.requiresFileChoice ? " or pass --file=<requirements|design|tasks>" : ""} so Ralph can collect the required selection safely.`;
+}
+
+function selectRequestedArtifact(plan: RefactorSpecPlan, requestedFile: RefactorArtifact | null): RefactorArtifact | null {
+	if (!requestedFile) return null;
+	return plan.availableFiles.includes(requestedFile) ? requestedFile : null;
 }
 
 function buildNoRefactorableArtifactsError(spec: SpecEntry) {

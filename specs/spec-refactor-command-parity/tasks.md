@@ -105,7 +105,7 @@
   - _Requirements: FR-6, FR-7, AC-2.1, AC-2.2_
   - _Design: `extensions/ralph-specum/index.ts`; `extensions/ralph-specum/refactor.ts`_
 
-- [ ] 2.2 [GREEN] Pass test: implement interactive selection flow and headless guardrails
+- [x] 2.2 [GREEN] Pass test: implement interactive selection flow and headless guardrails
   - **Do**:
     1. Build file-level and section-level choice planning with `ctx.ui` when the scope is not fully determined.
     2. Fail early with a clear actionable message when headless execution still needs user decisions.
