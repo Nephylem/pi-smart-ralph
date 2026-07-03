@@ -68,6 +68,7 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
+import { parseRefactorArgs } from "./refactor.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -2594,6 +2595,7 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"- /ralph-design [spec]                Generate design.md",
 		"- /ralph-tasks [spec]                 Generate canonical tasks.md",
 		"- /ralph-implement [spec]             Execute tasks.md through Ralph subagents",
+		"- /ralph-refactor [spec] [--file=requirements|design|tasks]  Update an existing spec artifact with bounded scope",
 		"- /ralph-index [--path <dir>] [--type controllers,services,models,helpers,migrations,other] [--exclude <pattern>] [--dry-run] [--force] [--changed] [--quick]  Generate searchable component and external index artifacts",
 		"- /ralph-switch <spec-name-or-path>  Switch active spec",
 		"- /ralph-cancel [spec-name-or-path]   Clear execution state for a spec",
@@ -8696,6 +8698,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					"/ralph-design        Generate design.md with ralph-architect-reviewer.",
 					"/ralph-tasks         Generate canonical tasks.md with ralph-task-planner.",
 					"/ralph-implement     Execute tasks.md through Ralph subagents.",
+					"/ralph-refactor      Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks].",
 					"/ralph-index         Generate searchable index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, and --quick.",
 					"/ralph-status        Show specs across configured roots.",
 					"/ralph-switch        Switch the active spec marker.",
@@ -8998,6 +9001,28 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		description: "Execute tasks.md through Ralph subagents",
 		getArgumentCompletions: specArgumentCompletions,
 		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "implement", () => runImplementCommand(pi, args, ctx)),
+	});
+
+	pi.registerCommand("ralph-refactor", {
+		description: "Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks]",
+		handler: async (args, ctx) => {
+			await ctx.waitForIdle();
+			const tokenized = tokenizeCommandArgs(args);
+			if (tokenized.error) {
+				await notify(ctx, tokenized.error, "warning");
+				return;
+			}
+
+			const parsed = parseRefactorArgs(tokenized.tokens);
+			if (!parsed.ok) {
+				await notify(ctx, `${parsed.error.message}\nUsage: /ralph-refactor [spec] [--file=requirements|design|tasks]`, "warning");
+				return;
+			}
+
+			const target = parsed.options.reference ? ` for ${parsed.options.reference}` : "";
+			const scope = parsed.options.file ? ` with --file=${parsed.options.file}` : "";
+			await notify(ctx, `Ralph refactor command registered${target}${scope}. Artifact update flow is not implemented yet.`, "info");
+		},
 	});
 
 	pi.registerCommand("ralph-index", {

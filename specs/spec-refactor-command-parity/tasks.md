@@ -13,7 +13,7 @@
   - _Requirements: FR-1, FR-3, AC-1.1, AC-1.3_
   - _Design: `scripts/verify-refactor-parity.mjs`; `extensions/ralph-specum/refactor.ts`_
 
-- [ ] 1.2 [GREEN] Pass test: register `/ralph-refactor` and parse bounded file scope
+- [x] 1.2 [GREEN] Pass test: register `/ralph-refactor` and parse bounded file scope
   - **Do**:
     1. Create `extensions/ralph-specum/refactor.ts` with exported argument parsing for `[spec] [--file=requirements|design|tasks]`.
     2. Register `/ralph-refactor` in `extensions/ralph-specum/index.ts` with matching help text.
