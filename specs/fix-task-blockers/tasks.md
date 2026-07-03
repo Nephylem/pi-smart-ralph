@@ -139,7 +139,7 @@
   - _Requirements: FR-4, FR-5, FR-12, AC-1.3, AC-2.1_
   - _Design: `TaskWorkspaceReport`; Technical Decisions_
 
-- [ ] 2.3 [YELLOW] Refactor: encapsulate workspace report formatting
+- [x] 2.3 [YELLOW] Refactor: encapsulate workspace report formatting
   - **Do**:
     1. Extract one formatter for topology, entries, commit mode, and commit reason.
     2. Keep machine-readable strings stable across helper and verifier.

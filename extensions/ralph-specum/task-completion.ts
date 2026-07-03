@@ -20,10 +20,12 @@ export interface TaskWorkspaceInput {
   entries?: TaskWorkspaceEntry[];
 }
 
+export type TaskCommitMode = 'required' | 'none' | 'topology_relaxed';
+
 export interface TaskWorkspaceReport {
   topology: TaskTopology;
   entries: TaskWorkspaceEntry[];
-  commitMode: 'required' | 'none' | 'topology_relaxed';
+  commitMode: TaskCommitMode;
   commitReason?: TaskTopology;
 }
 
@@ -32,12 +34,26 @@ export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorksp
   const topology = classifyTaskWorkspace(entries);
   const { commitMode, commitReason } = deriveCommitGuidance(topology, input.commitDirective);
 
-  return {
+  return createTaskWorkspaceReport({
     topology,
     entries,
     commitMode,
     commitReason,
-  };
+  });
+}
+
+export function formatTaskWorkspaceReport(report: TaskWorkspaceReport): string {
+  const lines = [
+    `topology=${report.topology}`,
+    `commitMode=${report.commitMode}`,
+    `commitReason=${report.commitReason ?? 'none'}`,
+  ];
+
+  for (const entry of report.entries) {
+    lines.push(`entry:${entry.kind}:${resolve(entry.path)}:${entry.repoRoot ?? 'none'}`);
+  }
+
+  return lines.join('\n');
 }
 
 export function classifyTaskWorkspace(entries: TaskWorkspaceEntry[] = []): TaskTopology {
@@ -135,6 +151,19 @@ function deriveCommitGuidance(topology, commitDirective) {
   return {
     commitMode: 'required',
     commitReason: undefined,
+  };
+}
+
+function createTaskWorkspaceReport({ topology, entries, commitMode, commitReason }) {
+  return {
+    topology,
+    entries: entries.map((entry) => ({
+      kind: entry.kind,
+      path: resolve(entry.path),
+      repoRoot: entry.repoRoot ? resolve(entry.repoRoot) : null,
+    })),
+    commitMode,
+    commitReason,
   };
 }
 

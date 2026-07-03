@@ -122,6 +122,10 @@ async function verifyTopologyHelperContract() {
     expectedFail('task-completion helper must declare the TaskTopology contract for parity coverage.');
   }
 
+  if (!/export\s+function\s+formatTaskWorkspaceReport\(/.test(helperSource)) {
+    expectedFail('task-completion helper must export formatTaskWorkspaceReport for stable workspace-report strings.');
+  }
+
   if (!/return\s*{[\s\S]*topology,[\s\S]*entries,[\s\S]*commitMode,[\s\S]*}/s.test(helperSource)) {
     expectedFail('task-completion helper must return a workspace report containing topology, entries, and commit guidance.');
   }
@@ -324,6 +328,7 @@ async function verifyCommitModeDerivation() {
       const report = helper.analyzeTaskWorkspace(testCase.input);
       assertTopologyCase(testCase, report);
       assertCommitModeCase(testCase, report);
+      assertFormattedWorkspaceReport(testCase, report, helper);
     }
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
@@ -351,10 +356,12 @@ function transpileTaskCompletionSource(source) {
     .replace(/export\s+interface\s+[\s\S]*?\n}\n/g, '')
     .replace(/export\s+function\s+analyzeTaskWorkspace\(([^)]*)\)\s*:\s*TaskWorkspaceReport\s*{/m, 'function analyzeTaskWorkspace($1) {')
     .replace(/export\s+function\s+classifyTaskWorkspace\(([^)]*)\)\s*:\s*TaskTopology\s*{/m, 'function classifyTaskWorkspace($1) {')
+    .replace(/export\s+function\s+formatTaskWorkspaceReport\(([^)]*)\)\s*:\s*string\s*{/m, 'function formatTaskWorkspaceReport($1) {')
+    .replace(/report:\s*TaskWorkspaceReport/g, 'report')
     .replace(/input:\s*TaskWorkspaceInput\s*=\s*{}/g, 'input = {}')
     .replace(/entries:\s*TaskWorkspaceEntry\[\]\s*=\s*\[\]/g, 'entries = []')
     .replace(/\(repoRoot\):\s*repoRoot is string\s*=>\s*Boolean\(repoRoot\)/g, '(repoRoot) => Boolean(repoRoot)')
-    .concat('\nmodule.exports = { analyzeTaskWorkspace, classifyTaskWorkspace };\n');
+    .concat('\nmodule.exports = { analyzeTaskWorkspace, classifyTaskWorkspace, formatTaskWorkspaceReport };\n');
 }
 
 function createGitFixture(dirPath) {
@@ -422,6 +429,21 @@ function assertCommitModeCase(testCase, report) {
 
   if (report.commitReason !== testCase.expectedCommitReason) {
     expectedFail(`commit-mode fixture ${testCase.name} expected commit reason ${testCase.expectedCommitReason} but received ${String(report.commitReason)}`);
+  }
+}
+
+function assertFormattedWorkspaceReport(testCase, report, helper) {
+  const formattedReport = helper.formatTaskWorkspaceReport(report);
+  const expectedLines = [
+    `topology=${testCase.expectedTopology}`,
+    `commitMode=${testCase.expectedCommitMode}`,
+    `commitReason=${testCase.expectedCommitReason ?? 'none'}`,
+    ...report.entries.map((entry) => `entry:${entry.kind}:${resolve(entry.path)}:${entry.repoRoot ?? 'none'}`),
+  ];
+  const expectedFormattedReport = expectedLines.join('\n');
+
+  if (formattedReport !== expectedFormattedReport) {
+    expectedFail(`workspace-report fixture ${testCase.name} expected ${JSON.stringify(expectedFormattedReport)} but received ${JSON.stringify(formattedReport)}`);
   }
 }
 
