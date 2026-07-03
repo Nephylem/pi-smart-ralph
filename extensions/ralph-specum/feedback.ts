@@ -56,22 +56,66 @@ export function renderFeedbackFallback(draft: FeedbackIssueDraftV1): string {
 	].join("\n");
 }
 
-export function formatFeedbackDraftOnlyMessage(args: string): string {
-	const message = args.trim();
-	const draft = buildFeedbackDraft(message, { targetRepo: resolveFeedbackTargetRepo(FEEDBACK_TARGET_BUGS_URL) });
+export interface FeedbackCommandArgs {
+	message: string | null;
+	yes: boolean;
+}
+
+export function parseFeedbackCommandArgs(args: string): FeedbackCommandArgs {
+	const tokens = args
+		.split(/\s+/)
+		.map((token) => token.trim())
+		.filter(Boolean);
+	const yes = tokens.includes("--yes");
+	const messageTokens = tokens.filter((token) => token !== "--yes");
+	return {
+		message: messageTokens.length > 0 ? messageTokens.join(" ").trim() : null,
+		yes,
+	};
+}
+
+export function formatFeedbackDraftOnlyMessage(message: string): string {
+	const trimmedMessage = message.trim();
+	const draft = buildFeedbackDraft(trimmedMessage, { targetRepo: resolveFeedbackTargetRepo(FEEDBACK_TARGET_BUGS_URL) });
 	const fallback = renderFeedbackFallback(draft);
 	return [
 		"/ralph-feedback is available.",
-		message ? `Captured draft message: ${message}` : "No feedback message provided yet.",
+		trimmedMessage ? `Captured draft message: ${trimmedMessage}` : "No feedback message provided yet.",
 		"Current behavior is safe draft-only: no GitHub issue will be created in this step.",
 		"",
 		fallback,
 	].join("\n");
 }
 
+export function formatFeedbackUsageMessage(): string {
+	return [
+		"Usage: /ralph-feedback [message] [--yes]",
+		"No feedback message was provided, so no GitHub issue will be created.",
+		"Provide feedback text directly or rerun in interactive Pi to enter it when prompted.",
+	].join("\n");
+}
+
 export function createFeedbackCommandHandler(notify: FeedbackCommandNotify) {
 	return async (args: string, ctx: ExtensionCommandContext): Promise<void> => {
-		await notify(ctx, formatFeedbackDraftOnlyMessage(args));
+		const parsed = parseFeedbackCommandArgs(args);
+		let message = parsed.message?.trim() ?? "";
+
+		if (!message) {
+			if (ctx.hasUI && ctx.ui?.input) {
+				const prompted = await ctx.ui.input(
+					"Feedback message",
+					"Describe the feedback you want to submit. This stays draft-only until you explicitly confirm a write.",
+				);
+				message = prompted?.trim() ?? "";
+			}
+		}
+
+		if (!message) {
+			await notify(ctx, formatFeedbackUsageMessage(), "warning");
+			return;
+		}
+
+		await notify(ctx, formatFeedbackDraftOnlyMessage(message));
 	};
 }
 

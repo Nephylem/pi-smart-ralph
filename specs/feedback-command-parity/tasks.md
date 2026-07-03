@@ -106,7 +106,7 @@
   - _Requirements: FR-7, AC-3.1, AC-3.2_
   - _Design: `extensions/ralph-specum/index.ts`; `feedback.ts` runtime interface_
 
-- [ ] 2.2 [GREEN] Pass test: implement prompt-first message resolution and headless stop
+- [x] 2.2 [GREEN] Pass test: implement prompt-first message resolution and headless stop
   - **Do**:
     1. Parse `/ralph-feedback [message] [--yes]` into a feedback command args shape.
     2. Prompt with `ctx.ui.input(...)` when the message is missing and UI exists.
