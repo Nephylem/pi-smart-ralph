@@ -49,7 +49,7 @@
   - _Requirements: FR-1, FR-2, FR-11_
   - _Design: `extensions/ralph-specum/task-completion.ts`_
 
-- [ ] 1.3 [YELLOW] Refactor: stabilize verifier runner and helper exports
+- [x] 1.3 [YELLOW] Refactor: stabilize verifier runner and helper exports
   - **Do**:
     1. Normalize case parsing and pass/fail summary output in the new parity verifier.
     2. Keep helper exports narrow and named for later focused cases.

@@ -17,18 +17,7 @@ export interface TaskWorkspaceReport {
 
 export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorkspaceReport {
   const entries = Array.isArray(input.entries) ? input.entries : [];
-  const repoRoots = new Set(entries.map((entry) => entry.repoRoot).filter((repoRoot): repoRoot is string => Boolean(repoRoot)));
-  const hasRepoEntries = repoRoots.size > 0;
-  const hasNonRepoEntries = entries.some((entry) => entry.repoRoot === null);
-
-  let topology: TaskTopology = 'no_repo';
-  if (hasRepoEntries && hasNonRepoEntries) {
-    topology = 'repo_plus_nonrepo';
-  } else if (repoRoots.size > 1) {
-    topology = 'multi_repo';
-  } else if (repoRoots.size === 1) {
-    topology = 'single_repo';
-  }
+  const topology = classifyTaskWorkspace(entries);
 
   return {
     topology,
@@ -36,4 +25,22 @@ export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorksp
   };
 }
 
-export const classifyTaskWorkspace = analyzeTaskWorkspace;
+export function classifyTaskWorkspace(entries: TaskWorkspaceEntry[] = []): TaskTopology {
+  const repoRoots = new Set(entries.map((entry) => entry.repoRoot).filter((repoRoot): repoRoot is string => Boolean(repoRoot)));
+  const hasRepoEntries = repoRoots.size > 0;
+  const hasNonRepoEntries = entries.some((entry) => entry.repoRoot === null);
+
+  if (hasRepoEntries && hasNonRepoEntries) {
+    return 'repo_plus_nonrepo';
+  }
+
+  if (repoRoots.size > 1) {
+    return 'multi_repo';
+  }
+
+  if (repoRoots.size === 1) {
+    return 'single_repo';
+  }
+
+  return 'no_repo';
+}

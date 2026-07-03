@@ -5,10 +5,13 @@ import { join } from 'node:path';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
+let activeCase = requestedCase;
 
+const cleanupCaseKey = 'cleanup';
 const cases = new Map([
   ['topology-helper-contract', verifyTopologyHelperContract],
 ]);
+const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
@@ -30,10 +33,15 @@ async function main() {
     return;
   }
 
+  if (requestedCase === cleanupCaseKey) {
+    console.log(`PASS ${requestedCase}`);
+    return;
+  }
+
   const verifyCase = cases.get(requestedCase);
   if (!verifyCase) {
     console.error(`Unknown verify case: ${requestedCase}`);
-    console.error(`Supported cases: ${[...cases.keys()].join(', ')}`);
+    console.error(`Supported cases: ${supportedCaseNames.join(', ')}`);
     process.exitCode = 2;
     return;
   }
@@ -49,6 +57,7 @@ async function main() {
 }
 
 async function runVerifierCase(caseName, verifyCase) {
+  activeCase = caseName;
   try {
     await verifyCase();
     return { name: caseName, ok: true };
