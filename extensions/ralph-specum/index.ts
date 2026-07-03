@@ -74,6 +74,7 @@ import {
 	buildRefactorCoordinatorStatePatch,
 	buildRefactorArtifactProgressUpdate,
 	buildRefactorFilePromptPlan,
+	buildRefactorLocalCommitMessage,
 	buildRefactorRequest,
 	buildRefactorSectionPromptPlan,
 	buildRefactorSpecialistPrompt,
@@ -5982,6 +5983,11 @@ function gitRootForFile(filePath: string): string | null {
 	return result.ok && result.stdout ? result.stdout.split(/\r?\n/).at(-1)?.trim() || null : null;
 }
 
+function gitRootForPath(path: string): string | null {
+	const result = runGitCommand(path, ["rev-parse", "--show-toplevel"]);
+	return result.ok && result.stdout ? result.stdout.split(/\r?\n/).at(-1)?.trim() || null : null;
+}
+
 function gitRelativePath(root: string, filePath: string): string | null {
 	const relativePath = relative(root, filePath).replace(/\\/g, "/");
 	if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) return null;
@@ -6000,6 +6006,46 @@ function gitStatusForPath(root: string, relativePath: string): string | null {
 function gitShortHead(root: string): string | undefined {
 	const result = runGitCommand(root, ["rev-parse", "--short=7", "HEAD"]);
 	return result.ok && result.stdout ? result.stdout : undefined;
+}
+
+function hasGitChangesInScope(root: string, relativePath: string): boolean {
+	const status = runGitCommand(root, ["status", "--porcelain=v1", "--untracked-files=all", "--", relativePath]);
+	return status.ok && Boolean(status.stdout);
+}
+
+function hasStagedGitChangesInScope(root: string, relativePath: string): boolean {
+	const diff = runGitCommand(root, ["diff", "--cached", "--name-only", "--", relativePath]);
+	return diff.ok && Boolean(diff.stdout);
+}
+
+function commitRefactorSpecIfDirty(spec: SpecEntry, commitSpec: boolean | undefined): CoordinatorProgressCommitResult {
+	if (commitSpec !== true) return { committed: false };
+
+	const root = gitRootForPath(spec.absolutePath);
+	if (!root) return { committed: false };
+
+	const relativeSpecPath = gitRelativePath(root, spec.absolutePath);
+	if (!relativeSpecPath || !hasGitChangesInScope(root, relativeSpecPath)) return { committed: false };
+
+	const add = runGitCommand(root, ["add", "--all", "--", relativeSpecPath]);
+	if (!add.ok) {
+		return {
+			committed: false,
+			error: normalizeWhitespace(add.stderr || add.stdout || `git add exited with status ${add.status ?? "unknown"}`),
+		};
+	}
+
+	if (!hasStagedGitChangesInScope(root, relativeSpecPath)) return { committed: false };
+
+	const commit = runGitCommand(root, ["commit", "-m", buildRefactorLocalCommitMessage(spec.name), "--", relativeSpecPath]);
+	if (!commit.ok) {
+		return {
+			committed: false,
+			error: normalizeWhitespace(commit.stderr || commit.stdout || `git commit exited with status ${commit.status ?? "unknown"}`),
+		};
+	}
+
+	return { committed: true, hash: gitShortHead(root) };
 }
 
 function commitTrackedProgressIfDirty(progressPath: string, message: string): CoordinatorProgressCommitResult {
@@ -9215,6 +9261,11 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 					state = mergeRalphState(plan.spec, { taskIndex: 0, ...nativeTaskMirrorFailurePatch(state, error) }, { cwd: ctx.cwd });
 					await notify(ctx, `Refactor updated tasks.md, but native pi-tasks mirroring failed:\n${formatError(error)}`, "warning");
 				}
+			}
+
+			const commitResult = commitRefactorSpecIfDirty(plan.spec, state.commitSpec);
+			if (commitResult.error) {
+				await notify(ctx, `Refactor updated ${plan.spec.name}, but local git commit failed: ${commitResult.error}`, "warning");
 			}
 
 			await notify(ctx, formatPendingRefactorMessage(parsed.options, plan), "info");

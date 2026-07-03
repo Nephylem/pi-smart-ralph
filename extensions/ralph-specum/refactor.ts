@@ -408,6 +408,10 @@ export function buildRefactorCoordinatorStatePatch(updatedFiles: RefactorArtifac
 		: { validationError: null };
 }
 
+export function buildRefactorLocalCommitMessage(specName: string): string {
+	return `feat(ralph-refactor): update ${specName} spec artifacts`;
+}
+
 export function formatRefactorCascadeOutcome(
 	sourceFile: RefactorArtifact,
 	targetFile: RefactorArtifact,

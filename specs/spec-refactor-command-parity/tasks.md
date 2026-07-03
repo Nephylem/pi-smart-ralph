@@ -426,7 +426,7 @@
   - _Requirements: FR-16, FR-17, AC-4.5, AC-4.6_
   - _Design: optional local git commit flow_
 
-- [ ] 5.5 [GREEN] Pass test: implement local commit-only git flow
+- [x] 5.5 [GREEN] Pass test: implement local commit-only git flow
   - **Do**:
     1. Add the optional local commit path after successful coordinator-owned updates.
     2. Scope the commit to the selected spec directory changes only.
