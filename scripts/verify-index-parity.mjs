@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -14,6 +14,7 @@ const cases = new Map([
   ['paths', verifyPaths],
   ['scanner', verifyScanner],
   ['dry-run', verifyDryRun],
+  ['render-contract', verifyRenderContract],
 ]);
 
 async function main() {
@@ -347,6 +348,85 @@ async function verifyDryRun() {
   }
 }
 
+async function verifyRenderContract() {
+  const helper = await loadIndexingHelper();
+  const runRalphIndex = helper?.runRalphIndex;
+
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-render-contract-'));
+  try {
+    const projectRoot = join(tempRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(tempRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const servicePath = join(servicesRoot, 'accounts.service.ts');
+    const serviceSource = 'export class AccountsService { list() { return []; } }\n';
+    writeFileSync(servicePath, serviceSource, 'utf8');
+
+    const result = await runRalphIndex({
+      cwd: projectRoot,
+      specRoot,
+      args: ['--path', scanRoot, '--type', 'services', '--quick'],
+    });
+
+    if (result?.ok !== true || result?.dryRun !== false) {
+      expectedFail(`non-dry-run helper must return an ok write result; got ${JSON.stringify(result)}`);
+    }
+
+    const componentDir = join(specRoot, '.index', 'components');
+    const componentFiles = readdirSync(componentDir).filter((entry) => entry.endsWith('.md'));
+    assertEqual(componentFiles.length, 1, 'component artifact count');
+
+    const componentPath = join(componentDir, componentFiles[0]);
+    const componentMarkdown = readFileSync(componentPath, 'utf8');
+    const frontmatter = parseFrontmatter(componentMarkdown);
+    assertRequiredFrontmatter(frontmatter, ['type', 'generated', 'source', 'hash', 'category', 'indexed'], componentPath);
+    assertEqual(frontmatter.type, 'component', 'component frontmatter type');
+    assertEqual(frontmatter.generated, 'true', 'component frontmatter generated flag');
+    assertEqual(frontmatter.source, 'src/services/accounts.service.ts', 'component frontmatter source');
+    assertEqual(frontmatter.hash, sha256(serviceSource), 'component frontmatter source hash');
+    assertEqual(frontmatter.category, 'services', 'component frontmatter category');
+
+    const statePath = join(specRoot, '.index', 'index-state.json');
+    const summaryPath = join(specRoot, '.index', 'index.md');
+    if (!existsSync(statePath) || !existsSync(summaryPath)) {
+      expectedFail('non-dry-run indexing must write index-state.json and index.md contract artifacts.');
+    }
+
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    assertEqual(state.componentCount, 1, 'state component count');
+    assertEqual(state.externalCount, 0, 'state external count');
+    assertEqual(state.created, 3, 'state created count for component, summary, and state');
+    assertEqual(state.updated, 0, 'state updated count');
+    assertEqual(state.skipped, 0, 'state skipped count');
+    assertEqual(state.components?.[0]?.source, frontmatter.source, 'state component source matches frontmatter');
+    assertEqual(state.components?.[0]?.hash, frontmatter.hash, 'state component hash matches frontmatter');
+    assertEqual(state.components?.[0]?.category, frontmatter.category, 'state component category matches frontmatter');
+
+    const summary = readFileSync(summaryPath, 'utf8').toLowerCase();
+    for (const expectedText of [
+      'generated-at',
+      `component count: ${state.componentCount}`,
+      `external count: ${state.externalCount}`,
+      `created: ${state.created}`,
+      `updated: ${state.updated}`,
+      `skipped: ${state.skipped}`,
+    ]) {
+      if (!summary.includes(expectedText)) {
+        expectedFail(`index.md must include ${expectedText} matching index-state.json; got ${summary}`);
+      }
+    }
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function verifyParserOptions() {
   const parseIndexArgs = await loadParseIndexArgs();
 
@@ -397,6 +477,35 @@ async function verifyParserOptions() {
   assertMissingValueMessage(parseIndexArgs(['--path']), '--path');
   assertMissingValueMessage(parseIndexArgs(['--type=']), '--type');
   assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
+}
+
+function parseFrontmatter(markdown) {
+  if (!markdown.startsWith('---\n')) {
+    expectedFail(`component spec must start with YAML frontmatter; got ${markdown.slice(0, 80)}`);
+  }
+
+  const end = markdown.indexOf('\n---\n', 4);
+  if (end === -1) {
+    expectedFail(`component spec must close YAML frontmatter; got ${markdown.slice(0, 120)}`);
+  }
+
+  const frontmatter = {};
+  for (const line of markdown.slice(4, end).split('\n')) {
+    const separator = line.indexOf(':');
+    if (separator === -1) continue;
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    frontmatter[key] = value;
+  }
+  return frontmatter;
+}
+
+function assertRequiredFrontmatter(frontmatter, requiredKeys, pathLabel) {
+  for (const key of requiredKeys) {
+    if (!(key in frontmatter) || frontmatter[key] === '') {
+      expectedFail(`${pathLabel} frontmatter must include required key ${key}; got ${JSON.stringify(frontmatter)}`);
+    }
+  }
 }
 
 function assertStableWriteKinds(kinds) {
