@@ -234,6 +234,20 @@ export function readPriorIndexState(paths: IndexPaths): PriorIndexStateResult {
 
 export const readIndexState = readPriorIndexState;
 
+export function formatRalphIndexCommandResult(result: IndexRunResult): string {
+  const lines = [
+    result.ok ? 'Ralph index complete.' : 'Ralph index failed.',
+    `Mode: ${result.dryRun ? 'dry-run' : 'write'}`,
+    `Index root: ${result.indexRoot}`,
+    `Summary: ${result.summaryPath}`,
+    `State: ${result.statePath}`,
+    `Writes: ${result.writes.length}`,
+    result.message,
+  ];
+  if (result.error) lines.push(`Error: ${result.error}`);
+  return lines.filter(Boolean).join('\n');
+}
+
 export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRunResult> {
   const parseResult = parseIndexArgs(input.args ?? []);
   const parsedOptions = parseResult.options;

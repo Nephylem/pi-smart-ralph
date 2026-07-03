@@ -67,7 +67,7 @@ import {
 import { ensureRalphGitignore } from "./gitignore.ts";
 import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
-import { runRalphIndex } from "./indexing.ts";
+import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 
 // Branch-ordering smoke marker: decideStartBranchBeforeWrites(...) must happen before new-spec writes.
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -2538,20 +2538,6 @@ function formatSpecResolutionError(reference: string, error: unknown, options: R
 	const roots = getSpecRoots({ ...options, allowMissingConfiguredRoots: true });
 	const message = error instanceof Error ? error.message : `Spec '${reference}' could not be resolved.`;
 	return [message, "", "Searched roots:", ...roots.map((root) => `- ${formatRootLabel(root)}`)].join("\n");
-}
-
-function formatRalphIndexCommandResult(result: Awaited<ReturnType<typeof runRalphIndex>>): string {
-	const lines = [
-		result.ok ? "Ralph index complete." : "Ralph index failed.",
-		`Mode: ${result.dryRun ? "dry-run" : "write"}`,
-		`Index root: ${result.indexRoot}`,
-		`Summary: ${result.summaryPath}`,
-		`State: ${result.statePath}`,
-		`Writes: ${result.writes.length}`,
-		result.message,
-	];
-	if (result.error) lines.push(`Error: ${result.error}`);
-	return lines.filter(Boolean).join("\n");
 }
 
 function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): { message: string; type: "info" | "warning" } {

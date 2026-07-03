@@ -440,7 +440,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: `/ralph-index` command registration; Existing Patterns to Follow_
 
-- [ ] 1.30 [YELLOW] Refactor: keep command layer thin
+- [x] 1.30 [YELLOW] Refactor: keep command layer thin
   - **Do**:
     1. Move command formatting details that can be tested into `indexing.ts`.
     2. Keep Pi notification handling in `index.ts` only.

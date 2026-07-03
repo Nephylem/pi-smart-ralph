@@ -837,13 +837,40 @@ function assertRecoverableExternalError(errors, sourceType, sourceId, messageFra
   }
 }
 
-function verifyCommandRegistration() {
+async function verifyCommandRegistration() {
   const commandSourcePath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const source = readFileSync(commandSourcePath, 'utf8');
+  const helper = await loadIndexingHelper();
   const failures = [];
 
   if (!/\.registerCommand\(\s*["']ralph-index["']\s*,/m.test(source)) {
     failures.push('pi.registerCommand("ralph-index", ...) is absent');
+  }
+
+  if (!/import \{[^}]*formatRalphIndexCommandResult[^}]*runRalphIndex[^}]*\} from ["']\.\/indexing\.ts["'];/m.test(source)) {
+    failures.push('command handler must import formatter and runner from indexing.ts');
+  }
+
+  if (/function\s+formatRalphIndexCommandResult\s*\(/m.test(source)) {
+    failures.push('command result formatting must live in indexing.ts, not index.ts');
+  }
+
+  if (typeof helper?.formatRalphIndexCommandResult !== 'function') {
+    failures.push('formatRalphIndexCommandResult is not exported from indexing.ts');
+  } else {
+    const formatted = helper.formatRalphIndexCommandResult({
+      ok: true,
+      dryRun: true,
+      indexRoot: '/tmp/specs/.index',
+      statePath: '/tmp/specs/.index/index-state.json',
+      summaryPath: '/tmp/specs/.index/index.md',
+      writes: [{ path: '/tmp/specs/.index/index.md', action: 'create', kind: 'summary' }],
+      state: { components: [], external: [], errors: [] },
+      message: 'Dry-run planned index writes',
+    });
+    if (!formatted.includes('Ralph index complete.') || !formatted.includes('Mode: dry-run') || !formatted.includes('Writes: 1')) {
+      failures.push(`indexing.ts formatter must produce command notification summary; got ${JSON.stringify(formatted)}`);
+    }
   }
 
   const requiredDocumentationTokens = [
