@@ -244,7 +244,7 @@
   - _Requirements: FR-1, FR-9, NFR-3, AC-4.2_
   - _Design: `README.md`; `package.json`; verifier script wiring_
 
-- [ ] 3.5 [GREEN] Pass test: document behavior and wire feedback verifier into discovered package commands
+- [x] 3.5 [GREEN] Pass test: document behavior and wire feedback verifier into discovered package commands
   - **Do**:
     1. Update `README.md` with confirmation rules, `--yes`, fallback behavior, fixed repo targeting, and archived-original context.
     2. Update `package.json` so the feedback verifier runs through discovered `verify:index` and `verify:pack` entrypoints.

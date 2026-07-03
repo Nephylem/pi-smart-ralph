@@ -65,7 +65,7 @@
   },
   "scripts": {
     "prepack": "node scripts/verify-start-flow-parity.mjs && npm run verify:index && npm run verify:pack && node scripts/verify-publish-bundle.mjs",
-    "verify:index": "node scripts/verify-index-parity.mjs && node scripts/verify-task-blockers-parity.mjs && node scripts/verify-refactor-parity.mjs --case acceptance-checklist",
-    "verify:pack": "node scripts/verify-refactor-parity.mjs --case cleanup && node scripts/verify-pack-dry-run.mjs"
+    "verify:index": "node scripts/verify-index-parity.mjs && node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist && node scripts/verify-refactor-parity.mjs --case acceptance-checklist && node scripts/verify-feedback-parity.mjs --case acceptance-checklist",
+    "verify:pack": "node scripts/verify-task-blockers-parity.mjs --case cleanup && node scripts/verify-refactor-parity.mjs --case cleanup && node scripts/verify-feedback-parity.mjs --case cleanup && node scripts/verify-pack-dry-run.mjs"
   }
 }

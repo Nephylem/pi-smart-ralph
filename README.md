@@ -317,6 +317,7 @@ For a small smoke test:
 | `/ralph-design [spec]` | Generate `design.md`. |
 | `/ralph-tasks [spec]` | Generate `tasks.md` and mirror tasks into Pi task cards. |
 | `/ralph-implement [spec]` | Execute open tasks through Ralph subagents. |
+| `/ralph-feedback [message]` | Prepare a feedback draft for `Nephylem/pi-smart-ralph`, requiring confirmation or `--yes` before any GitHub write. |
 | `/ralph-status` | Show known specs and progress. |
 | `/ralph-switch <spec-or-path>` | Switch the active spec. |
 | `/ralph-cancel [spec-or-path]` | Clear active Ralph execution state for a spec. |
@@ -478,6 +479,25 @@ Before using GitHub output, confirm:
 ```bash
 gh auth status
 git remote -v
+```
+
+### `/ralph-feedback` safe submission flow
+
+`/ralph-feedback` is the Pi-native feedback command for this package. It keeps the same archived-original intent as the old Smart Ralph feedback command, but this package ships that original behavior only as reference material under `references/original-commands/feedback.md` instead of executing the archived `tzachbon/smart-ralph` workflow directly.
+
+Feedback stays draft-first by default:
+
+- `/ralph-feedback <message>` prepares a manual fallback with the draft fields and a prefilled `issues/new` URL.
+- Interactive runs require a Pi UI confirmation before any GitHub write.
+- Noninteractive runs require `/ralph-feedback <message> --yes` before `gh issue create` is allowed.
+- If GitHub CLI/auth/repository readiness is missing, `/ralph-feedback` falls back to the same manual no-write output.
+- MVP repo targeting is fixed to `Nephylem/pi-smart-ralph` from package metadata; it does not infer your current repository remote and does not fall back to `tzachbon/smart-ralph`.
+
+Example fallback-oriented usage:
+
+```text
+/ralph-feedback The packaged feedback flow should mention archived-command context.
+/ralph-feedback The packaged feedback flow should mention archived-command context. --yes
 ```
 
 ---

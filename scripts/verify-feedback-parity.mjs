@@ -7,6 +7,18 @@ const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
 let activeCase = requestedCase;
 
+const acceptanceChecklistCaseKey = 'acceptance-checklist';
+const cleanupCaseKey = 'cleanup';
+const lifecycleCaseNames = ['acceptance-checklist', 'cleanup',];
+const acceptanceChecklistCases = [
+  'command-registration',
+  'draft-fallback',
+  'headless-input',
+  'confirmation-flow',
+  'github-execution',
+  'package-wiring',
+];
+
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
   ['draft-fallback', verifyDraftFallback],
@@ -14,7 +26,9 @@ const cases = new Map([
   ['confirmation-flow', verifyConfirmationFlow],
   ['github-execution', verifyGithubExecution],
   ['package-wiring', verifyPackageWiring],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
+const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
@@ -32,14 +46,33 @@ async function main() {
       console.log(`PASS ${caseName}`);
     }
 
+    const cleanupResult = await runVerifierCase(cleanupCaseKey, verifyCleanupCase);
+    if (!cleanupResult.ok) {
+      printCaseFailure(cleanupResult);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${cleanupCaseKey}`);
+
     console.log(`PASS feedback parity verifier: ${summaries.length}/${cases.size} cases passed`);
+    return;
+  }
+
+  if (requestedCase === cleanupCaseKey) {
+    const cleanupResult = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!cleanupResult.ok) {
+      printCaseFailure(cleanupResult);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${requestedCase}`);
     return;
   }
 
   const verifyCase = cases.get(requestedCase);
   if (!verifyCase) {
     console.error(`Unknown verify case: ${requestedCase}`);
-    console.error(`Supported cases: ${[...cases.keys()].join(', ')}`);
+    console.error(`Supported cases: ${supportedCaseNames.join(', ')}`);
     process.exitCode = 2;
     return;
   }
@@ -535,6 +568,25 @@ async function verifyGithubExecution() {
   }
 }
 
+async function verifyAcceptanceChecklist() {
+  for (const caseName of acceptanceChecklistCases) {
+    const verifyCase = cases.get(caseName);
+    if (typeof verifyCase !== 'function') {
+      expectedFail(`acceptance checklist is missing verifier case: ${caseName}`);
+    }
+    await verifyCase();
+  }
+}
+
+async function verifyCleanupCase() {
+  await verifyAcceptanceChecklist();
+}
+
+function scriptEventuallyRunsFeedbackCase(script, caseName) {
+  return script.includes(`scripts/verify-feedback-parity.mjs --case ${caseName}`)
+    || script.includes(`scripts/verify-feedback-parity.mjs --case=${caseName}`);
+}
+
 async function verifyPackageWiring() {
   const readmePath = join(root, 'README.md');
   const packageJsonPath = join(root, 'package.json');
@@ -578,11 +630,11 @@ async function verifyPackageWiring() {
   const verifyPack = packageJson?.scripts?.['verify:pack'] ?? '';
   const prepack = packageJson?.scripts?.prepack ?? '';
 
-  if (!verifyIndex.includes('node scripts/verify-feedback-parity.mjs --case acceptance-checklist')) {
+  if (!scriptEventuallyRunsFeedbackCase(verifyIndex, acceptanceChecklistCaseKey)) {
     failures.push('package.json scripts.verify:index must run feedback acceptance-checklist coverage');
   }
 
-  if (!verifyPack.includes('node scripts/verify-feedback-parity.mjs --case cleanup')) {
+  if (!scriptEventuallyRunsFeedbackCase(verifyPack, cleanupCaseKey)) {
     failures.push('package.json scripts.verify:pack must run feedback cleanup coverage');
   }
 
@@ -590,7 +642,7 @@ async function verifyPackageWiring() {
     failures.push('package.json scripts.prepack must continue routing package verification through npm run verify:index and npm run verify:pack');
   }
 
-  const requiredCaseNames = ['acceptance-checklist', 'cleanup'];
+  const requiredCaseNames = [acceptanceChecklistCaseKey, cleanupCaseKey];
   const missingCaseNames = requiredCaseNames.filter(
     (caseName) => !new RegExp(`['\"]${caseName}['\"]\\s*,`).test(verifierSource),
   );
