@@ -241,7 +241,7 @@
   - _Requirements: FR-9, FR-10, NFR-2_
   - _Design: blocker priority decision; `TaskCompletionAssessment`_
 
-- [ ] Q5 [VERIFY] Quality check: relaxed completion and blocker priority
+- [x] Q5 [VERIFY] Quality check: relaxed completion and blocker priority
   - **Do**:
     1. Run the discovered `verify:index` command after blocker-priority changes.
   - **Files**: None
@@ -251,7 +251,7 @@
   - _Requirements: FR-4, FR-9, FR-12_
   - _Design: `scripts/verify-task-blockers-parity.mjs`_
 
-- [ ] 3.4 [RED] Failing test: `[RED]` tasks require keyed expected-failure proof
+- [x] 3.4 [RED] Failing test: `[RED]` tasks require keyed expected-failure proof
   - **Do**:
     1. Add cases for `TASK_COMPLETE` plus `verify: RED_PASS`.
     2. Add a negative case where raw failing output appears without keyed proof.

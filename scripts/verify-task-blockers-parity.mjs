@@ -27,6 +27,7 @@ const cases = new Map([
   ['coordinator-preflight-contract', verifyCoordinatorPreflightContract],
   ['relaxed-completion-validation-fixtures', verifyRelaxedCompletionValidationFixtures],
   ['topology-blocker-priority-contract', verifyTopologyBlockerPriorityContract],
+  ['red-pass-evidence-contract', verifyRedPassEvidenceContract],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
 
@@ -445,6 +446,28 @@ async function verifyTopologyBlockerPriorityContract() {
 
   if (!/multi_repo|repo_plus_nonrepo|no_repo|topology_relaxed|commit topology|split_repo_workspace/i.test(failureReasonSection[0])) {
     expectedFail('blocker selection must prefer topology/commit-topology reasons ahead of generic verification noise for non-single_repo failures.');
+  }
+}
+
+async function verifyRedPassEvidenceContract() {
+  const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
+  const evidenceSection = indexSource.match(/function extractCompletionEvidence\([\s\S]*?\n}\n\nfunction validateSubagentCompletion/);
+  const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
+
+  if (!evidenceSection || !validationSection) {
+    expectedFail('parity coverage could not locate completion-evidence parsing for RED_PASS assertions.');
+  }
+
+  if (!/RED_PASS/.test(indexSource)) {
+    expectedFail('completion validation must explicitly recognize keyed `verify: RED_PASS` proof for `[RED]` TASK_COMPLETE outputs.');
+  }
+
+  if (!/\[RED\]|expected-failure|red[-_ ]pass/i.test(validationSection[0])) {
+    expectedFail('completion validation must branch on `[RED]` task context so expected failures only count when keyed proof is present.');
+  }
+
+  if (!/verify\|verification\|evidence/.test(evidenceSection[0]) || !/RED_PASS/.test(evidenceSection[0])) {
+    expectedFail('keyed evidence parsing must require `verify:`/`verification:`/`evidence:` lines to carry `RED_PASS` instead of accepting raw failing output.');
   }
 }
 
