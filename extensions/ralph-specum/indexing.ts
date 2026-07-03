@@ -73,6 +73,8 @@ export interface ScanComponentFilesResult {
   skipped: Array<{ path: string; reason: string }>;
 }
 
+export type IndexExcludeMatcher = (relativePath: string, entryName?: string) => boolean;
+
 const DEFAULT_INDEX_OPTIONS: IndexOptions = {
   scanPath: '.',
   specRoot: './specs',
@@ -140,12 +142,12 @@ export function getExternalIndexPath(paths: IndexPaths, sourceId: string): strin
 export function scanComponentFiles(input: ScanComponentFilesInput): ScanComponentFilesResult {
   const options = { ...createDefaultIndexOptions(), ...(input.options ?? {}) };
   const categories = new Set(options.categories ?? []);
-  const excludes = [...DEFAULT_EXCLUDES, ...(options.excludes ?? [])];
+  const excludeMatcher = createIndexExcludeMatcher([...DEFAULT_EXCLUDES, ...(options.excludes ?? [])]);
   const components: ComponentEntry[] = [];
   const skipped: Array<{ path: string; reason: string }> = [];
 
-  for (const sourcePath of walkReadableFiles(input.paths.scanPath, input.paths.scanPath, excludes, skipped)) {
-    const category = classifyComponentFile(sourcePath);
+  for (const sourcePath of walkReadableFiles(input.paths.scanPath, input.paths.scanPath, excludeMatcher, skipped)) {
+    const category = classifyIndexComponentFile(sourcePath);
     if (categories.size > 0 && !categories.has(category)) continue;
 
     let source: string;
@@ -212,12 +214,12 @@ const READABLE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs
 function* walkReadableFiles(
   rootPath: string,
   currentPath: string,
-  excludes: string[],
+  excludeMatcher: IndexExcludeMatcher,
   skipped: Array<{ path: string; reason: string }>,
 ): Generator<string> {
   let entries;
   try {
-    entries = readdirSync(currentPath, { withFileTypes: true });
+    entries = readdirSync(currentPath, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name));
   } catch (_error) {
     skipped.push({ path: currentPath, reason: 'unreadable' });
     return;
@@ -226,10 +228,10 @@ function* walkReadableFiles(
   for (const entry of entries) {
     const entryPath = join(currentPath, entry.name);
     const relativePath = normalizePathSeparators(relative(rootPath, entryPath));
-    if (matchesAnyExclude(relativePath, entry.name, excludes)) continue;
+    if (excludeMatcher(relativePath, entry.name)) continue;
 
     if (entry.isDirectory()) {
-      yield* walkReadableFiles(rootPath, entryPath, excludes, skipped);
+      yield* walkReadableFiles(rootPath, entryPath, excludeMatcher, skipped);
       continue;
     }
 
@@ -248,7 +250,7 @@ function isReadableCandidateFile(sourcePath: string): boolean {
   }
 }
 
-function classifyComponentFile(sourcePath: string): IndexCategory {
+export function classifyIndexComponentFile(sourcePath: string): IndexCategory {
   const normalized = normalizePathSeparators(sourcePath).toLowerCase();
   const fileBase = basename(normalized, extname(normalized));
   if (normalized.includes('/controllers/') || /(^|[.-])controller$/.test(fileBase)) return 'controllers';
@@ -259,12 +261,19 @@ function classifyComponentFile(sourcePath: string): IndexCategory {
   return 'other';
 }
 
-function matchesAnyExclude(relativePath: string, entryName: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => matchesExcludePattern(relativePath, entryName, pattern));
+export function createIndexExcludeMatcher(patterns: string[] = []): IndexExcludeMatcher {
+  const normalizedPatterns = patterns.map(normalizeExcludePattern).filter(Boolean);
+  return (relativePath: string, entryName = basename(relativePath)): boolean => {
+    const normalizedRelativePath = normalizePathSeparators(relativePath).replace(/^\.\//, '');
+    return normalizedPatterns.some((pattern) => matchesExcludePattern(normalizedRelativePath, entryName, pattern));
+  };
 }
 
-function matchesExcludePattern(relativePath: string, entryName: string, pattern: string): boolean {
-  const normalizedPattern = normalizePathSeparators(pattern).replace(/^\.\//, '');
+function normalizeExcludePattern(pattern: string): string {
+  return normalizePathSeparators(pattern).replace(/^\.\//, '').trim();
+}
+
+function matchesExcludePattern(relativePath: string, entryName: string, normalizedPattern: string): boolean {
   if (!normalizedPattern) return false;
   if (normalizedPattern.endsWith('/**')) {
     const directoryPattern = normalizedPattern.slice(0, -3);

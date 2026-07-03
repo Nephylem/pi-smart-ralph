@@ -147,6 +147,8 @@ async function verifyScanner() {
   const parseIndexArgs = helper?.parseIndexArgs;
   const resolveIndexPaths = helper?.resolveIndexPaths;
   const scanComponentFiles = helper?.scanComponentFiles;
+  const classifyIndexComponentFile = helper?.classifyIndexComponentFile;
+  const createIndexExcludeMatcher = helper?.createIndexExcludeMatcher;
 
   if (typeof parseIndexArgs !== 'function') {
     expectedFail('parseIndexArgs is not exported from extensions/ralph-specum/indexing.ts yet.');
@@ -159,6 +161,21 @@ async function verifyScanner() {
   if (typeof scanComponentFiles !== 'function') {
     expectedFail('scanComponentFiles is not exported from extensions/ralph-specum/indexing.ts yet.');
   }
+
+  if (typeof classifyIndexComponentFile !== 'function') {
+    expectedFail('classifyIndexComponentFile is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof createIndexExcludeMatcher !== 'function') {
+    expectedFail('createIndexExcludeMatcher is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  assertEqual(classifyIndexComponentFile('/tmp/app/controllers/accounts.controller.ts'), 'controllers', 'isolated controller classifier');
+  assertEqual(classifyIndexComponentFile('/tmp/app/services/accounts.service.ts'), 'services', 'isolated service classifier');
+  const excludeMatcher = createIndexExcludeMatcher(['generated/**', '*excluded.service.ts']);
+  assertEqual(excludeMatcher('generated/client.ts', 'client.ts'), true, 'directory wildcard exclude matcher');
+  assertEqual(excludeMatcher('services/excluded.service.ts', 'excluded.service.ts'), true, 'basename wildcard exclude matcher');
+  assertEqual(excludeMatcher('services/accounts.service.ts', 'accounts.service.ts'), false, 'non-matching exclude matcher');
 
   const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-index-scanner-'));
   try {
@@ -173,9 +190,11 @@ async function verifyScanner() {
 
     const servicePath = join(servicesRoot, 'accounts.service.ts');
     const serviceSource = 'export class AccountsService {\n  list() { return []; }\n}\n';
+    const billingServicePath = join(servicesRoot, 'billing.service.ts');
+    writeFileSync(join(servicesRoot, 'excluded.service.ts'), 'export class ExcludedService {}\n', 'utf8');
+    writeFileSync(billingServicePath, 'export class BillingService {}\n', 'utf8');
     writeFileSync(servicePath, serviceSource, 'utf8');
     writeFileSync(join(controllersRoot, 'accounts.controller.ts'), 'export class AccountsController {}\n', 'utf8');
-    writeFileSync(join(servicesRoot, 'excluded.service.ts'), 'export class ExcludedService {}\n', 'utf8');
 
     const parseResult = parseIndexArgs([
       '--path',
@@ -199,7 +218,12 @@ async function verifyScanner() {
       expectedFail(`scanComponentFiles must return an array or { components }; got ${JSON.stringify(scanResult)}`);
     }
 
-    assertEqual(components.length, 1, 'scanner service-only component count');
+    assertEqual(components.length, 2, 'scanner service-only component count');
+    assertArrayEqual(
+      components.map((component) => component.sourcePath),
+      [resolve(servicePath), resolve(billingServicePath)],
+      'deterministic scanner source ordering',
+    );
     const [component] = components;
     assertEqual(component.category, 'services', 'service component category');
     assertEqual(component.sourcePath, resolve(servicePath), 'service source path');

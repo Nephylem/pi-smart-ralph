@@ -164,7 +164,7 @@
   - _Requirements: FR-5, FR-7, FR-10, AC-3.1, AC-3.4_
   - _Design: Component scanner; Performance Considerations_
 
-- [ ] 1.12 [YELLOW] Refactor: extract classifier and exclude matcher
+- [x] 1.12 [YELLOW] Refactor: extract classifier and exclude matcher
   - **Do**:
     1. Extract category classifier from the recursive scanner.
     2. Extract simple wildcard exclude matcher without adding dependencies.
