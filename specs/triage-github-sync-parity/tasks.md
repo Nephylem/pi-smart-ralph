@@ -110,7 +110,7 @@
   - _Requirements: FR-1, FR-8; AC-1.3_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator; `extensions/ralph-specum/epics.ts` compatibility boundary_
 
-- [ ] 1.9 [YELLOW] Refactor: tighten compatibility warning serialization
+- [x] 1.9 [YELLOW] Refactor: tighten compatibility warning serialization
   - **Do**:
     1. Standardize warning text and storage shape for normalized epic reads.
     2. Keep all phase-1 verifier cases green.

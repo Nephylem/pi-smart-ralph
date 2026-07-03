@@ -89,6 +89,8 @@ export type EpicState = Record<string, unknown> & {
 export type EpicStatePatch = Record<string, unknown>;
 export type EpicStateReference = string | CurrentEpic;
 
+const NORMALIZED_ORIGINAL_COMPATIBILITY_WARNING = "Normalized original-compatible epic state in memory before strict validation.";
+
 export type SafeEpicStateRead = {
 	path: string;
 	state: EpicState | null;
@@ -641,7 +643,8 @@ function normalizeCompatibleEpicState(
 	options: RalphPathOptions,
 ): { state: EpicState; compatibilityWarnings: string[]; isCompatibilitySubset: boolean } {
 	const compatibility = resolveEpicCompatibilityContract(state);
-	const { compatibilityWarnings, isCompatibilitySubset } = compatibility;
+	const compatibilityWarnings = normalizeEpicCompatibilityWarnings(compatibility.compatibilityWarnings);
+	const { isCompatibilitySubset } = compatibility;
 	const defaultRoot = getDefaultSpecRoot(options);
 	const now = timestamp();
 	const specs = getEpicSpecs(state).map((spec, index) => {
@@ -708,19 +711,47 @@ function resolveEpicCompatibilityContract(state: EpicState): { compatibilityWarn
 
 function collectEpicCompatibilityWarnings(state: EpicState): string[] {
 	if (hasCompatibleEpicStateGaps(state)) {
-		return ["Normalized original-compatible epic state in memory before strict validation."];
+		return [NORMALIZED_ORIGINAL_COMPATIBILITY_WARNING];
 	}
 
-	const persistedWarnings = readCompatibilityWarnings(state.validation);
-	return persistedWarnings.length > 0 ? persistedWarnings : [];
+	return normalizeEpicCompatibilityWarnings(readCompatibilityWarnings(state.validation));
 }
 
-function readCompatibilityWarnings(validation: EpicState["validation"]): string[] {
-	if (!isPlainObject(validation) || !Array.isArray(validation.compatibilityWarnings)) {
+export function normalizeEpicCompatibilityWarnings(warnings: unknown): string[] {
+	if (!Array.isArray(warnings)) {
 		return [];
 	}
 
-	return validation.compatibilityWarnings.filter((warning): warning is string => typeof warning === "string");
+	const normalized: string[] = [];
+	const seen = new Set<string>();
+	for (const warning of warnings) {
+		if (typeof warning !== "string") continue;
+		const canonical = normalizeEpicCompatibilityWarningText(warning);
+		if (!canonical || seen.has(canonical)) continue;
+		seen.add(canonical);
+		normalized.push(canonical);
+	}
+	return normalized;
+}
+
+function normalizeEpicCompatibilityWarningText(warning: string): string | null {
+	const trimmed = warning.trim();
+	if (!trimmed) return null;
+	if (trimmed === NORMALIZED_ORIGINAL_COMPATIBILITY_WARNING) {
+		return trimmed;
+	}
+	if (trimmed.includes("original-compatible epic state") || trimmed.includes("compatibility subset") || trimmed.includes("strict validation")) {
+		return NORMALIZED_ORIGINAL_COMPATIBILITY_WARNING;
+	}
+	return trimmed;
+}
+
+function readCompatibilityWarnings(validation: EpicState["validation"]): string[] {
+	if (!isPlainObject(validation)) {
+		return [];
+	}
+
+	return normalizeEpicCompatibilityWarnings(validation.compatibilityWarnings);
 }
 
 function hasCompatibleEpicStateGaps(state: EpicState): boolean {

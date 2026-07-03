@@ -49,6 +49,7 @@ import {
 	EPIC_SCHEMA_VERSION,
 	getEpicStatePath,
 	listEpics,
+	normalizeEpicCompatibilityWarnings,
 	readCompatibleEpicState,
 	readCurrentEpic,
 	readCurrentEpicName,
@@ -8106,9 +8107,9 @@ function repairEpicStateMetadata(epic: CurrentEpic, state: EpicState, summary: R
 	let nextState = state;
 	const now = new Date().toISOString();
 	const specs = Array.isArray(nextState.specs) ? nextState.specs : [];
-	const compatibilityWarnings = isRecordValue(state.validation) && Array.isArray(state.validation.compatibilityWarnings)
-		? state.validation.compatibilityWarnings.filter((warning): warning is string => typeof warning === "string")
-		: [];
+	const compatibilityWarnings = normalizeEpicCompatibilityWarnings(
+		isRecordValue(state.validation) ? state.validation.compatibilityWarnings : [],
+	);
 	let pathMetadataChanged = false;
 	const normalizedSpecs = specs.map((spec) => {
 		if (!isRecordValue(spec) || typeof spec.name !== "string" || !isValidSpecName(spec.name)) return spec;
@@ -9699,7 +9700,13 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 		}
 	}
 	validationErrors = materialized?.warnings.length ? materialized.warnings : [];
-	const warnings = [...parsed.warnings, ...postRunRead.warnings, ...postRunRead.compatibilityWarnings, ...(githubSync?.warnings ?? []), ...validationErrors];
+	const warnings = unique([
+		...parsed.warnings,
+		...postRunRead.warnings,
+		...postRunRead.compatibilityWarnings,
+		...(githubSync?.warnings ?? []),
+		...validationErrors,
+	]);
 	const warningOutput = validationErrors.length > 0 || githubSync?.status === "failed" || githubSync?.status === "skipped";
 	await notify(ctx, formatTriageSummary(epic, state, materialized, warnings, shouldDelegate === false, githubSync), warningOutput ? "warning" : "info");
 }
