@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -67,6 +68,7 @@ export interface ComponentEntry {
 export interface ScanComponentFilesInput {
   paths: IndexPaths;
   options?: Partial<IndexOptions>;
+  changedSourcePaths?: Set<string> | null;
 }
 
 export interface ScanComponentFilesResult {
@@ -223,8 +225,27 @@ export async function runRalphIndex(input: IndexRunInput = {}): Promise<IndexRun
     };
   }
 
+  let changedSourcePaths: Set<string> | null = null;
+  if (options.changed) {
+    const changedResult = collectGitChangedSourcePaths(paths);
+    if (!changedResult.ok) {
+      return {
+        ok: false,
+        dryRun: options.dryRun,
+        indexRoot: paths.indexRoot,
+        statePath: paths.stateWritePath,
+        summaryPath: paths.summaryPath,
+        writes: [],
+        state: createEmptyIndexState(paths, options, new Date().toISOString()),
+        message: changedResult.error,
+        error: changedResult.error,
+      };
+    }
+    changedSourcePaths = changedResult.paths;
+  }
+
   const priorState = readPriorIndexState(paths).state;
-  const scanResult = scanComponentFiles({ paths, options });
+  const scanResult = scanComponentFiles({ paths, options, changedSourcePaths });
   const plannedAt = new Date().toISOString();
   const plan = planIndexWrites({ paths, options, components: scanResult.components, priorState, indexedAt: plannedAt });
 
@@ -258,6 +279,7 @@ export function scanComponentFiles(input: ScanComponentFilesInput): ScanComponen
   const skipped: Array<{ path: string; reason: string }> = [];
 
   for (const sourcePath of walkReadableFiles(input.paths.scanPath, input.paths.scanPath, excludeMatcher, skipped)) {
+    if (input.changedSourcePaths && !input.changedSourcePaths.has(resolve(sourcePath))) continue;
     const category = classifyIndexComponentFile(sourcePath);
     if (categories.size > 0 && !categories.has(category)) continue;
 
@@ -411,6 +433,47 @@ export function selectIndexWriteAction(input: SelectIndexWriteActionInput): Inde
   if (input.unchanged && targetExists && !input.force) return 'skip';
   if (targetExists) return 'update';
   return 'create';
+}
+
+type ChangedSourcePathsResult =
+  | { ok: true; paths: Set<string> }
+  | { ok: false; error: string };
+
+export function collectGitChangedSourcePaths(paths: Pick<IndexPaths, 'scanPath'>): ChangedSourcePathsResult {
+  const revParse = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: paths.scanPath,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (revParse.status !== 0) {
+    return { ok: false, error: '--changed requires a Git worktree; run /ralph-index from inside a Git worktree or omit --changed.' };
+  }
+
+  const worktreeRoot = revParse.stdout.trim();
+  if (!worktreeRoot) {
+    return { ok: false, error: '--changed requires a Git worktree; git rev-parse did not return a worktree root.' };
+  }
+
+  const diff = spawnSync('git', ['diff', '--name-only'], {
+    cwd: worktreeRoot,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (diff.status !== 0) {
+    const details = diff.stderr.trim() || diff.stdout.trim() || 'git diff --name-only failed';
+    return { ok: false, error: `Unable to collect changed files for --changed: ${details}` };
+  }
+
+  const changedPaths = new Set<string>();
+  for (const line of diff.stdout.split(/\r?\n/)) {
+    const gitRelativePath = line.trim();
+    if (!gitRelativePath) continue;
+    changedPaths.add(resolve(worktreeRoot, gitRelativePath));
+  }
+
+  return { ok: true, paths: changedPaths };
 }
 
 function readPriorComponentHashes(priorState: unknown): Map<string, string> {

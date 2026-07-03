@@ -336,7 +336,7 @@
   - _Requirements: FR-11, AC-5.3, AC-5.4_
   - _Design: Git changed filter_
 
-- [ ] 1.23 [GREEN] Pass test: implement Git worktree and diff filtering
+- [x] 1.23 [GREEN] Pass test: implement Git worktree and diff filtering
   - **Do**:
     1. Use `git rev-parse --show-toplevel` to require a worktree.
     2. Use `git diff --name-only` to collect changed files.
