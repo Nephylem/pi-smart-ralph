@@ -265,7 +265,7 @@
   - _Requirements: FR-4, FR-8, FR-9, AC-3.1, AC-3.2, AC-3.6_
   - _Design: `extensions/ralph-specum/refactor.ts` deep module_
 
-- [ ] Q6 [VERIFY] Quality check: bounded request verifier
+- [x] Q6 [VERIFY] Quality check: bounded request verifier
   - **Do**:
     1. Run the verifier implementing the research `fixture/state smoke` tooling row for request capture and allowed-files containment.
   - **Files**: None
@@ -277,7 +277,7 @@
 
 ## Phase 7: Completion validation and unauthorized-edit auditing
 
-- [ ] 4.1 [RED] Failing verifier: reject missing markers and unauthorized spec edits
+- [x] 4.1 [RED] Failing verifier: reject missing markers and unauthorized spec edits
   - **Do**:
     1. Add an `audit-rollback` case to `scripts/verify-refactor-parity.mjs` with malformed specialist output and unauthorized file mutations.
     2. Assert the coordinator rejects missing completion markers and restores unauthorized spec-directory edits before progress/state writes.

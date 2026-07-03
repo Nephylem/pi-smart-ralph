@@ -17,6 +17,7 @@ const cases = new Map([
   ['file-narrowing', verifyFileNarrowing],
   ['specialist-contract', verifySpecialistContract],
   ['request-payload', verifyRequestPayload],
+  ['audit-rollback', verifyAuditRollback],
 ]);
 
 async function main() {
@@ -428,6 +429,86 @@ async function verifyRequestPayload() {
   }
 }
 
+async function verifyAuditRollback() {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'ralph-refactor-audit-rollback-'));
+
+  try {
+    const fixture = createRefactorCommandFixture(tempRoot);
+    const trackedPaths = {
+      requirements: join(fixture.specRoot, 'requirements.md'),
+      design: join(fixture.specRoot, 'design.md'),
+      tasks: join(fixture.specRoot, 'tasks.md'),
+      progress: join(fixture.specRoot, '.progress.md'),
+      state: join(fixture.specRoot, '.ralph-state.json'),
+    };
+    const beforeHashes = {
+      requirements: hashFile(trackedPaths.requirements),
+      design: hashFile(trackedPaths.design),
+      tasks: hashFile(trackedPaths.tasks),
+      progress: hashFile(trackedPaths.progress),
+      state: hashFile(trackedPaths.state),
+    };
+
+    const subagentStub = createRefactorAuditRollbackStub();
+    const notifications = [];
+    const commandWithStub = await loadRefactorCommand({ events: subagentStub.events });
+    await commandWithStub.handler('--file=requirements', {
+      cwd: fixture.projectRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          notifications.push({ message, type });
+        },
+        select(_title, labels) {
+          return labels[0] ?? null;
+        },
+        confirm() {
+          return true;
+        },
+        input() {
+          return 'interactive-choice';
+        },
+        setStatus() {},
+        setWidget() {},
+      },
+    });
+
+    const afterHashes = {
+      requirements: hashFile(trackedPaths.requirements),
+      design: hashFile(trackedPaths.design),
+      tasks: hashFile(trackedPaths.tasks),
+      progress: hashFile(trackedPaths.progress),
+      state: hashFile(trackedPaths.state),
+    };
+
+    const changedPaths = Object.entries(afterHashes)
+      .filter(([name, hash]) => hash !== beforeHashes[name])
+      .map(([name]) => name);
+
+    if (!notifications.some((entry) => entry.type === 'warning' && /refactor|marker|unauthorized|reject|invalid/i.test(String(entry.message)))) {
+      throw new Error(`malformed specialist completion must be rejected with a warning before success handling; got notifications ${JSON.stringify(notifications)}`);
+    }
+
+    if (afterHashes.progress !== beforeHashes.progress || afterHashes.state !== beforeHashes.state) {
+      throw new Error(`progress/state writes must not happen after malformed output or unauthorized edits; changed ${JSON.stringify({ progress: afterHashes.progress !== beforeHashes.progress, state: afterHashes.state !== beforeHashes.state })}`);
+    }
+
+    if (afterHashes.design !== beforeHashes.design) {
+      throw new Error(`unauthorized spec-directory edits must be rolled back before returning; design.md remained mutated and tracked changes were ${JSON.stringify(changedPaths)}`);
+    }
+
+    if (afterHashes.requirements !== beforeHashes.requirements) {
+      throw new Error(`malformed specialist completion must not keep even in-scope artifact edits; requirements.md remained mutated and tracked changes were ${JSON.stringify(changedPaths)}`);
+    }
+  } catch (error) {
+    if (error?.expectedFail === true) throw error;
+    expectedFail(error?.message ?? String(error));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function loadParseRefactorArgs() {
   const helper = await loadRefactorHelper();
   const parseRefactorArgs = helper?.parseRefactorArgs;
@@ -535,6 +616,44 @@ function createRefactorRequestCaptureStub() {
   return { events, requests };
 }
 
+function createRefactorAuditRollbackStub() {
+  const events = new EventEmitter();
+  const requests = [];
+
+  events.on('subagents:rpc:ping', (payload) => {
+    events.emit(`subagents:rpc:ping:reply:${payload.requestId}`, { success: true, data: { version: 1 } });
+  });
+
+  events.on('subagents:rpc:spawn', (payload) => {
+    requests.push(payload);
+    const request = parseCapturedRefactorRequest(payload);
+    const allowedPath = request?.allowedFiles?.[0];
+    const unauthorizedDesignPath = join(request?.spec?.basePath ?? '', 'design.md');
+
+    if (allowedPath) {
+      writeFileSync(allowedPath, `${readFileSync(allowedPath, 'utf8')}\n<!-- allowed mutation from audit rollback stub -->\n`, 'utf8');
+    }
+    if (request?.spec?.basePath) {
+      writeFileSync(unauthorizedDesignPath, `${readFileSync(unauthorizedDesignPath, 'utf8')}\n<!-- unauthorized design mutation from audit rollback stub -->\n`, 'utf8');
+    }
+
+    const agentId = `refactor-audit-${requests.length}`;
+    events.emit(`subagents:rpc:spawn:reply:${payload.requestId}`, { success: true, data: { id: agentId } });
+    queueMicrotask(() => {
+      events.emit('subagents:completed', {
+        id: agentId,
+        status: 'completed',
+        result: [
+          'CASCADE_NEEDED: design',
+          'EVIDENCE: malformed completion missing REFACTOR_COMPLETE and CASCADE_REASON',
+        ].join('\n'),
+      });
+    });
+  });
+
+  return { events, requests };
+}
+
 function parseCapturedRefactorRequest(spawnPayload) {
   const prompt = String(spawnPayload?.prompt ?? '');
   const match = prompt.match(/\{[\s\S]*\}/m);
@@ -595,6 +714,12 @@ function hashFiles(filePaths) {
     hash.update(`${filePath}\n`);
     hash.update(readFileSync(filePath));
   }
+  return hash.digest('hex');
+}
+
+function hashFile(filePath) {
+  const hash = createHash('sha256');
+  hash.update(readFileSync(filePath));
   return hash.digest('hex');
 }
 
