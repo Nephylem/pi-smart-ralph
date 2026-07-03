@@ -439,12 +439,28 @@ type ChangedSourcePathsResult =
   | { ok: true; paths: Set<string> }
   | { ok: false; error: string };
 
-export function collectGitChangedSourcePaths(paths: Pick<IndexPaths, 'scanPath'>): ChangedSourcePathsResult {
-  const revParse = spawnSync('git', ['rev-parse', '--show-toplevel'], {
-    cwd: paths.scanPath,
+type GitCommandResult = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+export function runGitCommand(cwd: string, args: string[]): GitCommandResult {
+  const result = spawnSync('git', args, {
+    cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+
+  return {
+    status: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
+}
+
+export function collectGitChangedSourcePaths(paths: Pick<IndexPaths, 'scanPath'>): ChangedSourcePathsResult {
+  const revParse = runGitCommand(paths.scanPath, ['rev-parse', '--show-toplevel']);
 
   if (revParse.status !== 0) {
     return { ok: false, error: '--changed requires a Git worktree; run /ralph-index from inside a Git worktree or omit --changed.' };
@@ -455,11 +471,7 @@ export function collectGitChangedSourcePaths(paths: Pick<IndexPaths, 'scanPath'>
     return { ok: false, error: '--changed requires a Git worktree; git rev-parse did not return a worktree root.' };
   }
 
-  const diff = spawnSync('git', ['diff', '--name-only'], {
-    cwd: worktreeRoot,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const diff = runGitCommand(worktreeRoot, ['diff', '--name-only']);
 
   if (diff.status !== 0) {
     const details = diff.stderr.trim() || diff.stdout.trim() || 'git diff --name-only failed';

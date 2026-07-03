@@ -348,7 +348,7 @@
   - _Requirements: FR-11, AC-5.3, AC-5.4_
   - _Design: Git changed filter; Security Considerations_
 
-- [ ] 1.24 [YELLOW] Refactor: isolate Git command execution
+- [x] 1.24 [YELLOW] Refactor: isolate Git command execution
   - **Do**:
     1. Wrap Git calls in a small helper using argument arrays.
     2. Keep Git error messages stable for verifier assertions.

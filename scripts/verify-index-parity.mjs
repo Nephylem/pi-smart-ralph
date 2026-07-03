@@ -558,9 +558,14 @@ async function verifyHashSkipForce() {
 async function verifyChangedGit() {
   const helper = await loadIndexingHelper();
   const runRalphIndex = helper?.runRalphIndex;
+  const runGitCommand = helper?.runGitCommand;
 
   if (typeof runRalphIndex !== 'function') {
     expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  if (typeof runGitCommand !== 'function') {
+    expectedFail('runGitCommand is not exported from extensions/ralph-specum/indexing.ts yet.');
   }
 
   const nonGitRoot = mkdtempSync(join(tmpdir(), 'ralph-index-changed-non-git-'));
@@ -604,17 +609,24 @@ async function verifyChangedGit() {
     writeFileSync(unchangedServicePath, 'export class BillingService { list() { return []; } }\n', 'utf8');
     writeFileSync(changedControllerPath, 'export class AccountsController { list() { return []; } }\n', 'utf8');
 
-    git(projectRoot, ['init']);
-    git(projectRoot, ['config', 'user.email', 'ralph-index@example.test']);
-    git(projectRoot, ['config', 'user.name', 'Ralph Index Verifier']);
-    git(projectRoot, ['add', 'src']);
-    git(projectRoot, ['commit', '-m', 'fixture baseline']);
+    runFixtureGitCommand(projectRoot, ['init']);
+    runFixtureGitCommand(projectRoot, ['config', 'user.email', 'ralph-index@example.test']);
+    runFixtureGitCommand(projectRoot, ['config', 'user.name', 'Ralph Index Verifier']);
+    runFixtureGitCommand(projectRoot, ['add', 'src']);
+    runFixtureGitCommand(projectRoot, ['commit', '-m', 'fixture baseline']);
 
     writeFileSync(changedServicePath, 'export class AccountsService { listChanged() { return []; } }\n', 'utf8');
     writeFileSync(changedControllerPath, 'export class AccountsController { listChanged() { return []; } }\n', 'utf8');
     writeFileSync(join(servicesRoot, 'untracked.service.ts'), 'export class UntrackedService {}\n', 'utf8');
 
-    assertArrayEqual(gitChangedPaths(projectRoot), ['src/controllers/accounts.controller.ts', 'src/services/accounts.service.ts'], 'git diff changed paths fixture');
+    assertArrayEqual(
+      fixtureGitChangedPaths(projectRoot),
+      ['src/controllers/accounts.controller.ts', 'src/services/accounts.service.ts'],
+      'git diff changed paths fixture',
+    );
+
+    const helperDiff = runGitCommand(scanRoot, ['diff', '--name-only']);
+    assertEqual(helperDiff.status, 0, 'indexing Git helper diff status');
 
     const result = await runRalphIndex({
       cwd: projectRoot,
@@ -690,15 +702,23 @@ async function verifyParserOptions() {
   assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
 }
 
-function git(cwd, args) {
+function runFixtureGitCommand(cwd, args) {
+  assertNonDestructiveFixtureGitArgs(args);
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-function gitChangedPaths(cwd) {
-  return git(cwd, ['diff', '--name-only'])
+function fixtureGitChangedPaths(cwd) {
+  return runFixtureGitCommand(cwd, ['diff', '--name-only'])
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function assertNonDestructiveFixtureGitArgs(args) {
+  const command = args[0];
+  if (['checkout', 'reset', 'clean', 'restore'].includes(command)) {
+    expectedFail(`changed-git verifier must not run destructive Git command: git ${args.join(' ')}`);
+  }
 }
 
 function findComponentWrite(writes, sourcePath) {
