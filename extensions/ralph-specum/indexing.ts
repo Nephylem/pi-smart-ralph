@@ -458,6 +458,7 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   let skipped = 0;
 
   for (const component of input.components) {
+    assertPlannedIndexWritePath(input.paths, component.artifactPath, `component artifact path for ${component.sourceDisplayPath}`);
     const priorHash =
       priorComponentHashes.get(component.sourceDisplayPath) ??
       priorComponentHashes.get(component.sourcePath) ??
@@ -483,6 +484,7 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   }
 
   for (const externalResource of externalResources) {
+    assertPlannedIndexWritePath(input.paths, externalResource.artifactPath, `external artifact path for ${externalResource.sourceId}`);
     const priorHash = priorExternalHashes.get(externalResource.sourceId);
     const action = selectIndexWriteAction({
       targetPath: externalResource.artifactPath,
@@ -503,6 +505,8 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
     });
   }
 
+  assertPlannedIndexWritePath(input.paths, input.paths.summaryPath, 'summary path');
+  assertPlannedIndexWritePath(input.paths, input.paths.stateWritePath, 'state path');
   const summaryAction = selectIndexWriteAction({ targetPath: input.paths.summaryPath, unchanged: false, force: input.options.force });
   const stateAction = selectIndexWriteAction({ targetPath: input.paths.stateWritePath, unchanged: false, force: input.options.force });
   const includeContractWriteCounts = !input.options.force && skipped === 0;
@@ -558,6 +562,10 @@ export function planIndexWrites(input: IndexPlanInput): IndexPlanResult {
   });
 
   return { writes, state };
+}
+
+function assertPlannedIndexWritePath(paths: Pick<IndexPaths, 'indexRoot'>, candidatePath: string, label: string): void {
+  assertIndexOutputPath(paths.indexRoot, candidatePath, label);
 }
 
 export function selectIndexWriteAction(input: SelectIndexWriteActionInput): IndexAction {

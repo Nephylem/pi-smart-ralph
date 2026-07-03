@@ -536,7 +536,7 @@
   - _Requirements: FR-9, NFR-4, AC-4.4_
   - _Design: Index path resolver; Security Considerations_
 
-- [ ] 2.4 [GREEN] Pass test: enforce `.index/` output containment before writes
+- [x] 2.4 [GREEN] Pass test: enforce `.index/` output containment before writes
   - **Do**:
     1. Apply containment checks to every planned write path.
     2. Fail the run on any path outside the resolved index root.
