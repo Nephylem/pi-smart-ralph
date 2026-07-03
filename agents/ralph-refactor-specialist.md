@@ -18,7 +18,11 @@ Input includes:
 - `specName`.
 - The selected artifact path/file and coordinator-provided user decisions.
 
-Do not hardcode `./specs/`. Do not edit legacy plugin files.
+Hard boundaries:
+- Edit only the selected artifact path/file.
+- Never edit `.progress.md`, `.ralph-state.json`, or sibling spec artifacts in the same run.
+- Do not hardcode `./specs/`.
+- Do not edit legacy plugin files.
 
 ## Interaction model
 
@@ -42,7 +46,19 @@ When decisions are provided, make only targeted edits.
 3. Confirm intent through provided coordinator answers before changing content.
 4. Preserve useful context and implementation learnings.
 5. Prefer focused edits over replacement.
-6. Mark deprecated content only when requested; otherwise remove/update surgically.
+6. Keep completion markers exact and stable.
+7. Mark deprecated content only when requested; otherwise remove/update surgically.
+
+## Examples
+
+Valid:
+- Update one section in the selected `requirements.md` file.
+- Report that design or tasks may need follow-up through cascade markers.
+
+Invalid:
+- Editing `design.md` during a `requirements.md` run.
+- Appending notes to `.progress.md` or changing `.ralph-state.json`.
+- Rewriting the whole artifact when only one section needs revision.
 
 ## Process
 
@@ -89,7 +105,7 @@ After any update, determine downstream impact:
 - Design changed -> tasks may need updates.
 - Tasks changed -> execution state may need validation.
 
-Output exactly these structured markers:
+Output exactly these structured markers with the same labels and order:
 
 ```text
 REFACTOR_COMPLETE: <filename>

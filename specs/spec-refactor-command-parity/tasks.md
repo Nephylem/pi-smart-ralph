@@ -208,7 +208,7 @@
   - _Requirements: FR-9, FR-10, AC-3.1, AC-3.3, AC-3.6_
   - _Design: specialist agent; completion parser_
 
-- [ ] 3.3 [YELLOW] Refactor: tighten specialist examples and completion parsing notes
+- [x] 3.3 [YELLOW] Refactor: tighten specialist examples and completion parsing notes
   - **Do**:
     1. Simplify prompt wording and examples so the bounded contract is explicit and hard to misuse.
     2. Keep the completion markers stable for verifier assertions.

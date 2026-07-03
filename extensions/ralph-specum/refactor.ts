@@ -7,6 +7,15 @@ export const REFACTOR_ALLOWED_FILES = Object.freeze(["requirements", "design", "
 export const REFACTOR_USAGE = "/ralph-refactor [spec] [--file=requirements|design|tasks]";
 export const REFACTOR_COMMAND_DESCRIPTION = "Update an existing spec artifact; supports [spec] [--file=requirements|design|tasks]";
 
+// Keep these literal marker names stable. The verifier and future coordinator-side
+// completion parsing rely on exact labels rather than free-form summaries.
+export const REFACTOR_COMPLETION_MARKERS = Object.freeze([
+	"REFACTOR_COMPLETE",
+	"CASCADE_NEEDED",
+	"CASCADE_REASON",
+	"EVIDENCE",
+]);
+
 export type RefactorArtifact = (typeof REFACTOR_ALLOWED_FILES)[number];
 
 export type ResolveRefactorSpecPlanOptions = RalphPathOptions & {
