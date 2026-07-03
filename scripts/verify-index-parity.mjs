@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,7 @@ const cases = new Map([
   ['dry-run', verifyDryRun],
   ['render-contract', verifyRenderContract],
   ['hash-skip-force', verifyHashSkipForce],
+  ['changed-git', verifyChangedGit],
 ]);
 
 async function main() {
@@ -553,6 +555,89 @@ async function verifyHashSkipForce() {
   }
 }
 
+async function verifyChangedGit() {
+  const helper = await loadIndexingHelper();
+  const runRalphIndex = helper?.runRalphIndex;
+
+  if (typeof runRalphIndex !== 'function') {
+    expectedFail('runRalphIndex is not exported from extensions/ralph-specum/indexing.ts yet.');
+  }
+
+  const nonGitRoot = mkdtempSync(join(tmpdir(), 'ralph-index-changed-non-git-'));
+  try {
+    const projectRoot = join(nonGitRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const specRoot = join(nonGitRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+    writeFileSync(join(servicesRoot, 'accounts.service.ts'), 'export class AccountsService {}\n', 'utf8');
+
+    const nonGitResult = await runRalphIndex({
+      cwd: projectRoot,
+      specRoot,
+      args: ['--path', scanRoot, '--type', 'services', '--changed', '--quick'],
+    });
+    const nonGitMessage = String(nonGitResult?.error ?? nonGitResult?.message ?? '');
+    if (nonGitResult?.ok !== false || !/git/i.test(nonGitMessage) || !/worktree|work tree/i.test(nonGitMessage)) {
+      expectedFail(`--changed outside Git must fail with a Git worktree message; got ${JSON.stringify(nonGitResult)}`);
+    }
+  } finally {
+    rmSync(nonGitRoot, { recursive: true, force: true });
+  }
+
+  const gitRoot = mkdtempSync(join(tmpdir(), 'ralph-index-changed-git-'));
+  try {
+    const projectRoot = join(gitRoot, 'project');
+    const scanRoot = join(projectRoot, 'src');
+    const servicesRoot = join(scanRoot, 'services');
+    const controllersRoot = join(scanRoot, 'controllers');
+    const specRoot = join(gitRoot, 'spec-root');
+    mkdirSync(servicesRoot, { recursive: true });
+    mkdirSync(controllersRoot, { recursive: true });
+    mkdirSync(specRoot, { recursive: true });
+
+    const changedServicePath = join(servicesRoot, 'accounts.service.ts');
+    const unchangedServicePath = join(servicesRoot, 'billing.service.ts');
+    const changedControllerPath = join(controllersRoot, 'accounts.controller.ts');
+    writeFileSync(changedServicePath, 'export class AccountsService { list() { return []; } }\n', 'utf8');
+    writeFileSync(unchangedServicePath, 'export class BillingService { list() { return []; } }\n', 'utf8');
+    writeFileSync(changedControllerPath, 'export class AccountsController { list() { return []; } }\n', 'utf8');
+
+    git(projectRoot, ['init']);
+    git(projectRoot, ['config', 'user.email', 'ralph-index@example.test']);
+    git(projectRoot, ['config', 'user.name', 'Ralph Index Verifier']);
+    git(projectRoot, ['add', 'src']);
+    git(projectRoot, ['commit', '-m', 'fixture baseline']);
+
+    writeFileSync(changedServicePath, 'export class AccountsService { listChanged() { return []; } }\n', 'utf8');
+    writeFileSync(changedControllerPath, 'export class AccountsController { listChanged() { return []; } }\n', 'utf8');
+    writeFileSync(join(servicesRoot, 'untracked.service.ts'), 'export class UntrackedService {}\n', 'utf8');
+
+    assertArrayEqual(gitChangedPaths(projectRoot), ['src/controllers/accounts.controller.ts', 'src/services/accounts.service.ts'], 'git diff changed paths fixture');
+
+    const result = await runRalphIndex({
+      cwd: projectRoot,
+      specRoot,
+      args: ['--path', scanRoot, '--type', 'services', '--changed', '--quick'],
+    });
+    if (result?.ok !== true) {
+      expectedFail(`--changed inside Git must succeed after filtering changed files; got ${JSON.stringify(result)}`);
+    }
+
+    const componentWrites = result.writes.filter((write) => write?.kind === 'component');
+    assertArrayEqual(
+      componentWrites.map((write) => write.sourcePath),
+      [resolve(changedServicePath)],
+      '--changed component writes filtered to git diff service paths only',
+    );
+    assertEqual(result.state?.componentCount, 1, '--changed state component count');
+    assertEqual(result.state?.components?.[0]?.source, 'src/services/accounts.service.ts', '--changed state component source');
+  } finally {
+    rmSync(gitRoot, { recursive: true, force: true });
+  }
+}
+
 async function verifyParserOptions() {
   const parseIndexArgs = await loadParseIndexArgs();
 
@@ -603,6 +688,17 @@ async function verifyParserOptions() {
   assertMissingValueMessage(parseIndexArgs(['--path']), '--path');
   assertMissingValueMessage(parseIndexArgs(['--type=']), '--type');
   assertMissingValueMessage(parseIndexArgs(['--exclude', '--quick']), '--exclude');
+}
+
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function gitChangedPaths(cwd) {
+  return git(cwd, ['diff', '--name-only'])
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 function findComponentWrite(writes, sourcePath) {

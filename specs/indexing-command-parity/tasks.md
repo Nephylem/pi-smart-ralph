@@ -314,7 +314,7 @@
   - _Requirements: FR-10, NFR-1, AC-5.1, AC-5.2_
   - _Design: Index planner_
 
-- [ ] Q7 [VERIFY] Quality check: hash package verification
+- [x] Q7 [VERIFY] Quality check: hash package verification
   - **Do**:
     1. Run discovered package verification commands after hash-skip changes.
   - **Files**: None
@@ -324,7 +324,7 @@
   - _Requirements: FR-14, AC-7.3_
   - _Design: Test Strategy_
 
-- [ ] 1.22 [RED] Failing test: `--changed` requires Git and filters changed files
+- [x] 1.22 [RED] Failing test: `--changed` requires Git and filters changed files
   - **Do**:
     1. Add a `changed-git` verifier case using a temp non-Git directory and temp Git repo.
     2. Assert non-Git `--changed` errors with a Git worktree message.
