@@ -38,7 +38,7 @@
   - _Requirements: FR-11, NFR-3_
   - _Design: `scripts/verify-task-blockers-parity.mjs`; `package.json`_
 
-- [ ] 1.2 [GREEN] Pass test: export minimal task-completion helper surface
+- [x] 1.2 [GREEN] Pass test: export minimal task-completion helper surface
   - **Do**:
     1. Create `extensions/ralph-specum/task-completion.ts` with the exported helper surface expected by the verifier.
     2. Add the smallest topology-report skeleton needed for the initial contract case to pass.

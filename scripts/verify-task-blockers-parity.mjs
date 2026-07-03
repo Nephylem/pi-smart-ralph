@@ -94,6 +94,14 @@ async function verifyTopologyHelperContract() {
   if (!/export\s+(async\s+)?function\s+(analyzeTaskWorkspace|classifyTaskWorkspace)/.test(helperSource)) {
     expectedFail('task-completion helper must export analyzeTaskWorkspace or classifyTaskWorkspace for parity coverage.');
   }
+
+  if (!/export\s+type\s+TaskTopology\s*=\s*'single_repo'\s*\|\s*'multi_repo'\s*\|\s*'repo_plus_nonrepo'\s*\|\s*'no_repo'/.test(helperSource)) {
+    expectedFail('task-completion helper must declare the TaskTopology contract for parity coverage.');
+  }
+
+  if (!/return\s*{\s*topology,\s*entries\s*,?\s*}/s.test(helperSource)) {
+    expectedFail('task-completion helper must return a minimal workspace report containing topology and entries.');
+  }
 }
 
 function expectedFail(message) {
