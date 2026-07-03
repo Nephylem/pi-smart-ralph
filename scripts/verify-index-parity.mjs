@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
+let activeCase = requestedCase;
 
 const cases = new Map([
   ['parser-unknown', verifyParserUnknown],
@@ -25,10 +26,21 @@ const cases = new Map([
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
-    for (const verifyCase of cases.values()) {
-      await verifyCase();
+    const summaries = [];
+
+    for (const [caseName, verifyCase] of cases.entries()) {
+      const result = await runVerifierCase(caseName, verifyCase);
+      summaries.push(result);
+      if (!result.ok) {
+        printCaseFailure(result);
+        console.error(`FAIL index parity verifier: ${countPassed(summaries)}/${cases.size} cases passed; failed: ${caseName}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`PASS ${caseName}`);
     }
-    console.log('PASS index parity verifier');
+
+    console.log(`PASS index parity verifier: ${summaries.length}/${cases.size} cases passed`);
     return;
   }
 
@@ -40,8 +52,40 @@ async function main() {
     return;
   }
 
-  await verifyCase();
+  const result = await runVerifierCase(requestedCase, verifyCase);
+  if (!result.ok) {
+    printCaseFailure(result);
+    process.exitCode = 1;
+    return;
+  }
   console.log(`PASS ${requestedCase}`);
+}
+
+async function runVerifierCase(caseName, verifyCase) {
+  activeCase = caseName;
+  try {
+    await verifyCase();
+    return { name: caseName, ok: true };
+  } catch (error) {
+    return { name: caseName, ok: false, error };
+  }
+}
+
+function printCaseFailure(result) {
+  if (result.error?.expectedFail === true) {
+    console.error(`EXPECTED_FAIL ${result.name}: ${result.error.message}`);
+    return;
+  }
+
+  console.error(`FAIL ${result.name}: ${formatError(result.error)}`);
+}
+
+function countPassed(results) {
+  return results.filter((result) => result.ok).length;
+}
+
+function formatError(error) {
+  return String(error?.stack ?? error?.message ?? error);
 }
 
 function parseCaseArg(args) {
@@ -1145,8 +1189,10 @@ function isExpectedMissingHelperError(error) {
 }
 
 function expectedFail(message) {
-  console.error(`EXPECTED_FAIL ${requestedCase}: ${message}`);
-  process.exit(1);
+  const error = new Error(message);
+  error.expectedFail = true;
+  error.caseName = activeCase;
+  throw error;
 }
 
 main().catch((error) => {

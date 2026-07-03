@@ -486,7 +486,7 @@
   - _Requirements: FR-14, AC-7.1, AC-7.2_
   - _Design: Smoke verifier; File Structure_
 
-- [ ] 1.33 [YELLOW] Refactor: make verifier default run all index cases
+- [x] 1.33 [YELLOW] Refactor: make verifier default run all index cases
   - **Do**:
     1. Add default all-case execution for `scripts/verify-index-parity.mjs`.
     2. Keep `--case` support for focused TDD checks.
