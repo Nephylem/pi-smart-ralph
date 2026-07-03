@@ -390,8 +390,22 @@ export function formatRefactorArtifactProgressEntry(file: RefactorArtifact, evid
 	return `- Refactor updated ${file}.md.${details}`;
 }
 
+export function buildRefactorArtifactProgressUpdate(updatedFiles: RefactorArtifact[], updateEvidence: string[], timestamp: string): string {
+	return [
+		"",
+		`### Refactor update (${timestamp})`,
+		...updatedFiles.map((file, index) => formatRefactorArtifactProgressEntry(file, updateEvidence[index])),
+	].join("\n");
+}
+
 export function shouldResetRefactorTaskIndex(updatedFiles: RefactorArtifact[]): boolean {
 	return updatedFiles.includes("tasks");
+}
+
+export function buildRefactorCoordinatorStatePatch(updatedFiles: RefactorArtifact[]): { taskIndex?: number; validationError: null } {
+	return shouldResetRefactorTaskIndex(updatedFiles)
+		? { taskIndex: 0, validationError: null }
+		: { validationError: null };
 }
 
 export function formatRefactorCascadeOutcome(

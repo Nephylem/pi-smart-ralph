@@ -71,6 +71,8 @@ import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
 	buildRefactorCascadePrompt,
+	buildRefactorCoordinatorStatePatch,
+	buildRefactorArtifactProgressUpdate,
 	buildRefactorFilePromptPlan,
 	buildRefactorRequest,
 	buildRefactorSectionPromptPlan,
@@ -80,7 +82,6 @@ import {
 	auditRefactorSpecMutationScope,
 	formatRefactorCascadeOutcome,
 	formatRefactorCascadeProgressEntry,
-	formatRefactorArtifactProgressEntry,
 	formatRefactorCompletionValidationError,
 	formatRefactorExecutionError,
 	formatRefactorHeadlessDecisionError,
@@ -9198,23 +9199,14 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 			appendProgress(
 				plan.spec,
-				[
-					"",
-					`### Refactor update (${new Date().toISOString()})`,
-					...updatedFiles.map((file, index) => formatRefactorArtifactProgressEntry(file, updateEvidence[index])),
-				].join("\n"),
+				buildRefactorArtifactProgressUpdate(updatedFiles, updateEvidence, new Date().toISOString()),
 				{ cwd: ctx.cwd },
 			);
 
 			const shouldResetTaskIndex = shouldResetRefactorTaskIndex(updatedFiles);
+			const statePatch = buildRefactorCoordinatorStatePatch(updatedFiles);
 			let state = readRalphState(plan.spec, { cwd: ctx.cwd });
-			state = mergeRalphState(
-				plan.spec,
-				shouldResetTaskIndex
-					? { taskIndex: 0, validationError: null }
-					: { validationError: null },
-				{ cwd: ctx.cwd },
-			);
+			state = mergeRalphState(plan.spec, statePatch, { cwd: ctx.cwd });
 			if (shouldResetTaskIndex) {
 				try {
 					const mirror = mirrorTasksToNativeTaskCards(pi, ctx, plan.spec, { cwd: ctx.cwd });

@@ -392,7 +392,7 @@
   - _Requirements: FR-12, FR-13, FR-14, AC-4.1, AC-4.2, AC-4.3, AC-4.4_
   - _Design: `state.ts` integration; existing task-mirror helpers_
 
-- [ ] 5.3 [YELLOW] Refactor: isolate coordinator-owned write summaries and task reset logic
+- [x] 5.3 [YELLOW] Refactor: isolate coordinator-owned write summaries and task reset logic
   - **Do**:
     1. Extract summary-entry formatting and task-reset decisions into helpers.
     2. Keep the merge path deterministic for fixture assertions.
