@@ -470,7 +470,7 @@
   - _Requirements: FR-7, AC-3.3_
   - _Design: `extensions/ralph-specum/github.ts` GitHub sync helper_
 
-- [ ] 3.9 [YELLOW] Refactor: clarify issue-number precedence rules
+- [x] 3.9 [YELLOW] Refactor: clarify issue-number precedence rules
   - **Do**:
     1. Isolate state-first vs metadata-fallback lookup helpers.
     2. Preserve create/update behavior.

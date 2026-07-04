@@ -267,8 +267,7 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 	const { labels, missingLabels } = selectGithubLabels(requestedLabels, options.availableLabels);
 	const lookupCommands: string[][] = [];
 	const warnings: string[] = [];
-	const existingFromState = existingIssueFromState(draft.stateIssueNumber, options.repository);
-	const existing = existingFromState ?? findIssueByMetadata(metadataComment, runner, options, lookupCommands, warnings);
+	const existing = resolveExistingIssue(draft, metadataComment, runner, options, lookupCommands, warnings);
 	const operation = existing ? "update" : "create";
 	const writeCommand = existing
 		? githubIssueEditArgs(existing.number, draft.title, body, labels, options.repository)
@@ -392,7 +391,7 @@ function detectLabels(runner: GithubCommandRunner, options: GithubDetectionOptio
 	};
 }
 
-function findIssueByMetadata(
+function lookupExistingIssueByMetadata(
 	metadataComment: string,
 	runner: GithubCommandRunner,
 	options: GithubIssueSyncOptions,
@@ -525,8 +524,20 @@ function formatChildSpecIssueBody(state: EpicState, child: EpicChildSpec, metada
 	return lines.join("\n");
 }
 
-function existingIssueFromState(value: unknown, repository: GithubRepository | undefined): ExistingIssue | null {
-	const issueNumber = normalizeIssueNumber(value);
+function resolveExistingIssue(
+	draft: IssueDraft,
+	metadataComment: string,
+	runner: GithubCommandRunner,
+	options: GithubIssueSyncOptions,
+	lookupCommands: string[][],
+	warnings: string[],
+): ExistingIssue | null {
+	return lookupExistingIssueFromState(draft, options.repository)
+		?? lookupExistingIssueByMetadata(metadataComment, runner, options, lookupCommands, warnings);
+}
+
+function lookupExistingIssueFromState(draft: IssueDraft, repository: GithubRepository | undefined): ExistingIssue | null {
+	const issueNumber = normalizeIssueNumber(draft.stateIssueNumber);
 	return issueNumber ? { number: issueNumber, url: issueUrl(repository, issueNumber), source: "state" } : null;
 }
 
