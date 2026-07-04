@@ -267,7 +267,8 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 	const { labels, missingLabels } = selectGithubLabels(requestedLabels, options.availableLabels);
 	const lookupCommands: string[][] = [];
 	const warnings: string[] = [];
-	const existing = existingIssueFromState(draft.stateIssueNumber, options.repository) ?? findIssueByMetadata(metadataComment, runner, options, lookupCommands, warnings);
+	const existingFromState = existingIssueFromState(draft.stateIssueNumber, options.repository);
+	const existing = existingFromState ?? findIssueByMetadata(metadataComment, runner, options, lookupCommands, warnings);
 	const operation = existing ? "update" : "create";
 	const writeCommand = existing
 		? githubIssueEditArgs(existing.number, draft.title, body, labels, options.repository)

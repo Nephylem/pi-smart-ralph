@@ -459,7 +459,7 @@
   - _Requirements: FR-7, AC-3.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts` GitHub sync helper_
 
-- [ ] 3.8 [GREEN] Pass test: prefer metadata-comment lookup before duplicate creation
+- [x] 3.8 [GREEN] Pass test: prefer metadata-comment lookup before duplicate creation
   - **Do**:
     1. Preserve state `issueNumber` as first choice.
     2. Fall back to metadata-comment body lookup before any create path.
