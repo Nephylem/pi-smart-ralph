@@ -625,7 +625,7 @@
 
 ## Phase 5: Verifier lifecycle, package wiring, and final gates
 
-- [ ] 5.1 [RED] Failing test: verifier lifecycle and package wiring include triage parity checks
+- [x] 5.1 [RED] Failing test: verifier lifecycle and package wiring include triage parity checks
   - **Do**:
     1. Add `package-wiring`, `acceptance-checklist`, and `cleanup` verifier coverage for triage parity.
     2. Assert `package.json` wires triage acceptance into `verify:index` and triage cleanup into `verify:pack`.

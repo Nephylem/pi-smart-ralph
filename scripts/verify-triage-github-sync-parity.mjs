@@ -1,11 +1,32 @@
 #!/usr/bin/env node
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
+const acceptanceChecklistCaseKey = 'acceptance-checklist';
+const cleanupCaseKey = 'cleanup';
+const verifierLifecycleCaseNames = [acceptanceChecklistCaseKey, cleanupCaseKey];
+const acceptanceChecklistCases = [
+  'minimal-state-load',
+  'minimal-state-repair',
+  'minimal-state-validation-boundary',
+  'output-spec-files',
+  'output-github-issues',
+  'output-both',
+  'github-unconfirmed',
+  'github-confirmed-create',
+  'github-metadata-update',
+  'github-missing-labels',
+  'fresh-branch-safety',
+  'docs-parity-matrix',
+  'docs-state-authority',
+  'docs-contracts',
+  'package-wiring',
+];
+const acceptanceChecklistIsolationMode = 'isolated-subcases';
 const verifierTempPrefixes = ['triage-github-sync-parity-'];
 const temporaryFixtureRoots = [];
 
@@ -24,7 +45,10 @@ const cases = new Map([
   ['docs-parity-matrix', verifyDocsParityMatrix],
   ['docs-state-authority', verifyDocsStateAuthority],
   ['docs-contracts', verifyDocsContracts],
+  ['package-wiring', verifyPackageWiring],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
+const supportedCaseNames = [...cases.keys(), ...verifierLifecycleCaseNames.filter((name) => name !== acceptanceChecklistCaseKey)];
 
 process.on('exit', () => {
   cleanupTemporaryFixtures();
@@ -44,14 +68,34 @@ async function main() {
       }
       console.log(formatCasePass(caseName, result));
     }
+
+    const cleanupResult = await runVerifierCase(cleanupCaseKey, verifyCleanupCase);
+    if (!cleanupResult.ok) {
+      printCaseFailure(cleanupResult);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(formatCasePass(cleanupCaseKey, cleanupResult));
+
     console.log(`PASS triage github sync parity verifier: ${summaries.length}/${cases.size} cases passed`);
+    return;
+  }
+
+  if (requestedCase === cleanupCaseKey) {
+    const result = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!result.ok) {
+      printCaseFailure(result);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(formatCasePass(requestedCase, result));
     return;
   }
 
   const verifyCase = cases.get(requestedCase);
   if (!verifyCase) {
     console.error(`Unknown verify case: ${requestedCase}`);
-    console.error(`Supported cases: ${[...cases.keys()].join(', ')}`);
+    console.error(`Supported cases: ${supportedCaseNames.join(', ')}`);
     process.exitCode = 2;
     return;
   }
@@ -942,6 +986,142 @@ async function verifyDocsContracts() {
   return {
     summary: 'documents contract names, required fields, and downstream consumers',
   };
+}
+
+function requiredAcceptanceChecklistCases() {
+  return [
+    'minimal-state-load',
+    'minimal-state-repair',
+    'minimal-state-validation-boundary',
+    'output-spec-files',
+    'output-github-issues',
+    'output-both',
+    'github-unconfirmed',
+    'github-confirmed-create',
+    'github-metadata-update',
+    'github-missing-labels',
+    'fresh-branch-safety',
+    'docs-parity-matrix',
+    'docs-state-authority',
+    'docs-contracts',
+    'package-wiring',
+  ];
+}
+
+function listVerifierTempEntries() {
+  return readdirSync(tmpdir(), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((entryName) => verifierTempPrefixes.some((prefix) => entryName.startsWith(prefix)))
+    .sort();
+}
+
+function cleanupVerifierTempFixtures(entryNames = listVerifierTempEntries()) {
+  for (const entryName of entryNames) {
+    rmSync(join(tmpdir(), entryName), { recursive: true, force: true });
+  }
+}
+
+async function verifyAcceptanceChecklist() {
+  cleanupVerifierTempFixtures();
+
+  const requiredCases = requiredAcceptanceChecklistCases();
+  const missingCases = requiredCases.filter((caseName) => !acceptanceChecklistCases.includes(caseName));
+  const unexpectedCases = acceptanceChecklistCases.filter((caseName) => !requiredCases.includes(caseName));
+  if (missingCases.length > 0 || unexpectedCases.length > 0) {
+    expectedFail(`acceptance checklist bundle mismatch: missing ${missingCases.join(', ') || 'none'}; unexpected ${unexpectedCases.join(', ') || 'none'}`);
+  }
+
+  if (acceptanceChecklistIsolationMode !== 'isolated-subcases') {
+    expectedFail(`acceptance checklist must isolate bundled sub-cases before running them; current mode is ${acceptanceChecklistIsolationMode}`);
+  }
+
+  for (const caseName of acceptanceChecklistCases) {
+    const verifyCase = cases.get(caseName);
+    if (typeof verifyCase !== 'function') {
+      expectedFail(`acceptance checklist is missing verifier case: ${caseName}`);
+    }
+
+    const beforeEntries = new Set(listVerifierTempEntries());
+    const result = await runVerifierCase(caseName, verifyCase);
+    const newEntries = listVerifierTempEntries().filter((entryName) => !beforeEntries.has(entryName));
+    cleanupVerifierTempFixtures(newEntries);
+    const remainingEntries = listVerifierTempEntries().filter((entryName) => !beforeEntries.has(entryName));
+    if (remainingEntries.length > 0) {
+      expectedFail(`acceptance checklist cleanup must remove ${caseName} temp fixtures; found ${JSON.stringify(remainingEntries)}`);
+    }
+    if (!result.ok) {
+      result.error.message = `${caseName}: ${result.error.message}`;
+      throw result.error;
+    }
+  }
+
+  return { summary: `${acceptanceChecklistCases.length} bundled cases` };
+}
+
+async function verifyCleanupCase() {
+  cleanupVerifierTempFixtures();
+  try {
+    await verifyAcceptanceChecklist();
+  } finally {
+    cleanupVerifierTempFixtures();
+  }
+
+  const remainingEntries = listVerifierTempEntries();
+  if (remainingEntries.length > 0) {
+    expectedFail(`cleanup must remove verifier temp fixtures deterministically; found ${JSON.stringify(remainingEntries)}`);
+  }
+
+  return { summary: 'no temp fixtures remain' };
+}
+
+function scriptEventuallyRunsTriageCase(script, caseName) {
+  return script.includes(`scripts/verify-triage-github-sync-parity.mjs --case ${caseName}`)
+    || script.includes(`scripts/verify-triage-github-sync-parity.mjs --case=${caseName}`);
+}
+
+async function verifyPackageWiring() {
+  const packageJsonPath = join(root, 'package.json');
+  const verifierPath = join(root, 'scripts', 'verify-triage-github-sync-parity.mjs');
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  const verifierSource = readFileSync(verifierPath, 'utf8');
+  const failures = [];
+
+  const verifyIndex = packageJson?.scripts?.['verify:index'] ?? '';
+  const verifyPack = packageJson?.scripts?.['verify:pack'] ?? '';
+  const prepack = packageJson?.scripts?.prepack ?? '';
+
+  if (!scriptEventuallyRunsTriageCase(verifyIndex, acceptanceChecklistCaseKey)) {
+    failures.push('package.json scripts.verify:index must run triage acceptance-checklist coverage');
+  }
+
+  if (!scriptEventuallyRunsTriageCase(verifyPack, cleanupCaseKey)) {
+    failures.push('package.json scripts.verify:pack must run triage cleanup coverage');
+  }
+
+  if (!prepack.includes('npm run verify:index') || !prepack.includes('npm run verify:pack')) {
+    failures.push('package.json scripts.prepack must continue routing package verification through npm run verify:index and npm run verify:pack');
+  }
+
+  const missingCaseNames = [];
+  if (!verifierSource.includes("const acceptanceChecklistCaseKey = 'acceptance-checklist';")) {
+    missingCaseNames.push(acceptanceChecklistCaseKey);
+  }
+  if (!verifierSource.includes("const cleanupCaseKey = 'cleanup';")) {
+    missingCaseNames.push(cleanupCaseKey);
+  }
+  if (!verifierSource.includes("['package-wiring', verifyPackageWiring]")) {
+    missingCaseNames.push('package-wiring');
+  }
+  if (missingCaseNames.length > 0) {
+    failures.push(`verify-triage-github-sync-parity.mjs must define cases for ${missingCaseNames.join(', ')}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`package wiring verification failed for ${packageJsonPath}: ${failures.join('; ')}`);
+  }
+
+  return { summary: 'package verification chains include triage lifecycle cases' };
 }
 
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
