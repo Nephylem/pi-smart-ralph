@@ -9355,13 +9355,16 @@ function githubIssueMetadata(result: GithubIssueSyncResult | undefined, reposito
 	};
 }
 
-function childGithubMetadata(state: EpicState): Record<string, unknown> {
+function childGithubMetadata(state: EpicState, summaryChildren: TriageGithubChildSync[], repository: GithubRepository | undefined): Record<string, unknown> {
+	const resultBySpecName = new Map(summaryChildren.map((child) => [child.specName, child.result] as const));
 	const childIssues: Record<string, unknown> = {};
 	for (const spec of state.specs) {
+		const result = resultBySpecName.get(spec.name);
 		childIssues[spec.name] = {
 			issueNumber: issueNumberOrNull(spec.issueNumber),
 			issueUrl: typeof spec.issueUrl === "string" ? spec.issueUrl : null,
 			githubStatus: typeof spec.githubStatus === "string" ? spec.githubStatus : null,
+			result: githubIssueMetadata(result, repository),
 		};
 	}
 	return childIssues;
@@ -9409,7 +9412,7 @@ function withGithubMetadata(
 				githubStatus: epicGithubStatus,
 				result: githubIssueMetadata(summary.epic, repository),
 			},
-			childIssues: childGithubMetadata(state),
+			childIssues: childGithubMetadata(state, summary.children, repository),
 			summary: {
 				created: summary.created,
 				updated: summary.updated,

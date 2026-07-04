@@ -502,7 +502,7 @@
   - _Requirements: FR-8, FR-9; AC-3.4_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts`; `extensions/ralph-specum/index.ts`_
 
-- [ ] 3.11 [GREEN] Pass test: record missing-label warnings without auto-creating labels
+- [x] 3.11 [GREEN] Pass test: record missing-label warnings without auto-creating labels
   - **Do**:
     1. Keep missing labels out of write args.
     2. Persist aggregate and per-result missing-label metadata in epic state.

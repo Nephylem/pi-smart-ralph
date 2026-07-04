@@ -267,6 +267,9 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 	const { labels, missingLabels } = selectGithubLabels(requestedLabels, options.availableLabels);
 	const lookupCommands: string[][] = [];
 	const warnings: string[] = [];
+	if (missingLabels.length > 0) {
+		warnings.push(`Missing label(s) for GitHub ${draft.kind} '${draft.title}': ${missingLabels.join(", ")}.`);
+	}
 	const existing = resolveExistingIssue(draft, metadataComment, runner, options, lookupCommands, warnings);
 	const operation = existing ? "update" : "create";
 	const writeCommand = existing
