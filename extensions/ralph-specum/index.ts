@@ -9381,8 +9381,14 @@ function withGithubMetadata(
 		...(summary.epic?.missingLabels ?? []),
 		...summary.children.flatMap((child) => child.result?.missingLabels ?? []),
 	]);
+	const epicIssueNumber = summary.epic?.issueNumber ?? issueNumberOrNull(state.issueNumber);
+	const epicIssueUrl = summary.epic ? githubIssueUrl(summary.epic, repository) : typeof state.issueUrl === "string" ? state.issueUrl : null;
+	const epicGithubStatus = summary.epic?.action ?? (typeof state.githubStatus === "string" ? state.githubStatus : null);
 	return {
 		...state,
+		issueNumber: epicIssueNumber,
+		issueUrl: epicIssueUrl,
+		githubStatus: epicGithubStatus,
 		updatedAt: now,
 		github: {
 			schemaVersion: RALPH_GITHUB_METADATA_SCHEMA_VERSION,
@@ -9400,9 +9406,9 @@ function withGithubMetadata(
 			syncedAt: now,
 			confirmedBy,
 			epicIssue: {
-				issueNumber: issueNumberOrNull(state.issueNumber),
-				issueUrl: typeof state.issueUrl === "string" ? state.issueUrl : null,
-				githubStatus: typeof state.githubStatus === "string" ? state.githubStatus : null,
+				issueNumber: epicIssueNumber,
+				issueUrl: epicIssueUrl,
+				githubStatus: epicGithubStatus,
 				result: githubIssueMetadata(summary.epic, repository),
 			},
 			childIssues: childGithubMetadata(state),

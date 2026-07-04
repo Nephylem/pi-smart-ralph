@@ -394,7 +394,7 @@
   - _Requirements: FR-6, FR-7, FR-8; AC-3.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts`; `extensions/ralph-specum/index.ts`_
 
-- [ ] 3.5 [GREEN] Pass test: persist epic GitHub refs from confirmed create
+- [x] 3.5 [GREEN] Pass test: persist epic GitHub refs from confirmed create
   - **Do**:
     1. Persist top-level epic GitHub fields plus nested sync summary/result metadata after confirmed create.
     2. Keep the HTML metadata comment in the issue body for idempotent lookup.

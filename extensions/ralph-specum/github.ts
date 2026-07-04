@@ -319,17 +319,14 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 
 	const result = runner(writeCommand, options);
 	assertGhSuccess(result, writeCommand);
-	const issueNumber = parseGithubIssueNumber(`${result.stdout}\n${result.stderr}`);
-	if (!issueNumber) {
-		throw new Error(`Unable to parse GitHub issue number from gh issue create output: ${trimForMessage(`${result.stdout}\n${result.stderr}`)}`);
-	}
+	const createdIssue = parseGithubIssueCreateResult(result, options.repository);
 
 	return {
 		dryRun,
 		action: "created",
 		operation,
-		issueNumber,
-		issueUrl: issueUrl(options.repository, issueNumber),
+		issueNumber: createdIssue.issueNumber,
+		issueUrl: createdIssue.issueUrl,
 		issueNumberSource: "created",
 		title: draft.title,
 		body,
@@ -339,7 +336,7 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 		missingLabels,
 		lookupCommands,
 		writeCommand,
-		stateIssueNumberPatch: draft.statePatchForIssueNumber(issueNumber),
+		stateIssueNumberPatch: draft.statePatchForIssueNumber(createdIssue.issueNumber),
 		warnings,
 	};
 }
