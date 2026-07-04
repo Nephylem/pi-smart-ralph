@@ -249,6 +249,16 @@
   - _Requirements: FR-3, FR-5; AC-2.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/index.ts` triage coordinator_
 
+- [x] 2.7.1 Regression test: `both` output cross-links child plans and issue metadata
+  - **Do**:
+    1. Add an `output-both` verifier case to `scripts/verify-triage-github-sync-parity.mjs`.
+    2. Seed a triage fixture whose output is `both` and a fake `gh` binary that records `issue create/edit` calls and returns deterministic issue URLs.
+    3. Assert the real `ralph-triage --output both --yes` path writes child `plan.md` stubs with `GitHub Issue:` lines only after confirmed sync metadata exists, and persists epic/child `issueNumber`/`issueUrl`/`githubStatus` metadata.
+  - **Files**: `scripts/verify-triage-github-sync-parity.mjs`
+  - **Done when**: `output-both` exists and passes with evidence of 3 mocked GitHub writes plus child plans containing real GitHub references.
+  - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case output-both`
+  - **Commit**: `test(triage): cover both output cross-links`
+
 - [ ] 2.8 [GREEN] Pass test: sync GitHub before materializing `both` output
   - **Do**:
     1. Preserve GitHub-before-materialization ordering for `both`.

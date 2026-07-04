@@ -15,6 +15,7 @@ const cases = new Map([
   ['minimal-state-validation-boundary', verifyMinimalStateValidationBoundary],
   ['output-spec-files', verifyOutputSpecFiles],
   ['output-github-issues', verifyOutputGithubIssues],
+  ['output-both', verifyOutputBoth],
 ]);
 
 process.on('exit', () => {
@@ -338,41 +339,14 @@ async function verifyOutputSpecFiles() {
 async function verifyOutputGithubIssues() {
   const fixtureRoot = createFixtureRoot('output-github-issues');
   const epicName = 'demo-epic';
-  const ghWriteLogPath = seedGithubIssuesTriageFixture(fixtureRoot, epicName);
+  const { ghWriteLogPath } = seedGithubBackedTriageFixture(fixtureRoot, epicName, 'github-issues');
   const notes = [];
   const originalPath = process.env.PATH;
   process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
 
   try {
-    const extensionModule = await loadRalphSpecumExtension();
-    const commands = new Map();
-    const pi = {
-      registerCommand(name, config) {
-        commands.set(name, config);
-      },
-      on() {},
-    };
-    extensionModule.default(pi);
-
-    const triage = commands.get('ralph-triage');
-    if (!triage?.handler) {
-      expectedFail('ralph-specum extension did not register a runnable ralph-triage command handler');
-    }
-
-    const ctx = {
-      cwd: fixtureRoot,
-      hasUI: true,
-      waitForIdle: async () => {},
-      ui: {
-        notify(message, type) {
-          notes.push({ message, type });
-        },
-        confirm: async () => true,
-        setStatus() {},
-        setFooter() {},
-        setWidget() {},
-      },
-    };
+    const triage = await loadRegisteredTriageCommand();
+    const ctx = createTriageCtx(fixtureRoot, notes);
 
     await triage.handler(`--output github-issues --yes ${epicName}`, ctx);
     await sleep(100);
@@ -432,6 +406,85 @@ async function verifyOutputGithubIssues() {
   }
 }
 
+async function verifyOutputBoth() {
+  const fixtureRoot = createFixtureRoot('output-both');
+  const epicName = 'demo-epic';
+  const { ghWriteLogPath } = seedGithubBackedTriageFixture(fixtureRoot, epicName, 'both');
+  const notes = [];
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
+
+  try {
+    const triage = await loadRegisteredTriageCommand();
+    const ctx = createTriageCtx(fixtureRoot, notes);
+
+    await triage.handler(`--output both --yes ${epicName}`, ctx);
+
+    const childNames = ['alpha-child', 'beta-child'];
+    await waitFor(
+      () => childNames.every((name) => existsSync(join(fixtureRoot, 'specs', name, 'plan.md'))),
+      5000,
+      'timed out waiting for triage to materialize child spec plans for output both',
+    );
+    await sleep(100);
+
+    const failures = [];
+    const epicState = JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8'));
+    const ghWriteCallCount = readWriteCallCount(ghWriteLogPath);
+
+    if (epicState.output !== 'both') {
+      failures.push(`expected triage to persist output both but got ${JSON.stringify(epicState.output)}`);
+    }
+
+    if (ghWriteCallCount !== 3) {
+      failures.push(`expected both triage to perform 3 gh issue create/edit calls but got ${ghWriteCallCount}`);
+    }
+
+    if (typeof epicState.issueNumber !== 'number' || typeof epicState.issueUrl !== 'string' || !epicState.githubStatus) {
+      failures.push(`expected epic GitHub issue metadata to persist but got issueNumber=${JSON.stringify(epicState.issueNumber)} issueUrl=${JSON.stringify(epicState.issueUrl)} githubStatus=${JSON.stringify(epicState.githubStatus)}`);
+    }
+
+    const syncedTotal = epicState.github?.summary?.total;
+    if (syncedTotal !== 3) {
+      failures.push(`expected github summary total to be 3 (epic + 2 child issues) but got ${JSON.stringify(syncedTotal)}`);
+    }
+
+    for (const [index, name] of childNames.entries()) {
+      const childDir = join(fixtureRoot, 'specs', name);
+      const planPath = join(childDir, 'plan.md');
+      const progressPath = join(childDir, '.progress.md');
+      const statePath = join(childDir, '.ralph-state.json');
+      const childSpec = epicState.specs?.[index];
+      const plan = existsSync(planPath) ? readFileSync(planPath, 'utf8') : '';
+      const expectedIssueLine = `GitHub Issue: ${childSpec?.issueUrl}`;
+
+      if (!existsSync(planPath)) failures.push(`expected plan.md for ${name}`);
+      if (!existsSync(progressPath)) failures.push(`expected .progress.md for ${name}`);
+      if (!existsSync(statePath)) failures.push(`expected .ralph-state.json for ${name}`);
+      if (typeof childSpec?.issueNumber !== 'number' || typeof childSpec?.issueUrl !== 'string' || !childSpec?.githubStatus) {
+        failures.push(`expected child GitHub metadata for ${name} but got ${JSON.stringify(childSpec)}`);
+      }
+      if (!plan.includes(expectedIssueLine)) {
+        failures.push(`expected ${name} plan to include ${JSON.stringify(expectedIssueLine)} but it did not`);
+      }
+    }
+
+    if (notes.some(({ message }) => /skip.*GitHub/i.test(String(message)))) {
+      failures.push('both triage unexpectedly reported skipped GitHub sync');
+    }
+
+    if (failures.length > 0) {
+      expectedFail(`both triage parity failed: ${failures.join('; ')}`);
+    }
+
+    return {
+      summary: `synced ${ghWriteCallCount} GitHub issues and cross-linked ${childNames.length} child plans with persisted issue metadata`,
+    };
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
   const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
   mkdirSync(epicDir, { recursive: true });
@@ -484,6 +537,10 @@ exit 0
 }
 
 function seedGithubIssuesTriageFixture(fixtureRoot, epicName) {
+  return seedGithubBackedTriageFixture(fixtureRoot, epicName, 'github-issues').ghWriteLogPath;
+}
+
+function seedGithubBackedTriageFixture(fixtureRoot, epicName, output) {
   const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
   mkdirSync(epicDir, { recursive: true });
   writeFileSync(join(epicDir, 'epic.md'), [
@@ -502,8 +559,8 @@ function seedGithubIssuesTriageFixture(fixtureRoot, epicName) {
   ].join('\n'));
   writeFileSync(join(epicDir, '.epic-state.json'), `${JSON.stringify({
     name: epicName,
-    goal: 'Sync GitHub issues without child spec directories',
-    output: 'github-issues',
+    goal: output === 'both' ? 'Sync GitHub issues and materialize child specs' : 'Sync GitHub issues without child spec directories',
+    output,
     specs: [
       {
         name: 'alpha-child',
@@ -526,7 +583,6 @@ function seedGithubIssuesTriageFixture(fixtureRoot, epicName) {
   const ghCounterPath = join(fixtureRoot, 'gh-issue-counter.txt');
   writeFileSync(join(binDir, 'gh'), `#!/usr/bin/env bash
 set -euo pipefail
-cmd="$*"
 if [[ "\${1:-}" == "--version" ]]; then
   echo 'gh version 2.52.0'
   exit 0
@@ -566,7 +622,42 @@ fi
 exit 0
 `);
   chmodSync(join(binDir, 'gh'), 0o755);
-  return ghWriteLogPath;
+  return { ghWriteLogPath };
+}
+
+async function loadRegisteredTriageCommand() {
+  const extensionModule = await loadRalphSpecumExtension();
+  const commands = new Map();
+  const pi = {
+    registerCommand(name, config) {
+      commands.set(name, config);
+    },
+    on() {},
+  };
+  extensionModule.default(pi);
+
+  const triage = commands.get('ralph-triage');
+  if (!triage?.handler) {
+    expectedFail('ralph-specum extension did not register a runnable ralph-triage command handler');
+  }
+  return triage;
+}
+
+function createTriageCtx(cwd, notes) {
+  return {
+    cwd,
+    hasUI: true,
+    waitForIdle: async () => {},
+    ui: {
+      notify(message, type) {
+        notes.push({ message, type });
+      },
+      confirm: async () => true,
+      setStatus() {},
+      setFooter() {},
+      setWidget() {},
+    },
+  };
 }
 
 function readWriteCallCount(logPath) {
