@@ -32,6 +32,8 @@ import {
 	type RalphState,
 } from "./state.ts";
 import {
+	aggregateGithubMissingLabels,
+	aggregateGithubWarnings,
 	createOrUpdateChildSpecIssue,
 	createOrUpdateEpicIssue,
 	detectGithub,
@@ -9378,10 +9380,10 @@ function withGithubMetadata(
 	now: string,
 	confirmedBy: string,
 ): EpicState {
-	const missingLabels = unique([
-		...(summary.epic?.missingLabels ?? []),
-		...summary.children.flatMap((child) => child.result?.missingLabels ?? []),
-	]);
+	const missingLabels = aggregateGithubMissingLabels(
+		summary.epic?.missingLabels,
+		...summary.children.map((child) => child.result?.missingLabels),
+	);
 	const epicIssueNumber = summary.epic?.issueNumber ?? issueNumberOrNull(state.issueNumber);
 	const epicIssueUrl = summary.epic ? githubIssueUrl(summary.epic, repository) : typeof state.issueUrl === "string" ? state.issueUrl : null;
 	const epicGithubStatus = summary.epic?.action ?? (typeof state.githubStatus === "string" ? state.githubStatus : null);
@@ -9420,7 +9422,7 @@ function withGithubMetadata(
 				missingLabels,
 				skippedReason: summary.skippedReason ?? null,
 			},
-			warnings: summary.warnings,
+			warnings: aggregateGithubWarnings(summary.warnings, summary.skippedReason ? [summary.skippedReason] : undefined),
 		},
 	};
 }
@@ -9485,7 +9487,7 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 			githubStatus: "unavailable",
 			confirmedBy: "not-confirmed",
 			skippedReason,
-			warnings: detectionWarnings.length > 0 ? detectionWarnings : [skippedReason],
+			warnings: aggregateGithubWarnings(detectionWarnings, [skippedReason]),
 			children: [],
 		});
 	}
@@ -9507,7 +9509,7 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 			githubStatus: confirmation.githubStatus,
 			confirmedBy: confirmation.confirmedBy,
 			skippedReason: confirmation.reason,
-			warnings: unique([...detectionWarnings, confirmation.reason]),
+			warnings: aggregateGithubWarnings(detectionWarnings, [confirmation.reason]),
 			children: skippedChildGithubSyncs(state, dryRuns, repository),
 		});
 	}
@@ -9528,7 +9530,7 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 			children: [],
 			created: 0,
 			updated: 0,
-			warnings: unique(warnings),
+			warnings: aggregateGithubWarnings(warnings),
 		};
 		return { state: withGithubMetadata({ ...nextState, githubStatus: "failed" }, repository, summary, detection, now, confirmation.confirmedBy), summary };
 	}
@@ -9562,7 +9564,7 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 		children,
 		created: issueResults.filter((result) => result.action === "created").length,
 		updated: issueResults.filter((result) => result.action === "updated").length,
-		warnings: unique(warnings),
+		warnings: aggregateGithubWarnings(warnings),
 	};
 	return { state: withGithubMetadata(nextState, repository, summary, detection, now, confirmation.confirmedBy), summary };
 }

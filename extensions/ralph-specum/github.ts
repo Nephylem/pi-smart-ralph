@@ -246,6 +246,14 @@ export function createOrUpdateChildSpecIssue(
 export const syncEpicIssue = createOrUpdateEpicIssue;
 export const syncChildSpecIssue = createOrUpdateChildSpecIssue;
 
+export function aggregateGithubWarnings(...groups: Array<readonly string[] | undefined>): string[] {
+	return uniqueStrings(groups.flatMap((group) => group ?? []).filter((value): value is string => typeof value === "string" && value.trim()));
+}
+
+export function aggregateGithubMissingLabels(...groups: Array<readonly string[] | undefined>): string[] {
+	return uniqueStrings(groups.flatMap((group) => group ?? []).filter((value): value is string => typeof value === "string" && value.trim()));
+}
+
 export function selectGithubLabels(requestedLabels: readonly string[], availableLabels?: readonly string[]): { labels: string[]; missingLabels: string[] } {
 	const requested = uniqueStrings(requestedLabels);
 	if (!availableLabels) {
@@ -255,7 +263,7 @@ export function selectGithubLabels(requestedLabels: readonly string[], available
 	const available = new Set(availableLabels.map((label) => label.toLowerCase()));
 	const labels = requested.filter((label) => available.has(label.toLowerCase()));
 	const missingLabels = requested.filter((label) => !available.has(label.toLowerCase()));
-	return { labels, missingLabels };
+	return { labels, missingLabels: aggregateGithubMissingLabels(missingLabels) };
 }
 
 function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): GithubIssueSyncResult {
@@ -266,10 +274,9 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 	const requestedLabels = options.labels ?? draft.defaultLabels;
 	const { labels, missingLabels } = selectGithubLabels(requestedLabels, options.availableLabels);
 	const lookupCommands: string[][] = [];
-	const warnings: string[] = [];
-	if (missingLabels.length > 0) {
-		warnings.push(`Missing label(s) for GitHub ${draft.kind} '${draft.title}': ${missingLabels.join(", ")}.`);
-	}
+	const warnings = missingLabels.length > 0
+		? aggregateGithubWarnings([`Missing label(s) for GitHub ${draft.kind} '${draft.title}': ${missingLabels.join(", ")}.`])
+		: [];
 	const existing = resolveExistingIssue(draft, metadataComment, runner, options, lookupCommands, warnings);
 	const operation = existing ? "update" : "create";
 	const writeCommand = existing
@@ -293,7 +300,7 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 			lookupCommands,
 			writeCommand,
 			stateIssueNumberPatch: existing ? draft.statePatchForIssueNumber(existing.number) : undefined,
-			warnings,
+			warnings: aggregateGithubWarnings(warnings),
 		};
 	}
 
@@ -316,7 +323,7 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 			lookupCommands,
 			writeCommand,
 			stateIssueNumberPatch: draft.statePatchForIssueNumber(existing.number),
-			warnings,
+			warnings: aggregateGithubWarnings(warnings),
 		};
 	}
 
@@ -340,7 +347,7 @@ function syncGithubIssue(draft: IssueDraft, options: GithubIssueSyncOptions): Gi
 		lookupCommands,
 		writeCommand,
 		stateIssueNumberPatch: draft.statePatchForIssueNumber(createdIssue.issueNumber),
-		warnings,
+		warnings: aggregateGithubWarnings(warnings),
 	};
 }
 

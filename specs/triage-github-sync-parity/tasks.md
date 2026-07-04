@@ -513,7 +513,7 @@
   - _Requirements: FR-8, FR-9; AC-3.4_
   - _Design: `extensions/ralph-specum/github.ts` GitHub sync helper; `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] 3.12 [YELLOW] Refactor: stabilize warning aggregation for GitHub sync summaries
+- [x] 3.12 [YELLOW] Refactor: stabilize warning aggregation for GitHub sync summaries
   - **Do**:
     1. Consolidate missing-label and skipped/failure warning aggregation.
     2. Preserve all GitHub verifier cases.
