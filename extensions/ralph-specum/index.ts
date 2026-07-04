@@ -9052,7 +9052,8 @@ function materializeEpicChildSpecs(epic: CurrentEpic, state: EpicState, options:
 		statesWritten: 0,
 		warnings: [],
 	};
-	if (!triageOutputIncludesSpecFiles(state.output)) return result;
+	const outputBehavior = describeTriageOutputBehavior(state.output);
+	if (!outputBehavior.includesSpecFiles) return result;
 
 	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
 	for (const spec of state.specs) {

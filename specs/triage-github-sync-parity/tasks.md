@@ -206,7 +206,7 @@
   - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case output-github-issues`
   - **Commit**: `test(triage): cover github-issues output parity`
 
-- [ ] 2.5 [GREEN] Pass test: disable child materialization for `github-issues`
+- [x] 2.5 [GREEN] Pass test: disable child materialization for `github-issues`
   - **Do**:
     1. Keep GitHub sync active for `github-issues` output.
     2. Prevent child spec materialization on that path.
