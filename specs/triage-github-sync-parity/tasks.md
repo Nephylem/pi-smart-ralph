@@ -302,6 +302,16 @@
 
 ## Phase 3: GitHub sync safety and idempotency
 
+- [x] 3.1.1 Regression test: unconfirmed GitHub sync skips writes and records deterministic reason
+  - **Do**:
+    1. Add `github-unconfirmed` verifier case.
+    2. Assert headless runs without `--yes` and interactive cancellation both perform 0 mocked `gh issue create/edit` calls.
+    3. Assert skipped confirmation reasons are recorded deterministically in persisted GitHub metadata/output.
+  - **Files**: `scripts/verify-triage-github-sync-parity.mjs`
+  - **Done when**: `github-unconfirmed` exists and exits 0 against the current runtime behavior.
+  - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case github-unconfirmed`
+  - **Commit**: `test(github): add unconfirmed sync regression verifier`
+
 - [ ] 3.1 [RED] Failing test: unconfirmed GitHub sync records skip and performs no remote writes
   - **Do**:
     1. Add `github-unconfirmed` verifier case.

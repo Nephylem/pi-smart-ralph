@@ -16,6 +16,7 @@ const cases = new Map([
   ['output-spec-files', verifyOutputSpecFiles],
   ['output-github-issues', verifyOutputGithubIssues],
   ['output-both', verifyOutputBoth],
+  ['github-unconfirmed', verifyGithubUnconfirmed],
 ]);
 
 process.on('exit', () => {
@@ -485,6 +486,58 @@ async function verifyOutputBoth() {
   }
 }
 
+async function verifyGithubUnconfirmed() {
+  const headlessReason = 'GitHub issue output requires Pi UI confirmation or --yes in noninteractive mode; no GitHub issues were created.';
+  const cancelledReason = 'User cancelled GitHub issue creation; no GitHub issues were created.';
+
+  const headless = await runUnconfirmedGithubScenario({
+    label: 'github-unconfirmed-headless',
+    ctxFactory: (fixtureRoot, notes) => ({
+      cwd: fixtureRoot,
+      hasUI: false,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          notes.push({ message, type });
+        },
+        setStatus() {},
+        setFooter() {},
+        setWidget() {},
+      },
+    }),
+  });
+
+  const cancelled = await runUnconfirmedGithubScenario({
+    label: 'github-unconfirmed-cancelled',
+    ctxFactory: (fixtureRoot, notes) => ({
+      cwd: fixtureRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          notes.push({ message, type });
+        },
+        confirm: async () => false,
+        setStatus() {},
+        setFooter() {},
+        setWidget() {},
+      },
+    }),
+  });
+
+  const failures = [];
+  assertUnconfirmedGithubOutcome(headless, headlessReason, 'headless-without-yes', failures, { requireNotifiedMessage: false });
+  assertUnconfirmedGithubOutcome(cancelled, cancelledReason, 'interactive-cancel', failures, { requireNotifiedMessage: true });
+
+  if (failures.length > 0) {
+    expectedFail(`unconfirmed GitHub sync parity failed: ${failures.join('; ')}`);
+  }
+
+  return {
+    summary: `skipped GitHub writes for headless and cancelled flows with ${headless.ghWriteCallCount + cancelled.ghWriteCallCount} gh issue create/edit calls`,
+  };
+}
+
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
   const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
   mkdirSync(epicDir, { recursive: true });
@@ -658,6 +711,69 @@ function createTriageCtx(cwd, notes) {
       setWidget() {},
     },
   };
+}
+
+async function runUnconfirmedGithubScenario({ label, ctxFactory }) {
+  const fixtureRoot = createFixtureRoot(label);
+  const epicName = 'demo-epic';
+  const { ghWriteLogPath } = seedGithubBackedTriageFixture(fixtureRoot, epicName, 'github-issues');
+  const notes = [];
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
+
+  try {
+    const triage = await loadRegisteredTriageCommand();
+    const ctx = ctxFactory(fixtureRoot, notes);
+    await triage.handler(`--output github-issues ${epicName}`, ctx);
+    await sleep(100);
+
+    return {
+      notes,
+      ghWriteCallCount: readWriteCallCount(ghWriteLogPath),
+      epicState: JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8')),
+    };
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
+function assertUnconfirmedGithubOutcome(result, expectedReason, scenarioName, failures, options = {}) {
+  if (result.ghWriteCallCount !== 0) {
+    failures.push(`expected ${scenarioName} to perform 0 gh issue create/edit calls but got ${result.ghWriteCallCount}`);
+  }
+
+  if (result.epicState.output !== 'github-issues') {
+    failures.push(`expected ${scenarioName} to persist output github-issues but got ${JSON.stringify(result.epicState.output)}`);
+  }
+
+  if (result.epicState.githubStatus !== 'confirmation_required') {
+    failures.push(`expected ${scenarioName} githubStatus confirmation_required but got ${JSON.stringify(result.epicState.githubStatus)}`);
+  }
+
+  if (result.epicState.issueNumber != null || result.epicState.issueUrl != null) {
+    failures.push(`expected ${scenarioName} to avoid persisting epic issue refs but got issueNumber=${JSON.stringify(result.epicState.issueNumber)} issueUrl=${JSON.stringify(result.epicState.issueUrl)}`);
+  }
+
+  if (result.epicState.github?.status !== 'skipped') {
+    failures.push(`expected ${scenarioName} github.status skipped but got ${JSON.stringify(result.epicState.github?.status)}`);
+  }
+
+  if (result.epicState.github?.confirmedBy !== 'not-confirmed') {
+    failures.push(`expected ${scenarioName} confirmedBy not-confirmed but got ${JSON.stringify(result.epicState.github?.confirmedBy)}`);
+  }
+
+  if (result.epicState.github?.summary?.skippedReason !== expectedReason) {
+    failures.push(`expected ${scenarioName} skippedReason ${JSON.stringify(expectedReason)} but got ${JSON.stringify(result.epicState.github?.summary?.skippedReason)}`);
+  }
+
+  if (!Array.isArray(result.epicState.github?.warnings) || !result.epicState.github.warnings.includes(expectedReason)) {
+    failures.push(`expected ${scenarioName} github warnings to include ${JSON.stringify(expectedReason)} but got ${JSON.stringify(result.epicState.github?.warnings)}`);
+  }
+
+  const notifiedMessages = result.notes.map(({ message }) => String(message));
+  if (options.requireNotifiedMessage && !notifiedMessages.some((message) => message.includes(expectedReason))) {
+    failures.push(`expected ${scenarioName} output to mention skipped reason ${JSON.stringify(expectedReason)} but got ${JSON.stringify(notifiedMessages)}`);
+  }
 }
 
 function readWriteCallCount(logPath) {
