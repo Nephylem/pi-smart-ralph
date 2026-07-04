@@ -602,7 +602,7 @@
   - _Requirements: FR-11, FR-12; AC-4.3, AC-5.1, AC-5.2, AC-5.3_
   - _Design: `README.md` parity docs_
 
-- [ ] 4.6 [YELLOW] Refactor: tighten README triage parity section layout
+- [x] 4.6 [YELLOW] Refactor: tighten README triage parity section layout
   - **Do**:
     1. Reformat the triage parity section for scanability without changing required wording.
     2. Keep all documentation verifier cases green.

@@ -483,6 +483,10 @@ git remote -v
 
 ### Triage parity matrix and contracts
 
+This section keeps the triage/GitHub parity surface scannable while preserving the stable wording verified by this spec.
+
+#### Parity matrix
+
 | Area | Original Smart Ralph parity | Pi behavior / contract |
 | --- | --- | --- |
 | epic-state schema | Pi accepts original minimal epic state as a compatibility subset. | `EpicStateV1` is the normalized runtime contract used after compatible reads and repair/write flows. |
@@ -492,12 +496,12 @@ git remote -v
 | label handling | Missing labels do not force remote mutation outside issue sync. | Pi omits unavailable labels from `gh` write args, records missing-label warnings in epic state metadata, and does not auto-create labels. |
 | branch safety | Fresh epic creation keeps branch/worktree safety in scope. | Headless /ralph-triage --fresh runs record the branch decision and require --yes before applying any branch or worktree change. |
 
-State authority:
+#### State authority
 
 - `.epic-state.json is the orchestration source of truth.`
 - `The <!-- ralph-specum:{...} --> comment is compatibility/idempotency metadata, not authoritative workflow state.`
 
-Stable contracts used by this parity surface:
+#### Stable contracts used by this parity surface
 
 - `EpicStateV1` required fields: `schemaVersion`, `name`, `output`, `specs`, `validation`.
 - `RalphGithubIssueMetadataV1` required fields: `tool`, `schemaVersion`, `kind`, `epicName`, `specName`.
