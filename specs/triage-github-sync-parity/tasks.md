@@ -217,7 +217,7 @@
   - _Requirements: FR-3, FR-4; AC-2.2_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] 2.6 [YELLOW] Refactor: consolidate output-mode branching
+- [x] 2.6 [YELLOW] Refactor: consolidate output-mode branching
   - **Do**:
     1. Remove duplicated mode checks across sync and materialization paths.
     2. Preserve `spec-files` and `github-issues` behavior.

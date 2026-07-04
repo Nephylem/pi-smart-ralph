@@ -9052,8 +9052,6 @@ function materializeEpicChildSpecs(epic: CurrentEpic, state: EpicState, options:
 		statesWritten: 0,
 		warnings: [],
 	};
-	const outputBehavior = describeTriageOutputBehavior(state.output);
-	if (!outputBehavior.includesSpecFiles) return result;
 
 	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
 	for (const spec of state.specs) {
@@ -9097,6 +9095,51 @@ function formatMaterializationSummary(result: TriageMaterializationResult | null
 		`- .progress.md written: ${result.progressWritten}; kept: ${result.progressKept}`,
 		`- .ralph-state.json stubs written: ${result.statesWritten}`,
 	];
+}
+
+type TriageOutputExecutionResult = {
+	state: EpicState;
+	githubSync: TriageGithubSyncResult | null;
+	materialized: TriageMaterializationResult | null;
+};
+
+async function executeTriageOutputBehavior(
+	ctx: ExtensionCommandContext,
+	epic: CurrentEpic,
+	state: EpicState,
+	options: RalphPathOptions,
+	parsed: TriageArguments,
+	outputBehavior: TriageOutputBehavior,
+): Promise<TriageOutputExecutionResult> {
+	let nextState = state;
+	let githubSync: TriageGithubSyncResult | null = null;
+	if (outputBehavior.includesGithub) {
+		setRalphStatus(ctx, `Ralph triage: syncing GitHub issues for ${epic.name}`);
+		try {
+			const githubOutcome = await syncTriageGithubIssues(ctx, nextState, parsed);
+			nextState = githubOutcome.state;
+			githubSync = githubOutcome.summary;
+			writeEpicState(epic, nextState, options);
+		} finally {
+			setRalphStatus(ctx);
+		}
+	}
+
+	let materialized: TriageMaterializationResult | null = null;
+	if (outputBehavior.includesSpecFiles) {
+		setRalphStatus(ctx, `Ralph triage: materializing ${nextState.specs.length} child spec stub${nextState.specs.length === 1 ? "" : "s"}`);
+		try {
+			materialized = materializeEpicChildSpecs(epic, nextState, options, parsed.fresh);
+		} finally {
+			setRalphStatus(ctx);
+		}
+	}
+
+	return {
+		state: nextState,
+		githubSync,
+		materialized,
+	};
 }
 
 function githubRepositoryFromDetection(detection: GithubDetection): GithubRepository | null {
@@ -9691,28 +9734,10 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	}
 
 	const outputBehavior = describeTriageOutputBehavior(state.output);
-	let githubSync: TriageGithubSyncResult | null = null;
-	if (outputBehavior.includesGithub) {
-		setRalphStatus(ctx, `Ralph triage: syncing GitHub issues for ${epic.name}`);
-		try {
-			const githubOutcome = await syncTriageGithubIssues(ctx, state, parsed);
-			state = githubOutcome.state;
-			githubSync = githubOutcome.summary;
-			writeEpicState(epic, state, options);
-		} finally {
-			setRalphStatus(ctx);
-		}
-	}
-
-	let materialized: TriageMaterializationResult | null = null;
-	if (outputBehavior.includesSpecFiles) {
-		setRalphStatus(ctx, `Ralph triage: materializing ${state.specs.length} child spec stub${state.specs.length === 1 ? "" : "s"}`);
-		try {
-			materialized = materializeEpicChildSpecs(epic, state, options, parsed.fresh);
-		} finally {
-			setRalphStatus(ctx);
-		}
-	}
+	const outputExecution = await executeTriageOutputBehavior(ctx, epic, state, options, parsed, outputBehavior);
+	state = outputExecution.state;
+	const githubSync = outputExecution.githubSync;
+	const materialized = outputExecution.materialized;
 	validationErrors = materialized?.warnings.length ? materialized.warnings : [];
 	const warnings = unique([
 		...parsed.warnings,
