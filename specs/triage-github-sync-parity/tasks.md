@@ -374,7 +374,16 @@
   - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case github-confirmed-create`
   - **Commit**: `test(github): add confirmed create regression verifier`
 
-- [ ] 3.4 [RED] Failing test: confirmed sync creates issues with metadata comment and persists epic refs
+- [x] 3.4.2 Reconcile superseded RED task bookkeeping
+  - **Do**:
+    1. Mark task 3.4 as superseded by 3.4.1 in `tasks.md` without claiming false RED evidence.
+    2. Record in `.progress.md` that `github-confirmed-create` now passes and 3.4 was replaced by regression task 3.4.1.
+  - **Files**: `specs/triage-github-sync-parity/tasks.md`, `specs/triage-github-sync-parity/.progress.md`
+  - **Done when**: `tasks.md` preserves the completed 3.4.1 regression task and clearly records 3.4 as superseded/bookkept rather than left as an impossible pending RED task.
+  - **Verify**: `grep -n '3.4 \[RED\]\|3.4.1 Regression test\|superseded' specs/triage-github-sync-parity/tasks.md specs/triage-github-sync-parity/.progress.md`
+  - **Commit**: `chore(tasks): reconcile superseded confirmed-create red task`
+
+- [x] 3.4 [RED] Failing test: confirmed sync creates issues with metadata comment and persists epic refs (superseded by 3.4.1; behavior already proven green)
   - **Do**:
     1. Add `github-confirmed-create` verifier case.
     2. Assert mocked `gh issue create` includes the HTML metadata comment and persisted epic `issueNumber`, `issueUrl`, and `githubStatus`.
