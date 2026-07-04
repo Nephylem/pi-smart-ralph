@@ -613,7 +613,7 @@
   - _Requirements: FR-11, FR-12_
   - _Design: `README.md` parity docs_
 
-- [ ] Q5 [VERIFY] Docs checkpoint: parity matrix and contract wording
+- [x] Q5 [VERIFY] Docs checkpoint: parity matrix and contract wording
   - **Do**:
     1. Run all README-focused verifier cases together.
   - **Files**: None
@@ -636,7 +636,7 @@
   - _Requirements: NFR-2, NFR-3; AC-5.1, AC-5.2, AC-5.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `package.json`_
 
-- [ ] 5.2 [GREEN] Pass test: wire triage verifier into package verification chains
+- [x] 5.2 [GREEN] Pass test: wire triage verifier into package verification chains
   - **Do**:
     1. Implement triage `acceptance-checklist` and `cleanup` lifecycle cases.
     2. Add triage acceptance coverage to `verify:index` and triage cleanup coverage to `verify:pack`.
