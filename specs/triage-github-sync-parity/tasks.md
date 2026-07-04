@@ -416,7 +416,7 @@
   - _Requirements: FR-6, FR-8_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] Q2 [VERIFY] GitHub checkpoint: confirmation gate + confirmed create
+- [x] Q2 [VERIFY] GitHub checkpoint: confirmation gate + confirmed create
   - **Do**:
     1. Run the targeted GitHub verifier cases after the create-path refactor.
   - **Files**: None
@@ -437,7 +437,18 @@
   - _Requirements: FR-7, AC-3.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts` GitHub sync helper_
 
-- [ ] 3.7 [RED] Failing test: metadata lookup updates an existing issue instead of duplicating it
+- [x] 3.7.2 Reconcile superseded RED task bookkeeping
+  - **Do**:
+    1. Mark task 3.7 as superseded by 3.7.1 in `tasks.md` without claiming false RED evidence.
+    2. Record in `.progress.md` that `github-metadata-update` now passes and 3.7 was replaced by regression task 3.7.1.
+  - **Files**: `specs/triage-github-sync-parity/tasks.md`, `specs/triage-github-sync-parity/.progress.md`
+  - **Done when**: `tasks.md` preserves the completed 3.7.1 regression task and clearly records 3.7 as superseded/bookkept rather than left as an impossible pending RED task.
+  - **Verify**: `grep -n '3.7 \[RED\]\|3.7.1 Regression test\|superseded' specs/triage-github-sync-parity/tasks.md specs/triage-github-sync-parity/.progress.md`
+  - **Commit**: `chore(tasks): reconcile superseded metadata-update red task`
+  - _Requirements: FR-7, AC-3.3_
+  - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts` GitHub sync helper_
+
+- [x] 3.7 [RED] Failing test: metadata lookup updates an existing issue instead of duplicating it (superseded by 3.7.1; behavior already proven green)
   - **Do**:
     1. Add `github-metadata-update` verifier case.
     2. Assert absent state `issueNumber` plus existing HTML comment in listed issue bodies chooses update instead of create.
