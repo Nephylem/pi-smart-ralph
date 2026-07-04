@@ -268,7 +268,7 @@
   - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case output-both`
   - **Commit**: `test(triage): cover both output cross-links`
 
-- [ ] 2.8 [GREEN] Pass test: sync GitHub before materializing `both` output
+- [x] 2.8 [GREEN] Pass test: sync GitHub before materializing `both` output
   - **Do**:
     1. Preserve GitHub-before-materialization ordering for `both`.
     2. Persist epic and child issue refs back into state before writing child plan stubs.
