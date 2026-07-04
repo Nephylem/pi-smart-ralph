@@ -153,7 +153,7 @@
   - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case output-spec-files`
   - **Commit**: `test(triage): cover spec-files output parity`
 
-- [ ] 2.2 [GREEN] Pass test: keep `spec-files` output off the GitHub path
+- [x] 2.2 [GREEN] Pass test: keep `spec-files` output off the GitHub path
   - **Do**:
     1. Ensure `spec-files` output skips GitHub sync entirely.
     2. Keep epic and child file materialization intact.
