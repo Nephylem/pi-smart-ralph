@@ -164,7 +164,7 @@
   - _Requirements: FR-3, AC-2.1_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] 2.3 [YELLOW] Refactor: isolate materialization gating by output mode
+- [x] 2.3 [YELLOW] Refactor: isolate materialization gating by output mode
   - **Do**:
     1. Extract or tighten output-mode predicates around GitHub sync and child materialization.
     2. Keep behavior unchanged.

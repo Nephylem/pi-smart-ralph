@@ -7650,12 +7650,24 @@ type TriageGithubSyncResult = {
 const TRIAGE_AGENT = "ralph-triage-analyst";
 const TRIAGE_OUTPUT_VALUES = new Set<string>(["spec-files", "github-issues", "both"]);
 
+type TriageOutputBehavior = {
+	includesSpecFiles: boolean;
+	includesGithub: boolean;
+};
+
+function describeTriageOutputBehavior(output: unknown): TriageOutputBehavior {
+	return {
+		includesSpecFiles: output === "spec-files" || output === "both",
+		includesGithub: output === "github-issues" || output === "both",
+	};
+}
+
 function triageOutputIncludesSpecFiles(output: unknown): boolean {
-	return output === "spec-files" || output === "both";
+	return describeTriageOutputBehavior(output).includesSpecFiles;
 }
 
 function triageOutputIncludesGithub(output: unknown): boolean {
-	return output === "github-issues" || output === "both";
+	return describeTriageOutputBehavior(output).includesGithub;
 }
 
 function parseTriageArgs(args: string): TriageArguments {
@@ -9677,8 +9689,9 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 		return;
 	}
 
+	const outputBehavior = describeTriageOutputBehavior(state.output);
 	let githubSync: TriageGithubSyncResult | null = null;
-	if (triageOutputIncludesGithub(state.output)) {
+	if (outputBehavior.includesGithub) {
 		setRalphStatus(ctx, `Ralph triage: syncing GitHub issues for ${epic.name}`);
 		try {
 			const githubOutcome = await syncTriageGithubIssues(ctx, state, parsed);
@@ -9691,7 +9704,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	}
 
 	let materialized: TriageMaterializationResult | null = null;
-	if (triageOutputIncludesSpecFiles(state.output)) {
+	if (outputBehavior.includesSpecFiles) {
 		setRalphStatus(ctx, `Ralph triage: materializing ${state.specs.length} child spec stub${state.specs.length === 1 ? "" : "s"}`);
 		try {
 			materialized = materializeEpicChildSpecs(epic, state, options, parsed.fresh);
