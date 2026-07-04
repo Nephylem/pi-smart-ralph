@@ -35,6 +35,8 @@ import {
 	createOrUpdateChildSpecIssue,
 	createOrUpdateEpicIssue,
 	detectGithub,
+	planChildSpecIssueSync,
+	planEpicIssueSync,
 	RALPH_GITHUB_METADATA_SCHEMA_VERSION,
 	RALPH_GITHUB_METADATA_TOOL,
 	type GithubDetection,
@@ -9380,8 +9382,8 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 	};
 	setRalphStatus(ctx, `Ralph triage: planning GitHub issue writes`);
 	const dryRuns = [
-		createOrUpdateEpicIssue(state, { ...commonOptions, dryRun: true }),
-		...state.specs.map((spec) => createOrUpdateChildSpecIssue(state, spec, { ...commonOptions, dryRun: true })),
+		planEpicIssueSync(state, commonOptions),
+		...state.specs.map((spec) => planChildSpecIssueSync(state, spec, commonOptions)),
 	];
 	setRalphStatus(ctx, `Ralph triage: awaiting GitHub issue confirmation`);
 	const confirmation = await confirmTriageGithubWrites(ctx, parsed, repository, dryRuns);

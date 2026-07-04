@@ -217,8 +217,21 @@ export function ralphGithubMetadataComment(metadata: RalphGithubIssueMetadata): 
 	return `<!-- ralph-specum:${JSON.stringify(orderedMetadata(metadata))} -->`;
 }
 
+export function planEpicIssueSync(state: EpicState, options: GithubIssueSyncOptions = {}): GithubIssueSyncResult {
+	return syncGithubIssue(epicIssueDraft(state), { ...options, dryRun: true });
+}
+
 export function createOrUpdateEpicIssue(state: EpicState, options: GithubIssueSyncOptions = {}): GithubIssueSyncResult {
 	return syncGithubIssue(epicIssueDraft(state), options);
+}
+
+export function planChildSpecIssueSync(
+	state: EpicState,
+	childSpec: EpicChildSpec | string,
+	options: GithubIssueSyncOptions = {},
+): GithubIssueSyncResult {
+	const child = typeof childSpec === "string" ? findChildSpec(state, childSpec) : childSpec;
+	return syncGithubIssue(childSpecIssueDraft(state, child), { ...options, dryRun: true });
 }
 
 export function createOrUpdateChildSpecIssue(

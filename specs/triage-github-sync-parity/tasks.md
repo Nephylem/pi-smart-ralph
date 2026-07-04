@@ -332,7 +332,7 @@
   - _Requirements: FR-6, FR-8; AC-3.1_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts`; `extensions/ralph-specum/index.ts`_
 
-- [ ] 3.2 [GREEN] Pass test: block remote writes until confirmation
+- [x] 3.2 [GREEN] Pass test: block remote writes until confirmation
   - **Do**:
     1. Keep dry-run planning separate from execution.
     2. Persist skipped/confirmation-needed metadata when sync is not confirmed.
