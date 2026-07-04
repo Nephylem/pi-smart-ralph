@@ -21,6 +21,9 @@ const cases = new Map([
   ['github-metadata-update', verifyGithubMetadataUpdate],
   ['github-missing-labels', verifyGithubMissingLabels],
   ['fresh-branch-safety', verifyFreshBranchSafety],
+  ['docs-parity-matrix', verifyDocsParityMatrix],
+  ['docs-state-authority', verifyDocsStateAuthority],
+  ['docs-contracts', verifyDocsContracts],
 ]);
 
 process.on('exit', () => {
@@ -842,6 +845,105 @@ async function verifyFreshBranchSafety() {
   };
 }
 
+async function verifyDocsParityMatrix() {
+  const readme = readReadme();
+  const failures = [];
+  const requiredRows = [
+    'epic-state schema',
+    'output modes',
+    'GitHub confirmation',
+    'metadata lookup',
+    'label handling',
+    'branch safety',
+  ];
+
+  for (const row of requiredRows) {
+    if (!readme.includes(`| ${row} |`)) {
+      failures.push(`expected README parity matrix row ${JSON.stringify(row)}`);
+    }
+  }
+
+  const headlessSentence = 'Headless /ralph-triage --fresh runs record the branch decision and require --yes before applying any branch or worktree change.';
+  if (!readme.includes(headlessSentence)) {
+    failures.push(`expected README to include exact headless sentence ${JSON.stringify(headlessSentence)}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`README parity matrix docs failed: ${failures.join('; ')}`);
+  }
+
+  return {
+    summary: 'documents the parity matrix rows and exact fresh-headless sentence',
+  };
+}
+
+async function verifyDocsStateAuthority() {
+  const readme = readReadme();
+  const failures = [];
+  const requiredPhrases = [
+    '.epic-state.json is the orchestration source of truth.',
+    'The <!-- ralph-specum:{...} --> comment is compatibility/idempotency metadata, not authoritative workflow state.',
+  ];
+
+  for (const phrase of requiredPhrases) {
+    if (!readme.includes(phrase)) {
+      failures.push(`expected README to include exact phrase ${JSON.stringify(phrase)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`README state-authority docs failed: ${failures.join('; ')}`);
+  }
+
+  return {
+    summary: 'documents exact state-authority phrases',
+  };
+}
+
+async function verifyDocsContracts() {
+  const readme = readReadme();
+  const failures = [];
+  const requiredContracts = ['EpicStateV1', 'RalphGithubIssueMetadataV1'];
+  const requiredFieldMarkers = [
+    '`schemaVersion`',
+    '`name`',
+    '`output`',
+    '`specs`',
+    '`validation`',
+    '`tool`',
+    '`kind`',
+    '`epicName`',
+    '`specName`',
+  ];
+  const requiredConsumers = ['feedback-command-parity', 'implementation-recovery-loop-parity'];
+
+  for (const contract of requiredContracts) {
+    if (!readme.includes(contract)) {
+      failures.push(`expected README to name contract ${JSON.stringify(contract)}`);
+    }
+  }
+
+  for (const field of requiredFieldMarkers) {
+    if (!readme.includes(field)) {
+      failures.push(`expected README contract docs to include required field ${field}`);
+    }
+  }
+
+  for (const consumer of requiredConsumers) {
+    if (!readme.includes(consumer)) {
+      failures.push(`expected README contract docs to include downstream consumer ${JSON.stringify(consumer)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`README contract docs failed: ${failures.join('; ')}`);
+  }
+
+  return {
+    summary: 'documents contract names, required fields, and downstream consumers',
+  };
+}
+
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
   const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
   mkdirSync(epicDir, { recursive: true });
@@ -1085,6 +1187,10 @@ function assertUnconfirmedGithubOutcome(result, expectedReason, scenarioName, fa
 function readWriteCallCount(logPath) {
   if (!existsSync(logPath)) return 0;
   return readFileSync(logPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length;
+}
+
+function readReadme() {
+  return readFileSync(join(root, 'README.md'), 'utf8');
 }
 
 function readGhWriteCalls(logPath) {

@@ -569,7 +569,7 @@
   - _Requirements: FR-8, FR-10_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] Q4 [VERIFY] Branch checkpoint: shared helper reuse and ordering
+- [x] Q4 [VERIFY] Branch checkpoint: shared helper reuse and ordering
   - **Do**:
     1. Re-run the fresh branch safety case.
     2. Re-run the exact source inspection required by `AC-4.1`.
@@ -580,7 +580,7 @@
   - _Requirements: FR-10; AC-4.1, AC-4.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/index.ts`_
 
-- [ ] 4.4 [RED] Failing test: README documents parity matrix, headless sentence, state authority, and contracts
+- [x] 4.4 [RED] Failing test: README documents parity matrix, headless sentence, state authority, and contracts
   - **Do**:
     1. Add `docs-parity-matrix`, `docs-state-authority`, and `docs-contracts` verifier cases.
     2. Assert the exact README rows, phrases, contract names, required fields, and downstream consumer names from the requirements.
