@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
+let activeCase = requestedCase;
 const acceptanceChecklistCaseKey = 'acceptance-checklist';
 const cleanupCaseKey = 'cleanup';
 const verifierLifecycleCaseNames = [acceptanceChecklistCaseKey, cleanupCaseKey];
@@ -28,7 +29,6 @@ const acceptanceChecklistCases = [
 ];
 const acceptanceChecklistIsolationMode = 'isolated-subcases';
 const verifierTempPrefixes = ['triage-github-sync-parity-'];
-const temporaryFixtureRoots = [];
 
 const cases = new Map([
   ['minimal-state-load', verifyMinimalStateLoad],
@@ -49,10 +49,6 @@ const cases = new Map([
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
 const supportedCaseNames = [...cases.keys(), ...verifierLifecycleCaseNames.filter((name) => name !== acceptanceChecklistCaseKey)];
-
-process.on('exit', () => {
-  cleanupTemporaryFixtures();
-});
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
@@ -111,6 +107,7 @@ async function main() {
 }
 
 async function runVerifierCase(caseName, verifyCase) {
+  activeCase = caseName;
   try {
     const details = await verifyCase();
     return { name: caseName, ok: true, ...(details ?? {}) };
@@ -152,20 +149,13 @@ function parseCaseArg(args) {
 
 function createFixtureRoot(label) {
   const safeLabel = label.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
-  const fixtureRoot = mkdtempSync(join(tmpdir(), `triage-github-sync-parity-${safeLabel}-`));
-  temporaryFixtureRoots.push(fixtureRoot);
-  return fixtureRoot;
-}
-
-function cleanupTemporaryFixtures() {
-  for (const fixtureRoot of temporaryFixtureRoots.splice(0)) {
-    rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+  return mkdtempSync(join(tmpdir(), `${verifierTempPrefixes[0]}${safeLabel}-`));
 }
 
 function expectedFail(message) {
   const error = new Error(message);
   error.expectedFail = true;
+  error.caseName = activeCase;
   throw error;
 }
 
@@ -1423,4 +1413,7 @@ function seedMinimalEpicStateFixture(fixtureRoot, epicName) {
   return statePath;
 }
 
-await main();
+main().catch((error) => {
+  console.error(error?.stack ?? error);
+  process.exitCode = 1;
+});

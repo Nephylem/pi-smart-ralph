@@ -647,7 +647,7 @@
   - _Requirements: NFR-2, NFR-3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `package.json`_
 
-- [ ] 5.3 [YELLOW] Refactor: align triage verifier lifecycle with existing script patterns
+- [x] 5.3 [YELLOW] Refactor: align triage verifier lifecycle with existing script patterns
   - **Do**:
     1. Reuse the acceptance-checklist and cleanup registry pattern from existing parity verifiers.
     2. Keep temp-fixture prefixes and cleanup deterministic.
