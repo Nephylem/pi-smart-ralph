@@ -18,6 +18,7 @@ const cases = new Map([
   ['output-both', verifyOutputBoth],
   ['github-unconfirmed', verifyGithubUnconfirmed],
   ['github-confirmed-create', verifyGithubConfirmedCreate],
+  ['github-metadata-update', verifyGithubMetadataUpdate],
 ]);
 
 process.on('exit', () => {
@@ -121,6 +122,10 @@ function expectedFail(message) {
 
 async function loadEpicsModule() {
   return import(new URL('../extensions/ralph-specum/epics.ts', import.meta.url));
+}
+
+async function loadGithubModule() {
+  return import(new URL('../extensions/ralph-specum/github.ts', import.meta.url));
 }
 
 async function loadRalphSpecumExtension() {
@@ -612,6 +617,119 @@ async function verifyGithubConfirmedCreate() {
   } finally {
     process.env.PATH = originalPath;
   }
+}
+
+async function verifyGithubMetadataUpdate() {
+  const {
+    createOrUpdateEpicIssue,
+    ralphGithubMetadataComment,
+    RALPH_GITHUB_METADATA_SCHEMA_VERSION,
+    RALPH_GITHUB_METADATA_TOOL,
+  } = await loadGithubModule();
+
+  const repository = {
+    owner: 'octocat',
+    name: 'demo-repo',
+    nameWithOwner: 'octocat/demo-repo',
+    url: 'https://github.com/octocat/demo-repo',
+  };
+  const state = {
+    name: 'demo-epic',
+    goal: 'Update the existing epic issue via metadata lookup.',
+    output: 'github-issues',
+    specs: [],
+    issueNumber: null,
+  };
+  const metadataComment = ralphGithubMetadataComment({
+    tool: RALPH_GITHUB_METADATA_TOOL,
+    schemaVersion: RALPH_GITHUB_METADATA_SCHEMA_VERSION,
+    kind: 'epic',
+    epicName: state.name,
+  });
+  const calls = [];
+  const runner = (args) => {
+    calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'list') {
+      return {
+        status: 0,
+        stdout: JSON.stringify([{ number: 101, url: 'https://github.com/octocat/demo-repo/issues/101', body: `Existing issue body\n\n${metadataComment}\n` }]),
+        stderr: '',
+      };
+    }
+    if (args[0] === 'issue' && args[1] === 'edit') {
+      return {
+        status: 0,
+        stdout: 'https://github.com/octocat/demo-repo/issues/101',
+        stderr: '',
+      };
+    }
+    if (args[0] === 'issue' && args[1] === 'create') {
+      return {
+        status: 0,
+        stdout: 'https://github.com/octocat/demo-repo/issues/999',
+        stderr: '',
+      };
+    }
+    return {
+      status: 1,
+      stdout: '',
+      stderr: `unexpected command: ${args.join(' ')}`,
+    };
+  };
+
+  const result = createOrUpdateEpicIssue(state, { repository, runner });
+  const failures = [];
+  const createCalls = calls.filter((args) => args[0] === 'issue' && args[1] === 'create');
+  const editCalls = calls.filter((args) => args[0] === 'issue' && args[1] === 'edit');
+  const listCalls = calls.filter((args) => args[0] === 'issue' && args[1] === 'list');
+
+  if (result.action !== 'updated' || result.operation !== 'update') {
+    failures.push(`expected metadata lookup to choose update but got action=${JSON.stringify(result.action)} operation=${JSON.stringify(result.operation)}`);
+  }
+
+  if (result.issueNumber !== 101 || result.issueUrl !== 'https://github.com/octocat/demo-repo/issues/101') {
+    failures.push(`expected metadata lookup to reuse issue 101 but got issueNumber=${JSON.stringify(result.issueNumber)} issueUrl=${JSON.stringify(result.issueUrl)}`);
+  }
+
+  if (result.issueNumberSource !== 'metadata') {
+    failures.push(`expected metadata lookup source to be metadata but got ${JSON.stringify(result.issueNumberSource)}`);
+  }
+
+  if (listCalls.length !== 1) {
+    failures.push(`expected exactly one gh issue list lookup but got ${listCalls.length}`);
+  }
+
+  if (editCalls.length !== 1) {
+    failures.push(`expected exactly one gh issue edit call but got ${editCalls.length}`);
+  }
+
+  if (createCalls.length !== 0) {
+    failures.push(`expected no gh issue create call when metadata lookup finds a match but got ${createCalls.length}`);
+  }
+
+  if (!Array.isArray(result.lookupCommands) || result.lookupCommands.length !== 1 || result.lookupCommands[0]?.[0] !== 'issue' || result.lookupCommands[0]?.[1] !== 'list') {
+    failures.push(`expected lookupCommands to record one gh issue list call but got ${JSON.stringify(result.lookupCommands)}`);
+  }
+
+  if (!Array.isArray(result.writeCommand) || result.writeCommand[0] !== 'issue' || result.writeCommand[1] !== 'edit' || !result.writeCommand.includes('101')) {
+    failures.push(`expected writeCommand to target gh issue edit 101 but got ${JSON.stringify(result.writeCommand)}`);
+  }
+
+  if (!result.body.includes(metadataComment)) {
+    failures.push('expected updated issue body to retain the ralph-specum metadata comment');
+  }
+
+  if (JSON.stringify(result.stateIssueNumberPatch) !== JSON.stringify({ issueNumber: 101 })) {
+    failures.push(`expected stateIssueNumberPatch to backfill issueNumber 101 but got ${JSON.stringify(result.stateIssueNumberPatch)}`);
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`metadata lookup update parity failed: ${failures.join('; ')}`);
+  }
+
+  return {
+    summary: `updated existing issue ${result.issueNumber} via metadata lookup with ${editCalls.length} gh issue edit call and ${createCalls.length} create calls`,
+  };
 }
 
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {

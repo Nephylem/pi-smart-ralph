@@ -426,6 +426,17 @@
   - _Requirements: FR-6, FR-7, FR-8; AC-3.1, AC-3.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
 
+- [x] 3.7.1 Regression test: metadata lookup updates an existing issue instead of duplicating it
+  - **Do**:
+    1. Add `github-metadata-update` verifier case.
+    2. Assert absent state `issueNumber` plus existing HTML comment in listed issue bodies chooses update instead of create.
+  - **Files**: `scripts/verify-triage-github-sync-parity.mjs`
+  - **Done when**: `github-metadata-update` exists and passes by proving metadata lookup selects `gh issue edit` with no duplicate create call.
+  - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case github-metadata-update`
+  - **Commit**: `test(github): add metadata lookup update regression`
+  - _Requirements: FR-7, AC-3.3_
+  - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/github.ts` GitHub sync helper_
+
 - [ ] 3.7 [RED] Failing test: metadata lookup updates an existing issue instead of duplicating it
   - **Do**:
     1. Add `github-metadata-update` verifier case.
