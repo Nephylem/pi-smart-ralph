@@ -8944,15 +8944,22 @@ function formatContractsForPlan(contracts: EpicInterfaceContract[]): string[] {
 	});
 }
 
-function childGithubIssueReference(spec: EpicChildSpec): string | null {
-	if (typeof spec.issueUrl === "string" && spec.issueUrl.trim()) return spec.issueUrl.trim();
-	return typeof spec.issueNumber === "number" && Number.isSafeInteger(spec.issueNumber) && spec.issueNumber > 0 ? `#${spec.issueNumber}` : null;
+function childGithubIssuePlanReference(spec: EpicChildSpec): { confirmedRef: string | null; planLine: string | null } {
+	const confirmedRef = typeof spec.issueUrl === "string" && spec.issueUrl.trim()
+		? spec.issueUrl.trim()
+		: typeof spec.issueNumber === "number" && Number.isSafeInteger(spec.issueNumber) && spec.issueNumber > 0
+			? `#${spec.issueNumber}`
+			: null;
+	return {
+		confirmedRef,
+		planLine: confirmedRef ? `GitHub Issue: ${confirmedRef}` : null,
+	};
 }
 
 function buildChildPlan(epic: CurrentEpic, state: EpicState, spec: EpicChildSpec, epicMarkdown: string): string {
 	const contracts = relevantContractsForSpec(state, spec);
 	const sourceBlock = extractEpicSpecBlock(epicMarkdown, spec.name);
-	const githubIssue = childGithubIssueReference(spec);
+	const githubIssue = childGithubIssuePlanReference(spec);
 	return [
 		`# Plan: ${spec.name}`,
 		"",

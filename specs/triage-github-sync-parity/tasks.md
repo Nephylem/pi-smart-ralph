@@ -279,7 +279,7 @@
   - _Requirements: FR-3, FR-5; AC-2.3_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] 2.9 [YELLOW] Refactor: clean child plan GitHub-link rendering
+- [x] 2.9 [YELLOW] Refactor: clean child plan GitHub-link rendering
   - **Do**:
     1. Tighten plan-stub rendering so confirmed refs and no-ref cases are explicit.
     2. Keep all output-mode cases green.
