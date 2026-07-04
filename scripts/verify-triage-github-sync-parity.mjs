@@ -14,6 +14,7 @@ const cases = new Map([
   ['minimal-state-repair', verifyMinimalStateRepair],
   ['minimal-state-validation-boundary', verifyMinimalStateValidationBoundary],
   ['output-spec-files', verifyOutputSpecFiles],
+  ['output-github-issues', verifyOutputGithubIssues],
 ]);
 
 process.on('exit', () => {
@@ -334,6 +335,103 @@ async function verifyOutputSpecFiles() {
   }
 }
 
+async function verifyOutputGithubIssues() {
+  const fixtureRoot = createFixtureRoot('output-github-issues');
+  const epicName = 'demo-epic';
+  const ghWriteLogPath = seedGithubIssuesTriageFixture(fixtureRoot, epicName);
+  const notes = [];
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
+
+  try {
+    const extensionModule = await loadRalphSpecumExtension();
+    const commands = new Map();
+    const pi = {
+      registerCommand(name, config) {
+        commands.set(name, config);
+      },
+      on() {},
+    };
+    extensionModule.default(pi);
+
+    const triage = commands.get('ralph-triage');
+    if (!triage?.handler) {
+      expectedFail('ralph-specum extension did not register a runnable ralph-triage command handler');
+    }
+
+    const ctx = {
+      cwd: fixtureRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          notes.push({ message, type });
+        },
+        confirm: async () => true,
+        setStatus() {},
+        setFooter() {},
+        setWidget() {},
+      },
+    };
+
+    await triage.handler(`--output github-issues --yes ${epicName}`, ctx);
+    await sleep(100);
+
+    const childNames = ['alpha-child', 'beta-child'];
+    const failures = [];
+    const epicState = JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8'));
+    const ghWriteCallCount = readWriteCallCount(ghWriteLogPath);
+
+    if (epicState.output !== 'github-issues') {
+      failures.push(`expected triage to persist output github-issues but got ${JSON.stringify(epicState.output)}`);
+    }
+
+    if (ghWriteCallCount <= 0) {
+      failures.push('expected github-issues triage to perform mocked gh issue create/edit calls');
+    }
+
+    if (!['created', 'updated', 'synced'].includes(epicState.githubStatus)) {
+      failures.push(`expected epic githubStatus to record a successful sync but got ${JSON.stringify(epicState.githubStatus)}`);
+    }
+
+    if (typeof epicState.issueNumber !== 'number' || typeof epicState.issueUrl !== 'string') {
+      failures.push(`expected epic GitHub issue metadata to persist but got issueNumber=${JSON.stringify(epicState.issueNumber)} issueUrl=${JSON.stringify(epicState.issueUrl)}`);
+    }
+
+    const childIssueNumbers = Array.isArray(epicState.specs) ? epicState.specs.map((spec) => spec?.issueNumber) : [];
+    if (JSON.stringify(childIssueNumbers.map((value) => typeof value === 'number')) !== JSON.stringify([true, true])) {
+      failures.push(`expected child issue numbers to persist for both child specs but got ${JSON.stringify(childIssueNumbers)}`);
+    }
+
+    const syncedTotal = epicState.github?.summary?.total;
+    if (syncedTotal !== 3) {
+      failures.push(`expected github summary total to be 3 (epic + 2 child issues) but got ${JSON.stringify(syncedTotal)}`);
+    }
+
+    for (const name of childNames) {
+      if (existsSync(join(fixtureRoot, 'specs', name))) {
+        failures.push(`expected github-issues triage to skip child spec directory ${name}`);
+      }
+    }
+
+    if (ghWriteCallCount !== 3) {
+      failures.push(`expected github-issues triage to perform 3 gh issue create/edit calls but got ${ghWriteCallCount}`);
+    }
+
+    if (notes.some(({ message }) => /plan\.md|materializ/i.test(String(message)))) {
+      failures.push('github-issues triage unexpectedly announced child spec materialization');
+    }
+
+    if (failures.length > 0) {
+      expectedFail(`github-issues triage parity failed: ${failures.join('; ')}`);
+    }
+
+    return { summary: `synced ${ghWriteCallCount} GitHub issues with 0 child spec directories created` };
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
   const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
   mkdirSync(epicDir, { recursive: true });
@@ -378,6 +476,92 @@ function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
 set -euo pipefail
 if [[ "$*" == *"issue create"* || "$*" == *"issue edit"* ]]; then
   printf '%s\n' "$*" >> ${JSON.stringify(ghWriteLogPath)}
+fi
+exit 0
+`);
+  chmodSync(join(binDir, 'gh'), 0o755);
+  return ghWriteLogPath;
+}
+
+function seedGithubIssuesTriageFixture(fixtureRoot, epicName) {
+  const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.md'), [
+    `# Epic: ${epicName}`,
+    '',
+    '## Specs',
+    '',
+    '### Spec 1: alpha-child',
+    '**Goal**: Sync the alpha child issue only.',
+    '**Dependencies**: None',
+    '',
+    '### Spec 2: beta-child',
+    '**Goal**: Sync the beta child issue only.',
+    '**Dependencies**: alpha-child',
+    '',
+  ].join('\n'));
+  writeFileSync(join(epicDir, '.epic-state.json'), `${JSON.stringify({
+    name: epicName,
+    goal: 'Sync GitHub issues without child spec directories',
+    output: 'github-issues',
+    specs: [
+      {
+        name: 'alpha-child',
+        goal: 'Sync the alpha child issue only.',
+        status: 'pending',
+        dependencies: [],
+      },
+      {
+        name: 'beta-child',
+        goal: 'Sync the beta child issue only.',
+        status: 'pending',
+        dependencies: ['alpha-child'],
+      },
+    ],
+  }, null, 2)}\n`);
+
+  const binDir = join(fixtureRoot, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const ghWriteLogPath = join(fixtureRoot, 'gh-write-calls.log');
+  const ghCounterPath = join(fixtureRoot, 'gh-issue-counter.txt');
+  writeFileSync(join(binDir, 'gh'), `#!/usr/bin/env bash
+set -euo pipefail
+cmd="$*"
+if [[ "\${1:-}" == "--version" ]]; then
+  echo 'gh version 2.52.0'
+  exit 0
+fi
+if [[ "\${1:-}" == "repo" && "\${2:-}" == "view" ]]; then
+  echo '{"name":"demo-repo","owner":{"login":"octocat"},"url":"https://github.com/octocat/demo-repo"}'
+  exit 0
+fi
+if [[ "\${1:-}" == "auth" && "\${2:-}" == "status" ]]; then
+  echo 'Logged in to github.com as octocat'
+  exit 0
+fi
+if [[ "\${1:-}" == "label" && "\${2:-}" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "\${1:-}" == "issue" && "\${2:-}" == "list" ]]; then
+  echo '[]'
+  exit 0
+fi
+if [[ "\${1:-}" == "issue" && ( "\${2:-}" == "create" || "\${2:-}" == "edit" ) ]]; then
+  printf 'WRITE %s %s\n' "\${1:-}" "\${2:-}" >> ${JSON.stringify(ghWriteLogPath)}
+fi
+if [[ "\${1:-}" == "issue" && "\${2:-}" == "create" ]]; then
+  next=101
+  if [[ -f ${JSON.stringify(ghCounterPath)} ]]; then
+    next=$(( $(cat ${JSON.stringify(ghCounterPath)}) + 1 ))
+  fi
+  printf '%s' "$next" > ${JSON.stringify(ghCounterPath)}
+  echo "https://github.com/octocat/demo-repo/issues/$next"
+  exit 0
+fi
+if [[ "\${1:-}" == "issue" && "\${2:-}" == "edit" ]]; then
+  echo 'https://github.com/octocat/demo-repo/issues/101'
+  exit 0
 fi
 exit 0
 `);

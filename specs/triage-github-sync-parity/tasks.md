@@ -175,7 +175,7 @@
   - _Requirements: FR-3_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] P2V1 [VERIFY] Output-mode checkpoint: `spec-files` triplet
+- [x] P2V1 [VERIFY] Output-mode checkpoint: `spec-files` triplet
   - **Do**:
     1. Re-run the targeted `output-spec-files` verifier case immediately after the first output-mode triplet.
   - **Files**: None
@@ -185,7 +185,7 @@
   - _Requirements: FR-3; AC-2.1_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
 
-- [ ] 2.4 [RED] Failing test: `github-issues` output creates no child spec directories
+- [x] 2.4 [RED] Failing test: `github-issues` output creates no child spec directories
   - **Do**:
     1. Add `output-github-issues` verifier case.
     2. Assert mocked GitHub sync runs while child spec directory creation count stays 0.
@@ -195,6 +195,16 @@
   - **Commit**: `test(triage): red - failing test for github-issues output`
   - _Requirements: FR-3, FR-4; AC-2.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/index.ts` triage coordinator_
+
+- [x] 2.4.1 Regression test: `github-issues` output skips child spec directories while syncing GitHub
+  - **Do**:
+    1. Add an `output-github-issues` verifier case to `scripts/verify-triage-github-sync-parity.mjs`.
+    2. Seed a triage fixture whose output is `github-issues` and a fake `gh` binary that records `issue create/edit` calls.
+    3. Assert mocked GitHub sync runs while the created child spec directory count remains 0.
+  - **Files**: `scripts/verify-triage-github-sync-parity.mjs`
+  - **Done when**: `output-github-issues` exists and passes with mocked GitHub sync evidence plus 0 child spec directories created.
+  - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case output-github-issues`
+  - **Commit**: `test(triage): cover github-issues output parity`
 
 - [ ] 2.5 [GREEN] Pass test: disable child materialization for `github-issues`
   - **Do**:
