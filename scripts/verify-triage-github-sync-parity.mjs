@@ -17,6 +17,7 @@ const cases = new Map([
   ['output-github-issues', verifyOutputGithubIssues],
   ['output-both', verifyOutputBoth],
   ['github-unconfirmed', verifyGithubUnconfirmed],
+  ['github-confirmed-create', verifyGithubConfirmedCreate],
 ]);
 
 process.on('exit', () => {
@@ -538,6 +539,81 @@ async function verifyGithubUnconfirmed() {
   };
 }
 
+async function verifyGithubConfirmedCreate() {
+  const fixtureRoot = createFixtureRoot('github-confirmed-create');
+  const epicName = 'demo-epic';
+  const { ghWriteLogPath, ghWriteArgsLogPath } = seedGithubBackedTriageFixture(fixtureRoot, epicName, 'github-issues');
+  const notes = [];
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
+
+  try {
+    const triage = await loadRegisteredTriageCommand();
+    const ctx = createTriageCtx(fixtureRoot, notes);
+
+    await triage.handler(`--output github-issues --yes ${epicName}`, ctx);
+    await sleep(100);
+
+    const failures = [];
+    const epicState = JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8'));
+    const ghWriteCallCount = readWriteCallCount(ghWriteLogPath);
+    const ghWriteCalls = readGhWriteCalls(ghWriteArgsLogPath);
+    const createCalls = ghWriteCalls.filter((call) => call[0] === 'issue' && call[1] === 'create');
+    const createBodies = createCalls.map((call) => flagValue(call, '--body')).filter((value) => typeof value === 'string');
+    const metadataBodies = createBodies.filter((body) => body.includes('<!-- ralph-specum:') && body.includes('## Ralph metadata'));
+
+    if (epicState.output !== 'github-issues') {
+      failures.push(`expected confirmed sync to persist output github-issues but got ${JSON.stringify(epicState.output)}`);
+    }
+
+    if (ghWriteCallCount !== 3) {
+      failures.push(`expected confirmed sync to perform 3 gh issue create/edit calls but got ${ghWriteCallCount}`);
+    }
+
+    if (createCalls.length !== 3) {
+      failures.push(`expected confirmed sync to perform 3 gh issue create calls but got ${createCalls.length}`);
+    }
+
+    if (metadataBodies.length !== 3) {
+      failures.push(`expected all 3 gh issue create payloads to include the ralph-specum HTML metadata comment but saw ${metadataBodies.length}`);
+    }
+
+    if (typeof epicState.issueNumber !== 'number' || epicState.issueNumber !== 101) {
+      failures.push(`expected epic issueNumber 101 after confirmed create but got ${JSON.stringify(epicState.issueNumber)}`);
+    }
+
+    if (epicState.issueUrl !== 'https://github.com/octocat/demo-repo/issues/101') {
+      failures.push(`expected epic issueUrl to persist the created URL but got ${JSON.stringify(epicState.issueUrl)}`);
+    }
+
+    if (epicState.githubStatus !== 'created') {
+      failures.push(`expected epic githubStatus created after confirmed sync but got ${JSON.stringify(epicState.githubStatus)}`);
+    }
+
+    if (epicState.github?.epicIssue?.issueNumber !== 101 || epicState.github?.epicIssue?.issueUrl !== 'https://github.com/octocat/demo-repo/issues/101') {
+      failures.push(`expected nested github epicIssue refs to persist created epic metadata but got ${JSON.stringify(epicState.github?.epicIssue)}`);
+    }
+
+    if (epicState.github?.summary?.total !== 3 || epicState.github?.summary?.created !== 3) {
+      failures.push(`expected github summary to record 3 created issues but got ${JSON.stringify(epicState.github?.summary)}`);
+    }
+
+    if (notes.some(({ message }) => /skip.*GitHub/i.test(String(message)))) {
+      failures.push('confirmed sync unexpectedly reported skipped GitHub output');
+    }
+
+    if (failures.length > 0) {
+      expectedFail(`confirmed GitHub create parity failed: ${failures.join('; ')}`);
+    }
+
+    return {
+      summary: `created ${createCalls.length} GitHub issues with metadata comments and persisted epic refs ${epicState.issueNumber}/${epicState.githubStatus}`,
+    };
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
   const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
   mkdirSync(epicDir, { recursive: true });
@@ -633,6 +709,7 @@ function seedGithubBackedTriageFixture(fixtureRoot, epicName, output) {
   const binDir = join(fixtureRoot, 'bin');
   mkdirSync(binDir, { recursive: true });
   const ghWriteLogPath = join(fixtureRoot, 'gh-write-calls.log');
+  const ghWriteArgsLogPath = join(fixtureRoot, 'gh-write-args.jsonl');
   const ghCounterPath = join(fixtureRoot, 'gh-issue-counter.txt');
   writeFileSync(join(binDir, 'gh'), `#!/usr/bin/env bash
 set -euo pipefail
@@ -658,6 +735,7 @@ if [[ "\${1:-}" == "issue" && "\${2:-}" == "list" ]]; then
 fi
 if [[ "\${1:-}" == "issue" && ( "\${2:-}" == "create" || "\${2:-}" == "edit" ) ]]; then
   printf 'WRITE %s %s\n' "\${1:-}" "\${2:-}" >> ${JSON.stringify(ghWriteLogPath)}
+  node -e 'const fs=require("fs"); fs.appendFileSync(process.argv[1], JSON.stringify(process.argv.slice(2))+"\\n")' ${JSON.stringify(ghWriteArgsLogPath)} "$@"
 fi
 if [[ "\${1:-}" == "issue" && "\${2:-}" == "create" ]]; then
   next=101
@@ -675,7 +753,7 @@ fi
 exit 0
 `);
   chmodSync(join(binDir, 'gh'), 0o755);
-  return { ghWriteLogPath };
+  return { ghWriteLogPath, ghWriteArgsLogPath };
 }
 
 async function loadRegisteredTriageCommand() {
@@ -779,6 +857,20 @@ function assertUnconfirmedGithubOutcome(result, expectedReason, scenarioName, fa
 function readWriteCallCount(logPath) {
   if (!existsSync(logPath)) return 0;
   return readFileSync(logPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length;
+}
+
+function readGhWriteCalls(logPath) {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function flagValue(args, flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] ?? null : null;
 }
 
 async function waitFor(check, timeoutMs, errorMessage) {

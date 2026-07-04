@@ -354,7 +354,7 @@
   - _Requirements: FR-6, FR-8_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] P3V1 [VERIFY] GitHub checkpoint: unconfirmed-sync triplet
+- [x] P3V1 [VERIFY] GitHub checkpoint: unconfirmed-sync triplet
   - **Do**:
     1. Re-run the targeted `github-unconfirmed` verifier case immediately after the first GitHub safety triplet.
     2. Keep the source-inspection guard in the implementation task; this checkpoint stays runtime-focused.
@@ -364,6 +364,15 @@
   - **Commit**: `chore(verify): pass unconfirmed GitHub sync checkpoint`
   - _Requirements: FR-6, FR-8; AC-3.1_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
+
+- [x] 3.4.1 Regression test: confirmed sync creates issues with metadata comment and persists epic refs
+  - **Do**:
+    1. Add `github-confirmed-create` verifier case to `scripts/verify-triage-github-sync-parity.mjs`.
+    2. Assert confirmed `ralph-triage --output github-issues --yes` makes 3 mocked `gh issue create` calls, includes the `<!-- ralph-specum:{...} -->` HTML metadata comment in the create payload, and persists epic `issueNumber`, `issueUrl`, and `githubStatus`.
+  - **Files**: `scripts/verify-triage-github-sync-parity.mjs`
+  - **Done when**: `node scripts/verify-triage-github-sync-parity.mjs --case github-confirmed-create` exits 0 and proves metadata-comment create behavior plus persisted epic refs.
+  - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case github-confirmed-create`
+  - **Commit**: `test(github): add confirmed create regression verifier`
 
 - [ ] 3.4 [RED] Failing test: confirmed sync creates issues with metadata comment and persists epic refs
   - **Do**:
