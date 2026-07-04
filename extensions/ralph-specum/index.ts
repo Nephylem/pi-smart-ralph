@@ -8908,7 +8908,27 @@ function normalizeEpicContracts(raw: EpicState | null, epicMarkdown: string): Ep
 	return rawContracts.length > 0 ? rawContracts : parseMarkdownContracts(epicMarkdown);
 }
 
-function normalizeTriageEpicState(epic: CurrentEpic, raw: EpicState | null, parsed: TriageArguments, goal: string, options: RalphPathOptions): EpicState {
+function serializeBranchDecisionForValidation(branchDecision: BranchDecision): Record<string, unknown> {
+	return {
+		mode: branchDecision.mode,
+		currentBranch: typeof branchDecision.currentBranch === "string" ? branchDecision.currentBranch : null,
+		defaultBranch: typeof branchDecision.defaultBranch === "string" ? branchDecision.defaultBranch : null,
+		targetBranch: typeof branchDecision.targetBranch === "string" ? branchDecision.targetBranch : null,
+		worktreePath: typeof branchDecision.worktreePath === "string" ? branchDecision.worktreePath : null,
+		dirty: typeof branchDecision.dirty === "boolean" ? branchDecision.dirty : null,
+		applied: branchDecision.applied,
+		reason: branchDecision.reason,
+	};
+}
+
+function normalizeTriageEpicState(
+	epic: CurrentEpic,
+	raw: EpicState | null,
+	parsed: TriageArguments,
+	goal: string,
+	options: RalphPathOptions,
+	branchDecision: BranchDecision | null = null,
+): EpicState {
 	const epicMarkdown = readFileIfExists(epicMarkdownPath(epic));
 	const rawSpecs = Array.isArray(raw?.specs) ? raw.specs : [];
 	const normalizedRawSpecs = rawSpecs.map((spec, index) => normalizeEpicChildSpec(spec, index, options)).filter((spec): spec is EpicChildSpec => spec !== null);
@@ -8939,6 +8959,7 @@ function normalizeTriageEpicState(epic: CurrentEpic, raw: EpicState | null, pars
 		contracts: normalizeEpicContracts(raw, epicMarkdown),
 		validation: {
 			...(isRecordValue(raw?.validation) ? raw.validation : {}),
+			...(branchDecision ? { branchDecision: serializeBranchDecisionForValidation(branchDecision) } : {}),
 			warnings: [],
 			lastValidatedAt: now,
 		},
@@ -9863,7 +9884,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	}
 
 	const postRunRead = readCompatibleEpicState(epic, options);
-	let state = normalizeTriageEpicState(epic, postRunRead.state, parsed, goal, options);
+	let state = normalizeTriageEpicState(epic, postRunRead.state, parsed, goal, options, branchDecision);
 	let validationErrors = collectTriageValidationErrors(epic, state);
 	state = applyTriageValidation(state, validationErrors);
 	writeEpicState(epic, state, options);

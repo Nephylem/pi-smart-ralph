@@ -558,7 +558,7 @@
   - _Requirements: FR-10, AC-4.1, AC-4.2_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator; `extensions/ralph-specum/start-branch.ts` shared branch safety_
 
-- [ ] 4.3 [YELLOW] Refactor: serialize branch decisions into validation metadata
+- [x] 4.3 [YELLOW] Refactor: serialize branch decisions into validation metadata
   - **Do**:
     1. Persist the serialized branch decision under `validation.branchDecision`.
     2. Keep fresh triage behavior unchanged.
