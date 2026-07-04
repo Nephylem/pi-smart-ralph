@@ -72,7 +72,7 @@ import {
 	type SafeEpicStateRead,
 } from "./epics.ts";
 import { ensureRalphGitignore } from "./gitignore.ts";
-import { decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
+import { applyStartBranchApplication, decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBACK_SAFE_HELP_LINE } from "./feedback.ts";
@@ -9774,9 +9774,6 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	}
 
 	const epic = resolveEpicDirectory(parsed.epicName, options);
-	mkdirSync(epic.absolutePath, { recursive: true });
-	writeCurrentEpic(epic.name, options);
-
 	const existingStateRead = readCompatibleEpicState(epic, options);
 	const stateFileExists = existsSync(epic.statePath);
 	if (stateFileExists && !existingStateRead.state && !parsed.fresh) {
@@ -9786,6 +9783,45 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 
 	let goal = parsed.goal || (typeof existingStateRead.state?.goal === "string" ? existingStateRead.state.goal : "");
 	const shouldDelegate = parsed.fresh || !existsSync(epicMarkdownPath(epic)) || !existingStateRead.state;
+	let branchDecision: BranchDecision | null = null;
+	if (shouldDelegate) {
+		branchDecision = await decideStartBranchBeforeWrites({
+			cwd: options.cwd,
+			specName: epic.name,
+			isNew: shouldDelegate,
+			quickMode: false,
+			autonomousMode: false,
+			dependencies: {
+				ui: ctx.hasUI
+					? async (title, choices) => {
+						const labels = choices.map((choice) => choice.label);
+						const selected = await ctx.ui.select(title, labels);
+						return choices.find((choice) => choice.label === selected) ?? null;
+					}
+					: undefined,
+			},
+		});
+		if (branchDecision.aborted) {
+			await notify(ctx, branchDecision.reason, "warning");
+			return;
+		}
+		if (!ctx.hasUI && parsed.yes) {
+			branchDecision = applyStartBranchApplication(branchDecision, {
+				cwd: options.cwd,
+				specName: epic.name,
+				isNew: shouldDelegate,
+				quickMode: false,
+				autonomousMode: false,
+			});
+			if (!branchDecision.applied && (branchDecision.mode === "create-current-branch" || branchDecision.mode === "use-existing-branch" || branchDecision.mode === "create-worktree")) {
+				await notify(ctx, branchDecision.reason, "warning");
+				return;
+			}
+		}
+	}
+
+	mkdirSync(epic.absolutePath, { recursive: true });
+	writeCurrentEpic(epic.name, options);
 	if (!goal && shouldDelegate && ctx.hasUI) {
 		const inputGoal = await ctx.ui.input("Epic goal", "Describe the large feature you want to build");
 		goal = inputGoal?.trim() ?? "";

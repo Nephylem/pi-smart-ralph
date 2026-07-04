@@ -524,7 +524,7 @@
   - _Requirements: FR-8, FR-9_
   - _Design: `extensions/ralph-specum/index.ts`; `extensions/ralph-specum/github.ts`_
 
-- [ ] Q3 [VERIFY] GitHub checkpoint: idempotency + label handling
+- [x] Q3 [VERIFY] GitHub checkpoint: idempotency + label handling
   - **Do**:
     1. Run the metadata-update and missing-label verifier cases together.
   - **Files**: None
@@ -547,7 +547,7 @@
   - _Requirements: FR-10, AC-4.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/start-branch.ts`; `extensions/ralph-specum/index.ts`_
 
-- [ ] 4.2 [GREEN] Pass test: reuse shared branch decision helper before fresh writes
+- [x] 4.2 [GREEN] Pass test: reuse shared branch decision helper before fresh writes
   - **Do**:
     1. Call `decideStartBranchBeforeWrites(...)` before fresh epic directory/current-epic/initial-file writes.
     2. Support headless record-only behavior unless `--yes` explicitly allows apply.
