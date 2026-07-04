@@ -20,6 +20,7 @@ const cases = new Map([
   ['github-confirmed-create', verifyGithubConfirmedCreate],
   ['github-metadata-update', verifyGithubMetadataUpdate],
   ['github-missing-labels', verifyGithubMissingLabels],
+  ['fresh-branch-safety', verifyFreshBranchSafety],
 ]);
 
 process.on('exit', () => {
@@ -803,6 +804,42 @@ async function verifyGithubMissingLabels() {
   } finally {
     process.env.PATH = originalPath;
   }
+}
+
+async function verifyFreshBranchSafety() {
+  const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
+  const triageStart = indexSource.indexOf('async function runTriageCommand');
+  const postRunRead = indexSource.indexOf('const postRunRead = readCompatibleEpicState(epic, options);', triageStart);
+
+  if (triageStart < 0 || postRunRead < 0) {
+    expectedFail('unable to locate runTriageCommand fresh-triage block for branch-safety inspection');
+  }
+
+  const triageBlock = indexSource.slice(triageStart, postRunRead);
+  const branchDecisionIndex = triageBlock.indexOf('decideStartBranchBeforeWrites(');
+  const mkdirIndex = triageBlock.indexOf("mkdirSync(epic.absolutePath, { recursive: true });");
+  const currentEpicIndex = triageBlock.indexOf('writeCurrentEpic(epic.name, options);');
+  const initialFilesIndex = triageBlock.indexOf('const files = ensureInitialEpicFiles(epic, parsed, goal);');
+  const failures = [];
+
+  if (branchDecisionIndex < 0) {
+    failures.push('runTriageCommand does not call decideStartBranchBeforeWrites(...) in the fresh-triage path');
+  }
+
+  const firstWriteIndex = [mkdirIndex, currentEpicIndex, initialFilesIndex].filter((value) => value >= 0).sort((a, b) => a - b)[0] ?? -1;
+  if (firstWriteIndex < 0) {
+    failures.push('unable to locate fresh-triage write operations (mkdirSync/writeCurrentEpic/ensureInitialEpicFiles)');
+  } else if (branchDecisionIndex >= 0 && branchDecisionIndex > firstWriteIndex) {
+    failures.push('fresh-triage branch decision is recorded after new epic writes start');
+  }
+
+  if (failures.length > 0) {
+    expectedFail(`fresh branch safety parity failed: ${failures.join('; ')}`);
+  }
+
+  return {
+    summary: 'records a shared branch decision before mkdirSync/writeCurrentEpic/ensureInitialEpicFiles in fresh triage',
+  };
 }
 
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {

@@ -536,7 +536,7 @@
 
 ## Phase 4: Fresh branch safety and parity docs
 
-- [ ] 4.1 [RED] Failing test: fresh triage records branch safety before any new epic writes
+- [x] 4.1 [RED] Failing test: fresh triage records branch safety before any new epic writes
   - **Do**:
     1. Add `fresh-branch-safety` verifier case.
     2. Assert fresh triage records a shared branch decision before new epic materialization.
