@@ -481,7 +481,7 @@
   - _Requirements: FR-7_
   - _Design: `extensions/ralph-specum/github.ts` GitHub sync helper_
 
-- [ ] P3V2 [VERIFY] GitHub checkpoint: metadata-lookup triplet
+- [x] P3V2 [VERIFY] GitHub checkpoint: metadata-lookup triplet
   - **Do**:
     1. Re-run the targeted `github-metadata-update` verifier case immediately after the metadata-lookup triplet.
   - **Files**: None
@@ -491,7 +491,7 @@
   - _Requirements: FR-7; AC-3.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
 
-- [ ] 3.10 [RED] Failing test: missing GitHub labels are omitted and recorded as warnings
+- [x] 3.10 [RED] Failing test: missing GitHub labels are omitted and recorded as warnings
   - **Do**:
     1. Add `github-missing-labels` verifier case.
     2. Assert unavailable labels are omitted from mocked `gh` args and recorded in warnings/metadata without auto-creation.

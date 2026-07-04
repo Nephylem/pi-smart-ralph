@@ -19,6 +19,7 @@ const cases = new Map([
   ['github-unconfirmed', verifyGithubUnconfirmed],
   ['github-confirmed-create', verifyGithubConfirmedCreate],
   ['github-metadata-update', verifyGithubMetadataUpdate],
+  ['github-missing-labels', verifyGithubMissingLabels],
 ]);
 
 process.on('exit', () => {
@@ -730,6 +731,78 @@ async function verifyGithubMetadataUpdate() {
   return {
     summary: `updated existing issue ${result.issueNumber} via metadata lookup with ${editCalls.length} gh issue edit call and ${createCalls.length} create calls`,
   };
+}
+
+async function verifyGithubMissingLabels() {
+  const fixtureRoot = createFixtureRoot('github-missing-labels');
+  const epicName = 'demo-epic';
+  const { ghWriteLogPath, ghWriteArgsLogPath } = seedGithubBackedTriageFixture(fixtureRoot, epicName, 'github-issues');
+  const notes = [];
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
+
+  try {
+    const triage = await loadRegisteredTriageCommand();
+    const ctx = createTriageCtx(fixtureRoot, notes);
+
+    await triage.handler(`--output github-issues --yes ${epicName}`, ctx);
+    await sleep(100);
+
+    const failures = [];
+    const epicState = JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8'));
+    const ghWriteCallCount = readWriteCallCount(ghWriteLogPath);
+    const ghWriteCalls = readGhWriteCalls(ghWriteArgsLogPath);
+    const issueWrites = ghWriteCalls.filter((call) => call[0] === 'issue' && (call[1] === 'create' || call[1] === 'edit'));
+    const attachedLabels = issueWrites.flatMap((call) => call.flatMap((arg, index) => (arg === '--label' || arg === '--add-label') ? [call[index + 1] ?? null] : []).filter(Boolean));
+    const expectedSummaryMissingLabels = ['ralph', 'epic', 'spec'];
+    const actualSummaryMissingLabels = epicState.github?.summary?.missingLabels ?? [];
+    const epicMissingLabels = epicState.github?.epicIssue?.result?.missingLabels ?? [];
+    const childAlphaMissingLabels = epicState.github?.childIssues?.['alpha-child']?.result?.missingLabels ?? [];
+    const childBetaMissingLabels = epicState.github?.childIssues?.['beta-child']?.result?.missingLabels ?? [];
+    const githubWarnings = epicState.github?.warnings ?? [];
+
+    if (ghWriteCallCount !== 3) {
+      failures.push(`expected missing-label sync to perform 3 gh issue create/edit calls but got ${ghWriteCallCount}`);
+    }
+
+    if (attachedLabels.length !== 0) {
+      failures.push(`expected unavailable labels to be omitted from gh write args but saw ${JSON.stringify(attachedLabels)}`);
+    }
+
+    if (JSON.stringify(actualSummaryMissingLabels) !== JSON.stringify(expectedSummaryMissingLabels)) {
+      failures.push(`expected github.summary.missingLabels ${JSON.stringify(expectedSummaryMissingLabels)} but got ${JSON.stringify(actualSummaryMissingLabels)}`);
+    }
+
+    if (JSON.stringify(epicMissingLabels) !== JSON.stringify(['ralph', 'epic'])) {
+      failures.push(`expected epic issue result missingLabels ["ralph","epic"] but got ${JSON.stringify(epicMissingLabels)}`);
+    }
+
+    if (JSON.stringify(childAlphaMissingLabels) !== JSON.stringify(['ralph', 'spec'])) {
+      failures.push(`expected alpha-child missingLabels ["ralph","spec"] but got ${JSON.stringify(childAlphaMissingLabels)}`);
+    }
+
+    if (JSON.stringify(childBetaMissingLabels) !== JSON.stringify(['ralph', 'spec'])) {
+      failures.push(`expected beta-child missingLabels ["ralph","spec"] but got ${JSON.stringify(childBetaMissingLabels)}`);
+    }
+
+    if (!Array.isArray(githubWarnings) || githubWarnings.length === 0 || !githubWarnings.some((warning) => /missing label/i.test(String(warning)))) {
+      failures.push(`expected github.warnings to record missing-label warnings but got ${JSON.stringify(githubWarnings)}`);
+    }
+
+    if (notes.some(({ message }) => /label create|auto-create/i.test(String(message)))) {
+      failures.push(`expected missing-label sync to avoid auto-create messaging but got ${JSON.stringify(notes.map(({ message }) => message))}`);
+    }
+
+    if (failures.length > 0) {
+      expectedFail(`missing-label parity failed: ${failures.join('; ')}`);
+    }
+
+    return {
+      summary: `omitted ${attachedLabels.length} unavailable gh labels while recording ${actualSummaryMissingLabels.length} missing labels`,
+    };
+  } finally {
+    process.env.PATH = originalPath;
+  }
 }
 
 function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
