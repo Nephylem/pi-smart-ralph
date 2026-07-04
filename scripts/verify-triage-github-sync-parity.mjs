@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ const cases = new Map([
   ['minimal-state-load', verifyMinimalStateLoad],
   ['minimal-state-repair', verifyMinimalStateRepair],
   ['minimal-state-validation-boundary', verifyMinimalStateValidationBoundary],
+  ['output-spec-files', verifyOutputSpecFiles],
 ]);
 
 process.on('exit', () => {
@@ -116,6 +117,10 @@ function expectedFail(message) {
 
 async function loadEpicsModule() {
   return import(new URL('../extensions/ralph-specum/epics.ts', import.meta.url));
+}
+
+async function loadRalphSpecumExtension() {
+  return import(new URL('../extensions/ralph-specum/index.ts', import.meta.url));
 }
 
 async function verifyMinimalStateLoad() {
@@ -241,6 +246,161 @@ async function verifyMinimalStateValidationBoundary() {
   }
 
   return { summary: 'minimal fixture reaches normalization before strict validation' };
+}
+
+async function verifyOutputSpecFiles() {
+  const fixtureRoot = createFixtureRoot('output-spec-files');
+  const epicName = 'demo-epic';
+  const ghWriteLogPath = seedSpecFilesTriageFixture(fixtureRoot, epicName);
+  const notes = [];
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${join(fixtureRoot, 'bin')}:${originalPath ?? ''}`;
+
+  try {
+    const extensionModule = await loadRalphSpecumExtension();
+    const commands = new Map();
+    const pi = {
+      registerCommand(name, config) {
+        commands.set(name, config);
+      },
+      on() {},
+    };
+    extensionModule.default(pi);
+
+    const triage = commands.get('ralph-triage');
+    if (!triage?.handler) {
+      expectedFail('ralph-specum extension did not register a runnable ralph-triage command handler');
+    }
+
+    const ctx = {
+      cwd: fixtureRoot,
+      hasUI: true,
+      waitForIdle: async () => {},
+      ui: {
+        notify(message, type) {
+          notes.push({ message, type });
+        },
+        setStatus() {},
+        setFooter() {},
+        setWidget() {},
+      },
+    };
+
+    await triage.handler(epicName, ctx);
+
+    const childNames = ['alpha-child', 'beta-child'];
+    await waitFor(
+      () => childNames.every((name) => existsSync(join(fixtureRoot, 'specs', name, 'plan.md'))),
+      5000,
+      'timed out waiting for triage to materialize child spec plans',
+    );
+    await sleep(100);
+
+    const failures = [];
+    const childArtifacts = childNames.map((name) => ({
+      name,
+      planPath: join(fixtureRoot, 'specs', name, 'plan.md'),
+      progressPath: join(fixtureRoot, 'specs', name, '.progress.md'),
+      statePath: join(fixtureRoot, 'specs', name, '.ralph-state.json'),
+    }));
+
+    for (const artifact of childArtifacts) {
+      if (!existsSync(artifact.planPath)) failures.push(`expected plan.md for ${artifact.name}`);
+      if (!existsSync(artifact.progressPath)) failures.push(`expected .progress.md for ${artifact.name}`);
+      if (!existsSync(artifact.statePath)) failures.push(`expected .ralph-state.json for ${artifact.name}`);
+    }
+
+    const epicState = JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8'));
+    if (epicState.output !== 'spec-files') {
+      failures.push(`expected triage to persist output spec-files but got ${JSON.stringify(epicState.output)}`);
+    }
+
+    const ghWriteCallCount = readWriteCallCount(ghWriteLogPath);
+    if (ghWriteCallCount !== 0) {
+      failures.push(`expected spec-files triage to perform 0 gh issue create/edit calls but got ${ghWriteCallCount}`);
+    }
+
+    if (notes.some(({ message }) => /GitHub issues/i.test(String(message)))) {
+      failures.push('spec-files triage unexpectedly announced a GitHub sync phase');
+    }
+
+    if (failures.length > 0) {
+      expectedFail(`spec-files triage parity failed: ${failures.join('; ')}`);
+    }
+
+    return { summary: `materialized ${childArtifacts.length} child specs with ${ghWriteCallCount} gh issue create/edit calls` };
+  } finally {
+    process.env.PATH = originalPath;
+  }
+}
+
+function seedSpecFilesTriageFixture(fixtureRoot, epicName) {
+  const epicDir = join(fixtureRoot, 'specs', '_epics', epicName);
+  mkdirSync(epicDir, { recursive: true });
+  writeFileSync(join(epicDir, 'epic.md'), [
+    `# Epic: ${epicName}`,
+    '',
+    '## Specs',
+    '',
+    '### Spec 1: alpha-child',
+    '**Goal**: Materialize the alpha child plan.',
+    '**Dependencies**: None',
+    '',
+    '### Spec 2: beta-child',
+    '**Goal**: Materialize the beta child plan.',
+    '**Dependencies**: alpha-child',
+    '',
+  ].join('\n'));
+  writeFileSync(join(epicDir, '.epic-state.json'), `${JSON.stringify({
+    name: epicName,
+    goal: 'Materialize child spec artifacts only',
+    output: 'spec-files',
+    specs: [
+      {
+        name: 'alpha-child',
+        goal: 'Materialize the alpha child plan.',
+        status: 'pending',
+        dependencies: [],
+      },
+      {
+        name: 'beta-child',
+        goal: 'Materialize the beta child plan.',
+        status: 'pending',
+        dependencies: ['alpha-child'],
+      },
+    ],
+  }, null, 2)}\n`);
+
+  const binDir = join(fixtureRoot, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const ghWriteLogPath = join(fixtureRoot, 'gh-write-calls.log');
+  writeFileSync(join(binDir, 'gh'), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == *"issue create"* || "$*" == *"issue edit"* ]]; then
+  printf '%s\n' "$*" >> ${JSON.stringify(ghWriteLogPath)}
+fi
+exit 0
+`);
+  chmodSync(join(binDir, 'gh'), 0o755);
+  return ghWriteLogPath;
+}
+
+function readWriteCallCount(logPath) {
+  if (!existsSync(logPath)) return 0;
+  return readFileSync(logPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length;
+}
+
+async function waitFor(check, timeoutMs, errorMessage) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await sleep(50);
+  }
+  throw new Error(errorMessage);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function seedMinimalEpicStateFixture(fixtureRoot, epicName) {

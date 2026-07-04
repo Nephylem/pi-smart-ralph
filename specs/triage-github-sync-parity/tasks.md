@@ -121,7 +121,7 @@
   - _Requirements: FR-1, FR-2, FR-8_
   - _Design: `extensions/ralph-specum/epics.ts`; `extensions/ralph-specum/index.ts`_
 
-- [ ] V2 [VERIFY] Compatibility checkpoint: validation boundary
+- [x] V2 [VERIFY] Compatibility checkpoint: validation boundary
   - **Do**:
     1. Re-run the compatibility boundary case after the refactor.
   - **Files**: None
@@ -133,7 +133,7 @@
 
 ## Phase 2: Output-mode parity
 
-- [ ] 2.1 [RED] Failing test: `spec-files` output writes child spec artifacts only
+- [x] 2.1 [RED] Failing test: `spec-files` output writes child spec artifacts only
   - **Do**:
     1. Add `output-spec-files` verifier case.
     2. Assert child spec artifacts are written and mocked `gh issue create/edit` call count stays 0.
@@ -143,6 +143,15 @@
   - **Commit**: `test(triage): red - failing test for spec-files output`
   - _Requirements: FR-3, AC-2.1_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `extensions/ralph-specum/index.ts` triage coordinator_
+
+- [x] 2.1.1 Regression test: `spec-files` output writes child spec artifacts only
+  - **Do**:
+    1. Add `output-spec-files` verifier case.
+    2. Assert child spec artifacts are written and mocked `gh issue create/edit` call count stays 0.
+  - **Files**: `scripts/verify-triage-github-sync-parity.mjs`
+  - **Done when**: Verifier case exists and passes against the current runtime behavior.
+  - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case output-spec-files`
+  - **Commit**: `test(triage): cover spec-files output parity`
 
 - [ ] 2.2 [GREEN] Pass test: keep `spec-files` output off the GitHub path
   - **Do**:
