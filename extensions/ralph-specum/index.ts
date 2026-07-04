@@ -9309,30 +9309,28 @@ function skippedChildGithubSyncs(state: EpicState, dryRuns: GithubIssueSyncResul
 	});
 }
 
+function mapGithubSyncFields(
+	current: { issueNumber?: unknown; issueUrl?: unknown },
+	result: GithubIssueSyncResult,
+	repository: GithubRepository,
+): { issueNumber: number | null; issueUrl: string | null; githubStatus: GithubIssueSyncResult["action"] } {
+	return {
+		issueNumber: result.issueNumber ?? issueNumberOrNull(current.issueNumber),
+		issueUrl: githubIssueUrl(result, repository) ?? (typeof current.issueUrl === "string" ? current.issueUrl : null),
+		githubStatus: result.action,
+	};
+}
+
 function applyEpicGithubResult(state: EpicState, result: GithubIssueSyncResult, repository: GithubRepository, now: string): EpicState {
-	const issueNumber = result.issueNumber ?? issueNumberOrNull(state.issueNumber);
-	const issueUrl = githubIssueUrl(result, repository) ?? (typeof state.issueUrl === "string" ? state.issueUrl : null);
 	return {
 		...state,
-		issueNumber,
-		issueUrl,
-		githubStatus: result.action,
+		...mapGithubSyncFields(state, result, repository),
 		updatedAt: now,
 	};
 }
 
 function applyChildGithubResult(state: EpicState, specName: string, result: GithubIssueSyncResult, repository: GithubRepository, now: string): EpicState {
-	const specs = state.specs.map((spec) => {
-		if (spec.name !== specName) return spec;
-		const issueNumber = result.issueNumber ?? issueNumberOrNull(spec.issueNumber);
-		const issueUrl = githubIssueUrl(result, repository) ?? (typeof spec.issueUrl === "string" ? spec.issueUrl : null);
-		return {
-			...spec,
-			issueNumber,
-			issueUrl,
-			githubStatus: result.action,
-		};
-	});
+	const specs = state.specs.map((spec) => (spec.name === specName ? { ...spec, ...mapGithubSyncFields(spec, result, repository) } : spec));
 	return { ...state, specs, updatedAt: now };
 }
 

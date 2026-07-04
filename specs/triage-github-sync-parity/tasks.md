@@ -405,7 +405,7 @@
   - _Requirements: FR-6, FR-7, FR-8; AC-3.2_
   - _Design: `extensions/ralph-specum/github.ts` GitHub sync helper; `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] 3.6 [YELLOW] Refactor: extract sync-result mapping into one state updater
+- [x] 3.6 [YELLOW] Refactor: extract sync-result mapping into one state updater
   - **Do**:
     1. Reduce duplicate issue-result to epic-state mapping logic.
     2. Preserve create-path behavior.
