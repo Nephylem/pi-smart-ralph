@@ -591,7 +591,7 @@
   - _Requirements: FR-11, FR-12; AC-4.3, AC-5.1, AC-5.2, AC-5.3_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`; `README.md` parity docs_
 
-- [ ] 4.5 [GREEN] Pass test: publish README triage parity matrix and contract docs
+- [x] 4.5 [GREEN] Pass test: publish README triage parity matrix and contract docs
   - **Do**:
     1. Add one README triage parity section with the required matrix rows.
     2. Add the exact headless sentence, state-authority phrases, contract field lists, and downstream consumer names.
