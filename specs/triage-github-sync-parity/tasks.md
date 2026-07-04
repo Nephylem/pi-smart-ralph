@@ -228,7 +228,7 @@
   - _Requirements: FR-3, FR-4_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] V3 [VERIFY] Output-mode checkpoint: `spec-files` + `github-issues`
+- [x] V3 [VERIFY] Output-mode checkpoint: `spec-files` + `github-issues`
   - **Do**:
     1. Run the targeted output-mode verifier cases.
   - **Files**: None
@@ -238,7 +238,16 @@
   - _Requirements: FR-3, FR-4; AC-2.1, AC-2.2_
   - _Design: `scripts/verify-triage-github-sync-parity.mjs`_
 
-- [ ] 2.7 [RED] Failing test: `both` output cross-links child plans and issue metadata
+- [x] 2.7.2 Reconcile superseded RED task bookkeeping
+  - **Do**:
+    1. Mark original task 2.7 as superseded by 2.7.1 in `tasks.md` without claiming false RED evidence.
+    2. Preserve 2.7.1 as the truthful regression-test replacement for AC-2.3.
+  - **Files**: `specs/triage-github-sync-parity/tasks.md`, `specs/triage-github-sync-parity/.progress.md`
+  - **Done when**: Task list no longer requires impossible RED completion for behavior already proven green, and progress notes record that 2.7 was superseded by 2.7.1.
+  - **Verify**: `grep -n '2.7 \[RED\]\|2.7.1 Regression test\|superseded' specs/triage-github-sync-parity/tasks.md specs/triage-github-sync-parity/.progress.md`
+  - **Commit**: `docs(triage): reconcile superseded both-output red task`
+
+- [x] 2.7 [RED] Failing test: `both` output cross-links child plans and issue metadata (superseded by 2.7.1; behavior already proven green)
   - **Do**:
     1. Add `output-both` verifier case.
     2. Assert child `plan.md` stubs include GitHub references only after confirmed sync metadata exists.
