@@ -2273,14 +2273,26 @@ function isRecordValue(value: unknown): value is Record<string, unknown> {
 
 function parseTaskBodyFields(bodyLines: string[]): Record<string, string> {
 	const fields: Record<string, string> = {};
+	const knownFields = new Set([
+		"do",
+		"files",
+		"done when",
+		"verify",
+		"commit",
+		"requirements",
+		"design",
+	]);
 	let currentField: string | undefined;
 
 	for (const line of bodyLines) {
-		const fieldMatch = line.match(/^\s*-\s*\*\*([^*]+)\*\*:\s*(.*)$/);
+		const fieldMatch = line.match(/^\s*(?:-\s*)?(?:\*\*)?([^:*]+?)(?:\*\*)?:\s*(.*)$/);
 		if (fieldMatch) {
-			currentField = fieldMatch[1].trim().toLowerCase();
-			fields[currentField] = fieldMatch[2].trim();
-			continue;
+			const candidateField = fieldMatch[1].trim().toLowerCase();
+			if (knownFields.has(candidateField)) {
+				currentField = candidateField;
+				fields[currentField] = fieldMatch[2].trim();
+				continue;
+			}
 		}
 
 		if (currentField && line.trim()) {
@@ -4686,12 +4698,16 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 			},
 			render() {
 				const now = Date.now();
-				const records = [...readActiveSubagentRecords(), ...readLingeringSubagentRecords(now)];
+				const lingering = readLingeringSubagentRecords(now);
+				const active = readActiveSubagentRecords();
+				const visibleActive = active.slice(-RALPH_SUBAGENT_WIDGET_MAX_LINES);
+				const visibleLingering = lingering.slice(0, Math.max(0, RALPH_SUBAGENT_WIDGET_MAX_LINES - visibleActive.length));
+				const records = [...visibleLingering, ...visibleActive];
 				hadVisible = records.length > 0;
 				if (records.length === 0) return [];
 				const width = tui.terminal.columns;
 				const frame = RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES[Math.floor(now / RALPH_SUBAGENT_STATUS_INTERVAL_MS) % RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES.length] ?? "⠋";
-				return records.slice(0, RALPH_SUBAGENT_WIDGET_MAX_LINES).map((record) => truncateToWidth(formatSubagentWidgetLine(record, frame, theme), width, "…"));
+				return records.map((record) => truncateToWidth(formatSubagentWidgetLine(record, frame, theme), width, "…"));
 			},
 		};
 	}, { placement: "aboveEditor" });
@@ -6370,7 +6386,13 @@ function handleTaskModificationRequest(
 
 		const taskData = readImplementationTasks(spec);
 		const existingTaskIds = new Set(taskData.tasks.map((entry) => entry.taskNumber).filter((value): value is string => typeof value === "string" && value.trim().length > 0));
-		const requiredFields = ["Do", "Files", "Done when", "Verify", "Commit"];
+		const requiredFields = [
+			{ key: "do", label: "Do" },
+			{ key: "files", label: "Files" },
+			{ key: "done when", label: "Done when" },
+			{ key: "verify", label: "Verify" },
+			{ key: "commit", label: "Commit" },
+		] as const;
 		const proposedParsed = request.proposedTasks.map((block, index) => {
 			const parsedTasks = parseTasksForNativeCards(block.trim());
 			if (parsedTasks.length !== 1) throw new Error(`Proposed task ${index + 1} must be a single checkbox task block.`);
@@ -6382,7 +6404,7 @@ function handleTaskModificationRequest(
 				throw new Error(`Proposed task id ${parsedTask.taskNumber} exceeds max modification depth ${maxModificationDepth}.`);
 			}
 			for (const field of requiredFields) {
-				if (!parsedTask.fields[field]) throw new Error(`Proposed task ${parsedTask.taskNumber} is missing required field: ${field}.`);
+				if (!parsedTask.fields[field.key]) throw new Error(`Proposed task ${parsedTask.taskNumber} is missing required field: ${field.label}.`);
 			}
 			return parsedTask;
 		});
@@ -7099,6 +7121,25 @@ function appendImplementationBlocker(
 	);
 }
 
+function appendImplementationRetry(
+	spec: SpecEntry,
+	task: ParsedNativeTask,
+	reason: string,
+	options: RalphPathOptions,
+): void {
+	appendProgress(
+		spec,
+		[
+			"",
+			`### Implementation retry (${new Date().toISOString()})`,
+			`- Task: ${task.index + 1} ${task.subject}`,
+			`- Reason: ${reason}`,
+			"",
+		].join("\n"),
+		options,
+	);
+}
+
 function formatBlockerMessage(spec: SpecEntry, task: ParsedNativeTask | null, reason: string): string {
 	return [
 		`Ralph implementation blocked for spec: ${spec.name}`,
@@ -7153,26 +7194,37 @@ function implementationAttemptPatch(
 	};
 }
 
+function persistImplementationBlockedState(
+	spec: SpecEntry,
+	reason: string,
+	options: RalphPathOptions,
+	extraPatch: Record<string, unknown> = {},
+): void {
+	mergeRalphState(
+		spec,
+		{
+			phase: "execution",
+			blocked: true,
+			blockedAt: new Date().toISOString(),
+			validationError: reason,
+			awaitingApproval: false,
+			...extraPatch,
+		},
+		options,
+	);
+}
+
 async function blockImplementation(
 	ctx: ExtensionCommandContext,
 	spec: SpecEntry,
 	task: ParsedNativeTask | null,
 	reason: string,
 	options: RalphPathOptions,
+	extraPatch: Record<string, unknown> = {},
 ): Promise<void> {
 	try {
 		appendImplementationBlocker(spec, task, reason, options);
-		mergeRalphState(
-			spec,
-			{
-				phase: "execution",
-				blocked: true,
-				blockedAt: new Date().toISOString(),
-				validationError: reason,
-				awaitingApproval: false,
-			},
-			options,
-		);
+		persistImplementationBlockedState(spec, reason, options, extraPatch);
 	} catch {
 		// The blocker notification below is the primary user-facing error.
 	}
@@ -7497,22 +7549,14 @@ async function runImplementCommand(
 				if (modificationResult.present) {
 					if (!modificationResult.applied) {
 						const reason = modificationResult.error ?? validation.error ?? "Task modification request could not be applied.";
-						appendImplementationBlocker(spec, task, reason, options);
-						state = mergeRalphState(
-							spec,
-							{
-								phase: "execution",
-								taskIndex: task.index,
-								totalTasks: tasks.length,
-								taskIteration,
-								globalIteration: globalIteration + 1,
-								blocked: true,
-								validationError: reason,
-								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
-							},
-							options,
-						);
-						await notify(ctx, formatBlockerMessage(spec, task, reason), "warning");
+						const blockerPatch = {
+							taskIndex: task.index,
+							totalTasks: tasks.length,
+							taskIteration,
+							globalIteration: globalIteration + 1,
+							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+						};
+						await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
 						return;
 					}
 					state = modificationResult.state ?? state;
@@ -7522,26 +7566,33 @@ async function runImplementCommand(
 
 				setTaskCheckboxStatus(spec, task.index, false);
 				const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
-				appendImplementationBlocker(spec, task, reason, options);
 				const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
+				if (exhausted) {
+					const blockerPatch = {
+						taskIndex: task.index,
+						totalTasks: tasks.length,
+						taskIteration,
+						globalIteration: globalIteration + 1,
+						lastSubagentOutput: truncateForPrompt(validation.output, 6000),
+					};
+					await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
+					return;
+				}
+				appendImplementationRetry(spec, task, reason, options);
 				state = mergeRalphState(
 					spec,
 					{
 						phase: "execution",
 						taskIndex: task.index,
 						totalTasks: tasks.length,
-						taskIteration: exhausted ? taskIteration : taskIteration + 1,
+						taskIteration: taskIteration + 1,
 						globalIteration: globalIteration + 1,
-						blocked: exhausted,
+						blocked: false,
 						validationError: reason,
 						lastSubagentOutput: truncateForPrompt(validation.output, 6000),
 					},
 					options,
 				);
-				if (exhausted) {
-					await notify(ctx, formatBlockerMessage(spec, task, reason), "warning");
-					return;
-				}
 				continue;
 			}
 
@@ -7647,6 +7698,23 @@ type TriageGithubSyncResult = {
 	updated: number;
 	warnings: string[];
 	skippedReason?: string;
+};
+
+type TriageGithubConfirmation =
+	| { confirmed: true; confirmedBy: "--yes" | "pi-ui" }
+	| {
+			confirmed: false;
+			confirmedBy: "not-confirmed";
+			githubStatus: "confirmation_required";
+			reason: string;
+	  };
+
+type TriageGithubSkipState = {
+	githubStatus: "unavailable" | "confirmation_required";
+	confirmedBy: "not-confirmed";
+	skippedReason: string;
+	warnings: string[];
+	children: TriageGithubChildSync[];
 };
 
 const TRIAGE_AGENT = "ralph-triage-analyst";
@@ -8967,7 +9035,7 @@ function buildChildPlan(epic: CurrentEpic, state: EpicState, spec: EpicChildSpec
 		"",
 		`Epic: ${epicDisplayPath(epic, "epic.md")}`,
 		`Epic State: ${epicDisplayPath(epic, ".epic-state.json")}`,
-		...(githubIssue ? [`GitHub Issue: ${githubIssue}`] : []),
+		...(githubIssue.planLine ? [githubIssue.planLine] : []),
 		"",
 		"## Goal",
 		spec.goal || "_No goal captured._",
@@ -9192,12 +9260,14 @@ async function confirmTriageGithubWrites(
 	parsed: TriageArguments,
 	repository: GithubRepository,
 	dryRuns: GithubIssueSyncResult[],
-): Promise<{ confirmed: boolean; reason?: string }> {
-	if (parsed.yes) return { confirmed: true };
+): Promise<TriageGithubConfirmation> {
+	if (parsed.yes) return { confirmed: true, confirmedBy: "--yes" };
 
 	if (!ctx.hasUI) {
 		return {
 			confirmed: false,
+			confirmedBy: "not-confirmed",
+			githubStatus: "confirmation_required",
 			reason: "GitHub issue output requires Pi UI confirmation or --yes in noninteractive mode; no GitHub issues were created.",
 		};
 	}
@@ -9216,7 +9286,27 @@ async function confirmTriageGithubWrites(
 			"Choose OK only if you want Smart Ralph to write or update these GitHub issues now.",
 		].join("\n"),
 	);
-	return confirmed ? { confirmed: true } : { confirmed: false, reason: "User cancelled GitHub issue creation; no GitHub issues were created." };
+	return confirmed
+		? { confirmed: true, confirmedBy: "pi-ui" }
+		: {
+				confirmed: false,
+				confirmedBy: "not-confirmed",
+				githubStatus: "confirmation_required",
+				reason: "User cancelled GitHub issue creation; no GitHub issues were created.",
+		  };
+}
+
+function skippedChildGithubSyncs(state: EpicState, dryRuns: GithubIssueSyncResult[], repository: GithubRepository | undefined): TriageGithubChildSync[] {
+	return state.specs.map((spec, index) => {
+		const dryRun = dryRuns[index + 1];
+		return {
+			specName: spec.name,
+			result: dryRun,
+			status: dryRun.action,
+			issueNumber: dryRun.issueNumber,
+			issueUrl: githubIssueUrl(dryRun, repository),
+		};
+	});
 }
 
 function applyEpicGithubResult(state: EpicState, result: GithubIssueSyncResult, repository: GithubRepository, now: string): EpicState {
@@ -9353,6 +9443,28 @@ function githubSyncSummaryStatus(children: TriageGithubChildSync[], warnings: st
 	return children.some((child) => child.status === "failed") || warnings.some((warning) => /^Failed to sync/i.test(warning)) ? "failed" : "synced";
 }
 
+function persistSkippedGithubSync(
+	state: EpicState,
+	repository: GithubRepository | undefined,
+	detection: GithubDetection,
+	now: string,
+	skip: TriageGithubSkipState,
+): { state: EpicState; summary: TriageGithubSyncResult } {
+	const summary: TriageGithubSyncResult = {
+		status: "skipped",
+		repository,
+		children: skip.children,
+		created: 0,
+		updated: 0,
+		warnings: skip.warnings,
+		skippedReason: skip.skippedReason,
+	};
+	return {
+		state: withGithubMetadata({ ...state, githubStatus: skip.githubStatus }, repository, summary, detection, now, skip.confirmedBy),
+		summary,
+	};
+}
+
 async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicState, parsed: TriageArguments): Promise<{ state: EpicState; summary: TriageGithubSyncResult }> {
 	setRalphStatus(ctx, `Ralph triage: checking GitHub CLI and repository`);
 	const detection = detectGithub({ cwd: ctx.cwd });
@@ -9362,17 +9474,13 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 
 	if (!detection.ready || !repository) {
 		const skippedReason = "GitHub CLI, repository, or auth is not ready; no GitHub issues were created.";
-		const summary: TriageGithubSyncResult = {
-			status: "skipped",
-			repository,
-			children: [],
-			created: 0,
-			updated: 0,
-			warnings: detectionWarnings.length > 0 ? detectionWarnings : [skippedReason],
+		return persistSkippedGithubSync(state, repository, detection, now, {
+			githubStatus: "unavailable",
+			confirmedBy: "not-confirmed",
 			skippedReason,
-		};
-		const nextState = withGithubMetadata({ ...state, githubStatus: "unavailable" }, repository, summary, detection, now, "not-confirmed");
-		return { state: nextState, summary };
+			warnings: detectionWarnings.length > 0 ? detectionWarnings : [skippedReason],
+			children: [],
+		});
 	}
 
 	const commonOptions = {
@@ -9388,26 +9496,13 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 	setRalphStatus(ctx, `Ralph triage: awaiting GitHub issue confirmation`);
 	const confirmation = await confirmTriageGithubWrites(ctx, parsed, repository, dryRuns);
 	if (!confirmation.confirmed) {
-		const summary: TriageGithubSyncResult = {
-			status: "skipped",
-			repository,
-			children: state.specs.map((spec, index) => {
-				const dryRun = dryRuns[index + 1];
-				return {
-					specName: spec.name,
-					result: dryRun,
-					status: dryRun.action,
-					issueNumber: dryRun.issueNumber,
-					issueUrl: githubIssueUrl(dryRun, repository),
-				};
-			}),
-			created: 0,
-			updated: 0,
-			warnings: unique([...detectionWarnings, confirmation.reason ?? "GitHub issue creation was not confirmed."]),
+		return persistSkippedGithubSync(state, repository, detection, now, {
+			githubStatus: confirmation.githubStatus,
+			confirmedBy: confirmation.confirmedBy,
 			skippedReason: confirmation.reason,
-		};
-		const nextState = withGithubMetadata({ ...state, githubStatus: "confirmation_required" }, repository, summary, detection, now, "not-confirmed");
-		return { state: nextState, summary };
+			warnings: unique([...detectionWarnings, confirmation.reason]),
+			children: skippedChildGithubSyncs(state, dryRuns, repository),
+		});
 	}
 
 	setRalphStatus(ctx, `Ralph triage: creating/updating GitHub issues`);
@@ -9428,7 +9523,7 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 			updated: 0,
 			warnings: unique(warnings),
 		};
-		return { state: withGithubMetadata({ ...nextState, githubStatus: "failed" }, repository, summary, detection, now, parsed.yes ? "--yes" : "pi-ui"), summary };
+		return { state: withGithubMetadata({ ...nextState, githubStatus: "failed" }, repository, summary, detection, now, confirmation.confirmedBy), summary };
 	}
 
 	const children: TriageGithubChildSync[] = [];
@@ -9462,7 +9557,7 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 		updated: issueResults.filter((result) => result.action === "updated").length,
 		warnings: unique(warnings),
 	};
-	return { state: withGithubMetadata(nextState, repository, summary, detection, now, parsed.yes ? "--yes" : "pi-ui"), summary };
+	return { state: withGithubMetadata(nextState, repository, summary, detection, now, confirmation.confirmedBy), summary };
 }
 
 function formatTriageSummary(

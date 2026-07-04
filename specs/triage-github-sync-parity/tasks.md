@@ -343,7 +343,7 @@
   - _Requirements: FR-6, FR-8; AC-3.1_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator; `extensions/ralph-specum/github.ts` GitHub sync helper_
 
-- [ ] 3.3 [YELLOW] Refactor: consolidate skipped-sync metadata persistence
+- [x] 3.3 [YELLOW] Refactor: consolidate skipped-sync metadata persistence
   - **Do**:
     1. Centralize skipped-reason and confirmation outcome mapping.
     2. Preserve unconfirmed behavior.
