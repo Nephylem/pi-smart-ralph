@@ -290,7 +290,7 @@
   - _Requirements: FR-3, FR-5_
   - _Design: `extensions/ralph-specum/index.ts` triage coordinator_
 
-- [ ] Q1 [VERIFY] Output-mode checkpoint: `both` end-to-end fixture flow
+- [x] Q1 [VERIFY] Output-mode checkpoint: `both` end-to-end fixture flow
   - **Do**:
     1. Re-run the `both` fixture case after the output-mode refactor.
   - **Files**: None
@@ -312,7 +312,16 @@
   - **Verify**: `node scripts/verify-triage-github-sync-parity.mjs --case github-unconfirmed`
   - **Commit**: `test(github): add unconfirmed sync regression verifier`
 
-- [ ] 3.1 [RED] Failing test: unconfirmed GitHub sync records skip and performs no remote writes
+- [x] 3.1.2 Reconcile superseded RED task bookkeeping
+  - **Do**:
+    1. Mark task 3.1 as superseded by 3.1.1 in `tasks.md` without claiming false RED evidence.
+    2. Record in `.progress.md` that `github-unconfirmed` now passes and 3.1 was replaced by regression task 3.1.1.
+  - **Files**: `specs/triage-github-sync-parity/tasks.md`, `specs/triage-github-sync-parity/.progress.md`
+  - **Done when**: `tasks.md` preserves the completed 3.1.1 regression task and clearly records 3.1 as superseded/bookkept rather than left as an impossible pending RED task.
+  - **Verify**: `grep -n '3.1 \[RED\]\|3.1.1 Regression test\|superseded' specs/triage-github-sync-parity/tasks.md specs/triage-github-sync-parity/.progress.md`
+  - **Commit**: `chore(tasks): reconcile superseded unconfirmed-sync red task`
+
+- [x] 3.1 [RED] Failing test: unconfirmed GitHub sync records skip and performs no remote writes (superseded by 3.1.1; behavior already proven green)
   - **Do**:
     1. Add `github-unconfirmed` verifier case.
     2. Assert headless runs without `--yes` and interactive cancellation perform 0 mocked `gh issue create/edit` calls and record a skipped reason.
