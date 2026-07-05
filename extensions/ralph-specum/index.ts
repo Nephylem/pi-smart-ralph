@@ -80,10 +80,12 @@ import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completi
 import {
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
+	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+	implementationNativeTaskMapFromState,
 	recordImplementationTaskEvidence,
 	validateImplementationExecutionState,
 } from "./implementation-loop.ts";
@@ -2438,19 +2440,6 @@ function assignNativeTaskDependencies(tasks: ParsedNativeTask[]): void {
 	}
 }
 
-function nativeTaskMapFromState(state: RalphState | null): Record<string, string> {
-	const value = state?.nativeTaskMap;
-	if (!isRecordValue(value)) return {};
-
-	const map: Record<string, string> = {};
-	for (const [key, taskId] of Object.entries(value)) {
-		if (typeof taskId === "string" && taskId.trim()) {
-			map[key] = taskId.trim();
-		}
-	}
-	return map;
-}
-
 function activeToolDependencyError(pi: ExtensionAPI, tools: readonly string[], commandName: string, packageHint: string): string | null {
 	const registry = getToolRegistryState(pi);
 	if (registry.allError) {
@@ -2880,7 +2869,7 @@ function mirrorTasksToNativeTaskCards(
 	const parsedTasks = parseTasksForNativeCards(readFileSync(tasksPath, "utf8"));
 	if (parsedTasks.length === 0) throw new Error("Cannot mirror tasks.md because no checkbox tasks were parsed.");
 
-	const previousMap = nativeTaskMapFromState(readRalphState(spec, options));
+	const previousMap = implementationNativeTaskMapFromState(readRalphState(spec, options));
 	const result = withNativeTaskStore(storePath.path, (data) => applyNativeTaskMirror(data, parsedTasks, previousMap, spec, tasksPath));
 	result.storePath = storePath.path;
 	showMirroredNativeTaskWidget(ctx, result.cards);
@@ -6542,9 +6531,10 @@ function nativeTaskRepairReason(
 	state: RalphState | null,
 	tasks: ParsedNativeTask[],
 ): string | null {
-	const map = nativeTaskMapFromState(state);
-	if (tasks.some((task) => !map[task.checkboxKey])) return "missing native task mapping";
+	const baseReason = getImplementationNativeTaskRepairReason(state, tasks);
+	if (baseReason) return baseReason;
 
+	const map = implementationNativeTaskMapFromState(state);
 	const storePath = resolveNativeTaskStorePath(ctx);
 	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
 	const store = readNativeTaskStore(storePath.path);
@@ -6559,7 +6549,7 @@ function nativeTaskRepairReason(
 }
 
 function syncNativeCardsFromTasks(ctx: ExtensionCommandContext, state: RalphState | null, tasks: ParsedNativeTask[]): void {
-	const map = nativeTaskMapFromState(state);
+	const map = implementationNativeTaskMapFromState(state);
 	if (Object.keys(map).length === 0) return;
 	const storePath = resolveNativeTaskStorePath(ctx);
 	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
@@ -6608,7 +6598,7 @@ function setNativeTaskExecutionStatus(
 	status: NativeTaskStatus,
 	metadata: Record<string, unknown>,
 ): NativeExecutionUpdate {
-	const map = nativeTaskMapFromState(state);
+	const map = implementationNativeTaskMapFromState(state);
 	const taskId = map[task.checkboxKey];
 	if (!taskId) throw new Error(`No native pi-task mapping found for task ${task.index + 1}. Run /ralph-tasks to mirror tasks.md.`);
 

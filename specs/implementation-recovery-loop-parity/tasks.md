@@ -70,7 +70,7 @@
   - _Requirements: FR-3, FR-9, AC-1.3, AC-3.3_
   - _Design: State validator/init upgrade; Native task mirror/repair_
 
-- [ ] 1.6 [YELLOW] Refactor: isolate state validation and native-map repair helpers
+- [x] 1.6 [YELLOW] Refactor: isolate state validation and native-map repair helpers
   - **Do**:
     1. Extract corrupt-state diagnostics and native-map rebuild logic into focused helpers.
     2. Keep helper outputs stable for later verifier cases.
