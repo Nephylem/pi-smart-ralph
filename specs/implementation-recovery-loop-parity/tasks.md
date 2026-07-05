@@ -169,7 +169,7 @@
   - _Requirements: FR-5, AC-2.3_
   - _Design: Error Handling; Fix-task planning_
 
-- [ ] Q4 [VERIFY] Quality check: recovery bounds verifier
+- [x] Q4 [VERIFY] Quality check: recovery bounds verifier
   - **Do**:
     1. Run the focused recovery-bounds case.
   - **Files**: None
@@ -204,7 +204,7 @@
   - _Requirements: FR-6, AC-2.4_
   - _Design: Task mutation path; `modificationMap`; Native task mirror/repair_
 
-- [ ] 2.3 [YELLOW] Refactor: extract task-mutation validation and remap helpers
+- [x] 2.3 [YELLOW] Refactor: extract task-mutation validation and remap helpers
   - **Do**:
     1. Isolate payload validation, task insertion/replacement, and post-mutation remap helpers.
     2. Keep mutation behavior deterministic for fixture tests.

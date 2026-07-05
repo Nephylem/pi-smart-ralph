@@ -352,11 +352,18 @@ async function verifyTaskModification() {
 
   const extractedHelperPatterns = [
     /export function (?:validate|parse)ImplementationTaskModification/,
+    /export function validateImplementationTaskMutation/,
+    /export function applyImplementationTaskBlockMutation/,
+    /export function createImplementationTaskMutationRemapPatch/,
     /export function applyImplementationTaskModification/,
     /export function createImplementationTaskModificationStatePatch/,
   ];
   if (!extractedHelperPatterns.every((pattern) => pattern.test(helperSource))) {
-    expectedFail('task modification validation/mutation logic is not yet isolated in implementation-loop.ts for safe parity coverage.');
+    expectedFail('task modification validation, block mutation, and remap logic are not yet isolated in implementation-loop.ts for safe parity coverage.');
+  }
+
+  if (!/join\("\\n\\n"\)[\s\S]*replace\(/.test(helperSource)) {
+    expectedFail('task block mutation helper is not yet deterministic enough for fixture assertions.');
   }
 
   if (!/from\s+["']\.\/implementation-loop(?:\.ts)?["'][\s\S]*ImplementationTaskModification/.test(indexSource)) {

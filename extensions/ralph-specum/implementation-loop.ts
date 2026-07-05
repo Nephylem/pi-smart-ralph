@@ -98,23 +98,61 @@ export type ApplyImplementationTaskModificationResult = {
 	modificationStatePatch: ImplementationTaskModificationStatePatch;
 };
 
+export type ImplementationTaskMutationPosition = "before" | "after";
+
+export type ImplementationTaskMutationAnchor = {
+	startLine: number;
+	endLine: number;
+};
+
+export type ImplementationParsedTaskMutationCandidate = {
+	status: "pending" | "completed";
+	taskNumber?: string;
+	stableKey: string;
+	fields: Record<string, string>;
+};
+
+export type ValidateImplementationTaskMutationInput = {
+	request: Pick<ImplementationTaskModificationRequest, "originalTaskId">;
+	currentTaskId: string;
+	priorCount: number;
+	maxModificationsPerTask: number;
+	maxModificationDepth: number;
+	existingTaskIds: ReadonlySet<string>;
+	requiredFields: readonly Array<{ key: string; label: string }>;
+	proposedTasks: readonly ImplementationParsedTaskMutationCandidate[];
+};
+
+export type ValidateImplementationTaskMutationResult = {
+	proposedTaskIds: string[];
+};
+
+export type ApplyImplementationTaskBlockMutationInput = {
+	content: string;
+	anchorTask: ImplementationTaskMutationAnchor;
+	blocks: string[];
+	position: ImplementationTaskMutationPosition;
+};
+
+export type CreateImplementationTaskMutationRemapPatchInput = {
+	state: RalphState | null;
+	nativeTaskMap: Record<string, string>;
+	totalTasks: number;
+	nextTaskIndex: number;
+	modificationStatePatch: ImplementationTaskModificationStatePatch;
+	request: Pick<ImplementationTaskModificationRequest, "type" | "originalTaskId" | "reasoning">;
+	proposedTaskIds: string[];
+	lastSubagentOutput: string;
+	maxModificationsPerTask?: number;
+	maxModificationDepth?: number;
+	appliedAt?: string;
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
 }
 
-export function parseImplementationTaskModification(output: string): ImplementationTaskModificationRequest | null {
-	if (!/TASK_MODIFICATION_REQUEST/i.test(output)) return null;
-
-	const payloadText = extractImplementationTaggedJsonPayload(output, "TASK_MODIFICATION_REQUEST");
-	if (!payloadText) throw new Error("TASK_MODIFICATION_REQUEST was present but no JSON payload was found.");
-
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(payloadText) as unknown;
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`TASK_MODIFICATION_REQUEST payload is not valid JSON: ${message}`);
-	}
+export function validateImplementationTaskModificationRequestPayload(parsed: unknown): ImplementationTaskModificationRequest {
 	if (!isRecord(parsed)) throw new Error("TASK_MODIFICATION_REQUEST payload must be a JSON object.");
 
 	const typeValue = typeof parsed.type === "string" ? parsed.type.trim().toUpperCase() : "";
@@ -149,6 +187,61 @@ export function parseImplementationTaskModification(output: string): Implementat
 	};
 }
 
+export function parseImplementationTaskModification(output: string): ImplementationTaskModificationRequest | null {
+	if (!/TASK_MODIFICATION_REQUEST/i.test(output)) return null;
+
+	const payloadText = extractImplementationTaggedJsonPayload(output, "TASK_MODIFICATION_REQUEST");
+	if (!payloadText) throw new Error("TASK_MODIFICATION_REQUEST was present but no JSON payload was found.");
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(payloadText) as unknown;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`TASK_MODIFICATION_REQUEST payload is not valid JSON: ${message}`);
+	}
+
+	return validateImplementationTaskModificationRequestPayload(parsed);
+}
+
+export function validateImplementationTaskMutation(input: ValidateImplementationTaskMutationInput): ValidateImplementationTaskMutationResult {
+	if (input.request.originalTaskId !== input.currentTaskId) {
+		throw new Error(`TASK_MODIFICATION_REQUEST targeted ${input.request.originalTaskId}, but the active task is ${input.currentTaskId}.`);
+	}
+	if (input.priorCount >= input.maxModificationsPerTask) {
+		throw new Error(`Max modifications (${input.maxModificationsPerTask}) reached for task ${input.request.originalTaskId}.`);
+	}
+
+	const proposedTaskIds = input.proposedTasks.map((parsedTask, index) => {
+		if (parsedTask.status === "completed") throw new Error(`Proposed task ${index + 1} must be unchecked.`);
+		if (!parsedTask.taskNumber) throw new Error(`Proposed task ${index + 1} must start with a numeric task id.`);
+		if (input.existingTaskIds.has(parsedTask.taskNumber)) throw new Error(`Proposed task id ${parsedTask.taskNumber} already exists in tasks.md.`);
+		if (taskMutationDepth(parsedTask.taskNumber) > input.maxModificationDepth) {
+			throw new Error(`Proposed task id ${parsedTask.taskNumber} exceeds max modification depth ${input.maxModificationDepth}.`);
+		}
+		for (const field of input.requiredFields) {
+			if (!parsedTask.fields[field.key]) throw new Error(`Proposed task ${parsedTask.taskNumber} is missing required field: ${field.label}.`);
+		}
+		return parsedTask.taskNumber ?? parsedTask.stableKey;
+	});
+
+	if (new Set(proposedTaskIds).size !== proposedTaskIds.length) {
+		throw new Error(`TASK_MODIFICATION_REQUEST proposed duplicate task ids: ${proposedTaskIds.join(", ")}.`);
+	}
+
+	return {
+		proposedTaskIds,
+	};
+}
+
+export function applyImplementationTaskBlockMutation(input: ApplyImplementationTaskBlockMutationInput): string {
+	const lines = input.content.replace(/\r\n/g, "\n").split("\n");
+	const insertionLines = [...input.blocks.join("\n\n").split("\n"), ""];
+	const insertAt = input.position === "before" ? input.anchorTask.startLine : input.anchorTask.endLine;
+	lines.splice(insertAt, 0, ...insertionLines);
+	return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
 export function createImplementationTaskModificationStatePatch(
 	modificationMap: Record<string, unknown>,
 	originalTaskId: string,
@@ -165,6 +258,38 @@ export function createImplementationTaskModificationStatePatch(
 			...(isRecord(existingEntry) ? existingEntry : {}),
 			count: priorCount + 1,
 			modifications: [...existingModifications, modificationRecord],
+		},
+	};
+}
+
+export function createImplementationTaskMutationRemapPatch(
+	input: CreateImplementationTaskMutationRemapPatchInput,
+): Record<string, unknown> {
+	const appliedAt = normalizeImplementationField(input.appliedAt) || new Date().toISOString();
+	return {
+		nativeTaskMap: { ...input.nativeTaskMap },
+		phase: input.nextTaskIndex >= input.totalTasks ? "completed" : "execution",
+		taskIndex: input.nextTaskIndex >= input.totalTasks ? input.totalTasks : input.nextTaskIndex,
+		totalTasks: input.totalTasks,
+		taskIteration: 1,
+		globalIteration: (positiveInteger(input.state?.globalIteration) ?? 1) + 1,
+		blocked: false,
+		validationError: null,
+		activeTaskPendingEvidence: null,
+		modificationMap: input.modificationStatePatch,
+		maxModificationsPerTask: positiveInteger(input.maxModificationsPerTask)
+			?? positiveInteger(input.state?.maxModificationsPerTask)
+			?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+		maxModificationDepth: positiveInteger(input.maxModificationDepth)
+			?? positiveInteger(input.state?.maxModificationDepth)
+			?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+		lastSubagentOutput: input.lastSubagentOutput,
+		lastTaskModification: {
+			type: input.request.type,
+			originalTaskId: input.request.originalTaskId,
+			proposedTaskIds: [...input.proposedTaskIds],
+			reasoning: input.request.reasoning,
+			appliedAt,
 		},
 	};
 }
@@ -651,6 +776,15 @@ function extractImplementationBalancedJsonObject(content: string): string | null
 	}
 
 	return null;
+}
+
+function taskMutationDepth(taskId: string): number {
+	return Math.max(0, countTaskMutationIdDots(taskId) - 1);
+}
+
+function countTaskMutationIdDots(taskId: string): number {
+	const matches = taskId.match(/\./g);
+	return matches ? matches.length : 0;
 }
 
 function positiveInteger(value: unknown): number | undefined {
