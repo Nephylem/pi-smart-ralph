@@ -10,11 +10,21 @@ export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH = 2;
 
+export type ImplementationCompletionSignal = "TASK_COMPLETE" | "VERIFICATION_PASS" | "REFACTOR_COMPLETE";
+
 export type ImplementationTaskEvidenceEntry = {
 	signal: string;
 	proof: string;
 	agent: string;
 	completedAt: string;
+};
+
+export type ImplementationCompletionValidation = {
+	ok: boolean;
+	signal: ImplementationCompletionSignal;
+	evidence?: string;
+	error?: string;
+	output: string;
 };
 
 export type ImplementationRecoveryTaskLike = {
@@ -150,6 +160,129 @@ export type CreateImplementationTaskMutationRemapPatchInput = {
 
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
+}
+
+export function hasImplementationCompletionSignal(output: string, signal: ImplementationCompletionSignal): boolean {
+	return new RegExp(`(^|\\n)${signal}\\b`, "m").test(output);
+}
+
+export function detectImplementationCompletionContradiction(output: string): string | null {
+	const patterns = [
+		/requires manual/i,
+		/cannot be automated/i,
+		/could not complete/i,
+		/needs human/i,
+		/manual intervention/i,
+		/TASK_MODIFICATION_REQUEST/i,
+		/USER_INPUT_REQUIRED/i,
+		/VERIFICATION_FAIL/i,
+	];
+	const match = patterns.find((pattern) => pattern.test(output));
+	return match ? match.source : null;
+}
+
+export function extractImplementationCompletionEvidence(
+	output: string,
+	signal: ImplementationCompletionSignal,
+	requireRedPass = false,
+	hasExpectedFailureProof?: (output: string, proofToken?: string) => boolean,
+): string | null {
+	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	const keyedEvidence: string[] = [];
+	const passEvidence: string[] = [];
+
+	for (const line of lines) {
+		const keyed = line.match(/^(?:verify|verification|evidence):\s*(.+)$/i);
+		if (keyed) keyedEvidence.push(keyed[1]);
+		if (signal === "VERIFICATION_PASS" && /\bPASS\b/i.test(line) && !/^VERIFICATION_PASS\b/.test(line)) {
+			passEvidence.push(line);
+		}
+	}
+
+	if (requireRedPass) {
+		return hasExpectedFailureProof?.(output, "RED_PASS") ? "RED_PASS" : null;
+	}
+
+	const candidates = signal === "VERIFICATION_PASS" ? [...keyedEvidence, ...passEvidence] : keyedEvidence;
+	for (const candidate of candidates) {
+		const evidence = meaningfulImplementationEvidence(candidate);
+		if (evidence) return evidence;
+	}
+	return null;
+}
+
+export function validateImplementationTaskCompletion(input: {
+	output: string;
+	signal: ImplementationCompletionSignal;
+	requiresExpectedFailureProof?: boolean;
+	hasExpectedFailureProof?: (output: string, proofToken?: string) => boolean;
+	assessCompletionOutput?: (output: string) => { ok: boolean; blocker?: string };
+	detectFailureReason?: () => string | null;
+}): ImplementationCompletionValidation {
+	if (!hasImplementationCompletionSignal(input.output, input.signal)) {
+		return {
+			ok: false,
+			signal: input.signal,
+			error: input.detectFailureReason?.() ?? `Missing completion signal ${input.signal}.`,
+			output: input.output,
+		};
+	}
+
+	const contradiction = detectImplementationCompletionContradiction(input.output);
+	if (contradiction) {
+		return {
+			ok: false,
+			signal: input.signal,
+			error: input.detectFailureReason?.() ?? `Completion contradicted by output pattern: ${contradiction}.`,
+			output: input.output,
+		};
+		}
+
+	const evidence = extractImplementationCompletionEvidence(
+		input.output,
+		input.signal,
+		Boolean(input.requiresExpectedFailureProof),
+		input.hasExpectedFailureProof,
+	);
+	if (!evidence) {
+		return {
+			ok: false,
+			signal: input.signal,
+			error: input.requiresExpectedFailureProof
+				? "[RED] completion signal lacked keyed expected-failure proof (`verify: RED_PASS`)."
+				: "Completion signal lacked verification evidence.",
+			output: input.output,
+		};
+	}
+
+	if (input.requiresExpectedFailureProof) {
+		const unexpectedFailureSignal = input.output.split(/\r?\n/)
+			.map((line) => line.trim())
+			.find((line) => /^(?:VERIFICATION_FAIL|USER_INPUT_REQUIRED|TASK_MODIFICATION_REQUEST)\b/i.test(line));
+		if (unexpectedFailureSignal) {
+			return {
+				ok: false,
+				signal: input.signal,
+				error: input.detectFailureReason?.()
+					?? `Expected-failure proof RED_PASS cannot override explicit failure signal: ${unexpectedFailureSignal}.`,
+				output: input.output,
+			};
+		}
+	}
+
+	const completionAssessment = input.assessCompletionOutput?.(input.output) ?? { ok: true };
+	if (!completionAssessment.ok) {
+		return {
+			ok: false,
+			signal: input.signal,
+			error: completionAssessment.blocker
+				?? input.detectFailureReason?.()
+				?? "Workspace completion output is invalid.",
+			output: input.output,
+		};
+	}
+
+	return { ok: true, signal: input.signal, evidence, output: input.output };
 }
 
 export function validateImplementationTaskModificationRequestPayload(parsed: unknown): ImplementationTaskModificationRequest {
@@ -724,6 +857,13 @@ function compareImplementationFixTaskIds(left: string, right: string): number {
 
 function normalizeImplementationField(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
+}
+
+function meaningfulImplementationEvidence(value: string): string | null {
+	const normalized = normalizeImplementationWhitespace(value.replace(/^[*-]\s*/, ""));
+	if (normalized.length < 8) return null;
+	if (/^(none|n\/a|na|unknown|not run|skipped|pass|passed)$/i.test(normalized)) return null;
+	return normalized;
 }
 
 function normalizeImplementationWhitespace(value: unknown): string {

@@ -83,7 +83,10 @@ import {
 	createImplementationRecoveryStopPlan,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
+	detectImplementationCompletionContradiction,
+	extractImplementationCompletionEvidence,
 	getImplementationNativeTaskRepairReason,
+	hasImplementationCompletionSignal,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
@@ -92,6 +95,9 @@ import {
 	parseImplementationTaskModification,
 	recordImplementationTaskEvidence,
 	validateImplementationExecutionState,
+	validateImplementationTaskCompletion,
+	type ImplementationCompletionSignal,
+	type ImplementationCompletionValidation,
 } from "./implementation-loop.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
@@ -5972,7 +5978,7 @@ async function runQuickFlow(
 	}
 }
 
-type CompletionSignal = "TASK_COMPLETE" | "VERIFICATION_PASS" | "REFACTOR_COMPLETE";
+type CompletionSignal = ImplementationCompletionSignal;
 
 type ImplementArguments = {
 	reference: string | null;
@@ -6006,13 +6012,7 @@ const assessTaskCompletionOutput = taskCompletionHelpers.assessTaskCompletionOut
 const selectTaskCompletionBlocker = taskCompletionHelpers.selectTaskCompletionBlocker;
 const hasExpectedFailureProof = taskCompletionHelpers.hasExpectedFailureProof;
 
-type CompletionValidation = {
-	ok: boolean;
-	signal: CompletionSignal;
-	evidence?: string;
-	error?: string;
-	output: string;
-};
+type CompletionValidation = ImplementationCompletionValidation;
 
 let pendingImplementationPromptWorkspaceReport: ReturnType<typeof analyzeTaskWorkspace> | null = null;
 
@@ -6768,29 +6768,11 @@ function subagentCompletionOutput(completion: SubagentCompletion): string {
 }
 
 function hasCompletionSignal(output: string, signal: CompletionSignal): boolean {
-	return new RegExp(`(^|\\n)${signal}\\b`, "m").test(output);
+	return hasImplementationCompletionSignal(output, signal);
 }
 
 function hasContradiction(output: string): string | null {
-	const patterns = [
-		/requires manual/i,
-		/cannot be automated/i,
-		/could not complete/i,
-		/needs human/i,
-		/manual intervention/i,
-		/TASK_MODIFICATION_REQUEST/i,
-		/USER_INPUT_REQUIRED/i,
-		/VERIFICATION_FAIL/i,
-	];
-	const match = patterns.find((pattern) => pattern.test(output));
-	return match ? match.source : null;
-}
-
-function meaningfulEvidence(value: string): string | null {
-	const normalized = normalizeWhitespace(value.replace(/^[*-]\s*/, ""));
-	if (normalized.length < 8) return null;
-	if (/^(none|n\/a|na|unknown|not run|skipped|pass|passed)$/i.test(normalized)) return null;
-	return normalized;
+	return detectImplementationCompletionContradiction(output);
 }
 
 function truncateFailureReason(reason: string, maxLength = 280): string {
@@ -6887,28 +6869,7 @@ function detectExplicitFailureReason(
 }
 
 function extractCompletionEvidence(output: string, signal: CompletionSignal, requireRedPass = false): string | null {
-	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-	const keyedEvidence: string[] = [];
-	const passEvidence: string[] = [];
-
-	for (const line of lines) {
-		const keyed = line.match(/^(?:verify|verification|evidence):\s*(.+)$/i);
-		if (keyed) keyedEvidence.push(keyed[1]);
-		if (signal === "VERIFICATION_PASS" && /\bPASS\b/i.test(line) && !/^VERIFICATION_PASS\b/.test(line)) {
-			passEvidence.push(line);
-		}
-	}
-
-	if (requireRedPass) {
-		return hasExpectedFailureProof(output, "RED_PASS") ? "RED_PASS" : null;
-	}
-
-	const candidates = signal === "VERIFICATION_PASS" ? [...keyedEvidence, ...passEvidence] : keyedEvidence;
-	for (const candidate of candidates) {
-		const evidence = meaningfulEvidence(candidate);
-		if (evidence) return evidence;
-	}
-	return null;
+	return extractImplementationCompletionEvidence(output, signal, requireRedPass, hasExpectedFailureProof);
 }
 
 function validateSubagentCompletion(
@@ -6918,66 +6879,16 @@ function validateSubagentCompletion(
 	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
 ): CompletionValidation {
 	const output = subagentCompletionOutput(completion);
-	if (!hasCompletionSignal(output, definition.completionSignal)) {
-		return {
-			ok: false,
-			signal: definition.completionSignal,
-			error: detectExplicitFailureReason(output, definition, workspaceReport) ?? `Missing completion signal ${definition.completionSignal}.`,
-			output,
-		};
-	}
-
-	const contradiction = hasContradiction(output);
-	if (contradiction) {
-		return {
-			ok: false,
-			signal: definition.completionSignal,
-			error: detectExplicitFailureReason(output, definition, workspaceReport) ?? `Completion contradicted by output pattern: ${contradiction}.`,
-			output,
-		};
-	}
-
 	const requiresExpectedFailureProof = definition.completionSignal === "TASK_COMPLETE" && Boolean(task) && /\[RED\]/i.test(`${task.rawTitle}\n${task.subject}`);
-	const evidence = extractCompletionEvidence(output, definition.completionSignal, requiresExpectedFailureProof);
-	if (!evidence) {
-		return {
-			ok: false,
-			signal: definition.completionSignal,
-			error: requiresExpectedFailureProof
-				? "[RED] completion signal lacked keyed expected-failure proof (`verify: RED_PASS`)."
-				: "Completion signal lacked verification evidence.",
-			output,
-		};
-	}
-
-	if (requiresExpectedFailureProof) {
-		const unexpectedFailureSignal = output.split(/\r?\n/)
-			.map((line) => line.trim())
-			.find((line) => /^(?:VERIFICATION_FAIL|USER_INPUT_REQUIRED|TASK_MODIFICATION_REQUEST)\b/i.test(line));
-		if (unexpectedFailureSignal) {
-			return {
-				ok: false,
-				signal: definition.completionSignal,
-				error: detectExplicitFailureReason(output, definition, workspaceReport)
-					?? `Expected-failure proof RED_PASS cannot override explicit failure signal: ${unexpectedFailureSignal}.`,
-				output,
-			};
-		}
-	}
- 
-	const completionAssessment = assessTaskCompletionOutput(output, workspaceReport);
-	if (!completionAssessment.ok) {
-		return {
-			ok: false,
-			signal: definition.completionSignal,
-			error: completionAssessment.blocker
-				?? detectExplicitFailureReason(output, definition, workspaceReport)
-				?? `Workspace completion output is invalid for ${workspaceReport?.commitMode ?? "unknown"}.`,
-			output,
-		};
-	}
-
-	return { ok: true, signal: definition.completionSignal, evidence, output };
+	return validateImplementationTaskCompletion({
+		output,
+		signal: definition.completionSignal,
+		requiresExpectedFailureProof,
+		hasExpectedFailureProof,
+		assessCompletionOutput: (candidateOutput) => assessTaskCompletionOutput(candidateOutput, workspaceReport),
+		detectFailureReason: () => detectExplicitFailureReason(output, definition, workspaceReport)
+			?? `Workspace completion output is invalid for ${workspaceReport?.commitMode ?? "unknown"}.`,
+	});
 }
 
 function runGitCommand(cwd: string, args: string[]): GitCommandResult {

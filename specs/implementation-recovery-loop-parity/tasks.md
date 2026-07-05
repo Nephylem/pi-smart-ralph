@@ -236,7 +236,7 @@
   - _Requirements: FR-7, FR-8, AC-3.1, AC-3.2_
   - _Design: Implementation loop core; Completion validation bridge_
 
-- [ ] 2.5 [GREEN] Pass test: gate task completion on signals, evidence, and contradiction checks
+- [x] 2.5 [GREEN] Pass test: gate task completion on signals, evidence, and contradiction checks
   - **Do**:
     1. Require explicit completion markers and keyed evidence before checking any task box.
     2. Reject contradictory output from normal tasks.
