@@ -58,7 +58,7 @@
   - _Requirements: FR-3, FR-9, AC-1.3, AC-3.3_
   - _Design: Implementation loop core; Error Handling; Edge Cases_
 
-- [ ] 1.5 [GREEN] Pass test: validate resume state and rebuild stale native task mappings
+- [x] 1.5 [GREEN] Pass test: validate resume state and rebuild stale native task mappings
   - **Do**:
     1. Reject corrupt execution-resume state before any subagent call and include the invalid file plus field in the error.
     2. Upgrade pre-execution state with execution defaults instead of rejecting it.

@@ -1,4 +1,4 @@
-import type { RalphState } from "./state.ts";
+import { getRalphStatePath, type RalphState } from "./state.ts";
 
 export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH = 3;
@@ -91,8 +91,52 @@ export function recordImplementationTaskEvidence(
 	return createImplementationTaskEvidence(existing, taskKey, entry);
 }
 
+export function validateImplementationExecutionState(state: RalphState | null, specOrStatePath: string | { absolutePath: string }): void {
+	if (!state || state.phase !== "execution") return;
+
+	const statePath = typeof specOrStatePath === "string"
+		? specOrStatePath
+		: getRalphStatePath(specOrStatePath);
+
+	assertExecutionField(state, "taskIndex", isNonNegativeInteger, statePath, "invalid non-negative integer");
+	assertExecutionField(state, "totalTasks", isNonNegativeInteger, statePath, "invalid non-negative integer");
+	assertExecutionField(state, "taskIteration", positiveInteger, statePath, "invalid positive integer");
+	assertExecutionField(state, "globalIteration", positiveInteger, statePath, "invalid positive integer");
+	assertExecutionField(state, "recoveryMode", isBoolean, statePath, "invalid boolean");
+	assertExecutionField(state, "maxFixTasksPerOriginal", positiveInteger, statePath, "invalid positive integer");
+	assertExecutionField(state, "maxFixTaskDepth", positiveInteger, statePath, "invalid positive integer");
+	assertExecutionField(state, "fixTaskMap", isRecord, statePath, "invalid required top-level record");
+	assertExecutionField(state, "modificationMap", isRecord, statePath, "invalid required top-level record");
+	assertExecutionField(state, "nativeTaskMap", isRecord, statePath, "invalid required top-level record");
+	assertExecutionField(state, "evidence", isRecord, statePath, "invalid required top-level record");
+}
+
+function assertExecutionField<T>(
+	state: RalphState,
+	field: string,
+	predicate: (value: unknown) => T | boolean | undefined,
+	statePath: string,
+	expectation: string,
+): void {
+	if (!(field in state)) {
+		throw new Error(`Invalid Ralph execution state in ${statePath}: missing required top-level field \"${field}\" in .ralph-state.json.`);
+	}
+
+	if (!predicate(state[field])) {
+		throw new Error(`Invalid Ralph execution state in ${statePath}: ${expectation} for field \"${field}\" in .ralph-state.json.`);
+	}
+}
+
 function positiveInteger(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function isNonNegativeInteger(value: unknown): boolean {
+	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isBoolean(value: unknown): boolean {
+	return typeof value === "boolean";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

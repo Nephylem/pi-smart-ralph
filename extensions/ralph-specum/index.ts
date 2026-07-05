@@ -85,6 +85,7 @@ import {
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 	recordImplementationTaskEvidence,
+	validateImplementationExecutionState,
 } from "./implementation-loop.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
@@ -7431,6 +7432,7 @@ async function runImplementCommand(
 	const startupSummaries: string[] = [];
 	try {
 		taskData = readImplementationTasks(spec);
+		validateImplementationExecutionState(state, spec);
 		state = mergeRalphState(
 			spec,
 			{
