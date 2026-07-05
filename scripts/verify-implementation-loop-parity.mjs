@@ -703,10 +703,14 @@ async function verifyContractWiring() {
     expectedFail('IndexArtifactContractV1 compatibility is not yet provable for implementation-loop finalization and index wiring.');
   }
 
+  const manifest = existsSync(manifestPath) ? readJson(manifestPath) : null;
+  const hasFailureRecoveryManifestEntry = Array.isArray(manifest)
+    && manifest.some((entry) => entry?.piPath === 'references/failure-recovery.md');
   const packagedManifestSignals = [
-    existsSync(manifestPath),
+    Array.isArray(manifest),
     /RalphResourceManifestV1/.test(packagedResearch),
     /mayNeedUpdate|needs packaged|consumes manifest\/resource contracts/i.test(packagedResearch),
+    hasFailureRecoveryManifestEntry,
   ];
   if (packagedManifestSignals.some((signal) => !signal)) {
     expectedFail('RalphResourceManifestV1 compatibility or update-needed detection is not yet provable for packaged implementation-loop references.');
