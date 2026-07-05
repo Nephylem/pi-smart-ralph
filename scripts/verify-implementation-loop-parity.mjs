@@ -18,6 +18,7 @@ const acceptanceChecklistCases = [
   'layer3-review',
   'completion-finalizer',
   'contract-wiring',
+  'edge-cases',
 ];
 const cases = new Map([
   ['state-resume', verifyStateResume],
@@ -30,6 +31,7 @@ const cases = new Map([
   ['layer3-review', verifyLayer3Review],
   ['completion-finalizer', verifyCompletionFinalizer],
   ['contract-wiring', verifyContractWiring],
+  ['edge-cases', verifyEdgeCases],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -622,6 +624,40 @@ async function verifyCompletionFinalizer() {
   ];
   if (indexFailurePatterns.some((pattern) => !pattern.test(finalSection[0] + helperSource))) {
     expectedFail('completion finalizer does not yet prove a failing-index path suppresses ALL_TASKS_COMPLETE and preserves resume-safe error evidence.');
+  }
+}
+
+async function verifyEdgeCases() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const runtimeBehaviorPatterns = [
+    ['resume-after-[x]-without-evidence repair', /restoreUnverifiedActiveTaskIfNeeded\([\s\S]*?prior run stopped before coordinator recorded completion signal plus verification evidence\./],
+    ['[P] batch mutation loop restart', /modificationResult\.state \?\? state;[\s\S]*?continue implementationLoop;/],
+    ['stale progress 60 minute age gate', /IMPLEMENTATION_STALE_PROGRESS_MAX_AGE_MS\s*=\s*60 \* 60 \* 1000[\s\S]*?ageMs = Date\.now\(\) - statSync\(entryPath\)\.mtimeMs;[\s\S]*?if \(ageMs < maxAgeMs\) continue;/],
+    ['empty PR URL stays non-fatal', /spawnSync\("gh", \["pr", "view", "--json", "url", "-q", "\.url"\][\s\S]*?if \(result\.status !== 0\) return null;[\s\S]*?return prUrl\.length > 0 \? prUrl : null;/],
+  ];
+  const missingRuntimeBehavior = runtimeBehaviorPatterns
+    .filter(([, pattern]) => !pattern.test(indexSource + helperSource))
+    .map(([label]) => label);
+  if (missingRuntimeBehavior.length > 0) {
+    throw new Error(`edge-case runtime behavior is missing: ${missingRuntimeBehavior.join(', ')}`);
+  }
+
+  const isolatedCoveragePatterns = [
+    /export function createImplementationResumeRepairStatePatch\(/,
+    /export function shouldRestartImplementationLoopAfterBatchModification\(/,
+    /export function shouldDeleteStaleImplementationProgressFile\(/,
+    /export function normalizeImplementationPrUrl\(/,
+  ];
+  if (isolatedCoveragePatterns.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('edge-case fixture coverage is incomplete: resume repair, [P] mutation break/re-entry, stale .progress-task age gating, and empty PR URL success are not yet isolated behind dedicated verifier-target helpers.');
   }
 }
 

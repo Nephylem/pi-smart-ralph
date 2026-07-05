@@ -437,7 +437,7 @@
   - _Requirements: FR-1, FR-15, FR-17, AC-1.2, AC-4.4_
   - _Design: `schemas/spec.schema.json`; package verification wiring; Parity verifier_
 
-- [ ] Q10 [VERIFY] Quality check: contract, related-spec, and package wiring verifier
+- [x] Q10 [VERIFY] Quality check: contract, related-spec, and package wiring verifier
   - **Do**:
     1. Run the focused `contract-wiring` case after schema, related-contract, and package updates.
   - **Files**: None
@@ -449,7 +449,7 @@
 
 ## Phase 4: Additional Testing
 
-- [ ] 4.1 [RED] Failing test: edge-case fixtures cover re-entry, `[P]` mutation breaks, stale-progress age gating, and empty PR URL success
+- [x] 4.1 [RED] Failing test: edge-case fixtures cover re-entry, `[P]` mutation breaks, stale-progress age gating, and empty PR URL success
   - **Do**:
     1. Add an `edge-cases` case covering resume after `[x]` without evidence, valid modification inside a `[P]` batch, stale `.progress-task-*.md` deletion older than 60 minutes only, and empty `gh pr view` output as non-fatal.
     2. Make the acceptance bundle fail until each edge path is asserted.
