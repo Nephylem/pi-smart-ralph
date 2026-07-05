@@ -8,6 +8,7 @@ const requestedCase = parseCaseArg(process.argv.slice(2));
 const cases = new Map([
   ['state-resume', verifyStateResume],
   ['state-integrity', verifyStateIntegrity],
+  ['recovery-fix', verifyRecoveryFix],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -156,6 +157,55 @@ async function verifyStateIntegrity() {
 
   if (!/mergeRalphState\(spec, \{ \.\.\.nativeTaskMirrorStatePatch\(mirror\), nativeTaskRepairReason: repairReason \}, options\)/.test(staleMapRepairSection[0])) {
     expectedFail('stale native task map repair does not persist the rebuilt mapping before continuing execution.');
+  }
+}
+
+async function verifyRecoveryFix() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const failureSection = indexSource.match(/if \(!validation\.ok\) \{[\s\S]*?continue;\n\s*\}/);
+  if (!failureSection) {
+    expectedFail('could not locate implementation failure handling branch.');
+  }
+
+  if (!/recoveryMode/.test(failureSection[0]) || !/fixTaskMap/.test(indexSource + helperSource)) {
+    expectedFail('recoverable task failures do not branch through recovery-mode fix-task handling yet.');
+  }
+
+  const fixTrackingPatterns = [
+    /attempts\s*:\s*\d+/,
+    /fixTaskIds/,
+    /lastError/,
+  ];
+  const missingFixTracking = fixTrackingPatterns.filter((pattern) => !pattern.test(indexSource + helperSource));
+  if (missingFixTracking.length > 0) {
+    expectedFail('recovery mode does not yet record fixTaskMap attempts, fixTaskIds, and lastError for the failed original task.');
+  }
+
+  const insertionPatterns = [
+    /\[FIX\s+\$?\{?(?:task|originalTask)[^\]]*\]?/,
+    /totalTasks\s*:\s*(?:tasks\.length\s*\+\s*1|numberField\([^\n]+totalTasks[^\n]+\)\s*\+\s*1)/,
+    /taskIndex\s*:\s*(?:insertedFixTaskIndex|fixTaskIndex|task\.index\s*\+\s*1)/,
+  ];
+  const hasInsertionPlan = insertionPatterns.every((pattern) => pattern.test(indexSource + helperSource));
+  if (!hasInsertionPlan) {
+    expectedFail('recovery mode does not yet insert a <taskId>.<attempt> fix task after the failed block, increment totalTasks, and resume at that fix task.');
+  }
+
+  const lineagePatterns = [
+    /\[FIX\s+\$?\{?(?:task|originalTask)[^\]]*\]?/,
+    /originalTaskId|retry target|retryTarget|lineage/i,
+  ];
+  const hasLineage = lineagePatterns.every((pattern) => pattern.test(indexSource + helperSource));
+  if (!hasLineage) {
+    expectedFail('recovery mode does not yet preserve the original task as the retry target in recorded fix-task lineage.');
   }
 }
 

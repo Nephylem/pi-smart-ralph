@@ -91,7 +91,7 @@
   - _Requirements: FR-3, FR-9, FR-17, AC-1.3, AC-3.3_
   - _Design: Parity verifier_
 
-- [ ] 1.7 [RED] Failing test: recoverable task failure inserts bounded fix tasks and records lineage
+- [x] 1.7 [RED] Failing test: recoverable task failure inserts bounded fix tasks and records lineage
   - **Do**:
     1. Add a `recovery-fix` case asserting a recoverable failure in recovery mode updates `fixTaskMap`, inserts a `<taskId>.<attempt>` fix task after the failed block, increments `totalTasks`, and resumes at the new fix task.
     2. Assert the original task remains the retry target in recorded lineage.
