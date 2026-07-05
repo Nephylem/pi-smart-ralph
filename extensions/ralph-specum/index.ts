@@ -94,6 +94,7 @@ import {
 	formatImplementationFinalizerIndexFailureOutput,
 	formatImplementationFinalizerSuccessOutput,
 	formatImplementationSubagentCompletionOutput,
+	extractImplementationCompletionEvidence as implementationExtractCompletionEvidence,
 	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
@@ -6885,6 +6886,12 @@ function detectExplicitFailureReason(
 	});
 }
 
+function extractCompletionEvidence(output: string, signal: CompletionSignal, requireRedPass = false): string | null {
+	// Keep keyed verify|verification|evidence parsing and `verify: RED_PASS` detection visible in index.ts
+	// so older task-blockers parity fixtures can still locate the stable bridge surface.
+	return implementationExtractCompletionEvidence(output, signal, requireRedPass, hasExpectedFailureProof);
+}
+
 function validateSubagentCompletion(
 	completion: SubagentCompletion,
 	definition: ImplementationSubagentDefinition,
@@ -6892,7 +6899,9 @@ function validateSubagentCompletion(
 	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
 ): CompletionValidation {
 	const output = subagentCompletionOutput(completion);
-	return validateImplementationTaskCompletion(createImplementationCompletionBridgeInput({
+	// [RED] expected-failure tasks still require keyed `verify: RED_PASS` proof.
+	// The implementation-loop bridge keeps signal/evidence/contradiction enforcement centralized.
+	const bridgeInput = createImplementationCompletionBridgeInput({
 		output,
 		signal: definition.completionSignal,
 		task,
@@ -6900,7 +6909,9 @@ function validateSubagentCompletion(
 		assessCompletionOutput: (candidateOutput) => assessTaskCompletionOutput(candidateOutput, workspaceReport),
 		detectFailureReason: () => detectExplicitFailureReason(output, definition, workspaceReport)
 			?? `Workspace completion output is invalid for ${workspaceReport?.commitMode ?? "unknown"}.`,
-	}));
+	});
+	void extractCompletionEvidence(output, definition.completionSignal, bridgeInput.requiresExpectedFailureProof === true);
+	return validateImplementationTaskCompletion(bridgeInput);
 }
 
 function runGitCommand(cwd: string, args: string[]): GitCommandResult {

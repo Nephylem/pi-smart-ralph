@@ -20,3 +20,7 @@ tmp/
 .DS_Store
 .idea/
 .vscode/
+specs/.current-spec
+specs/.current-epic
+**/.progress.md
+**/.ralph-state.json

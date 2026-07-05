@@ -1,6 +1,6 @@
 {
   "name": "pi-smart-ralph",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Pi-native Smart Ralph package for spec-driven development workflows.",
   "license": "MIT",
   "author": {

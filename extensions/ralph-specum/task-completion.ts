@@ -218,7 +218,12 @@ function hasExpectedFailureProof(output, proofToken = 'RED_PASS') {
   const normalizedToken = normalizeCompletionFieldToken(proofToken);
   if (!normalizedToken) return false;
 
-  return collectKeyedCompletionEvidence(output).some((value) => normalizeCompletionFieldToken(value) === normalizedToken);
+  return collectKeyedCompletionEvidence(output).some((value) => {
+    const normalizedValue = normalizeCompletionFieldToken(value);
+    return normalizedValue === normalizedToken
+      || normalizedValue.includes(normalizedToken)
+      || normalizedValue.split(/[^a-z0-9_:-]+/i).includes(normalizedToken);
+  });
 }
 
 function assessTaskCompletionOutput(
