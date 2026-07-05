@@ -5,6 +5,20 @@ import { join } from 'node:path';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
+const acceptanceChecklistCaseKey = 'acceptance-checklist';
+const cleanupCaseKey = 'cleanup';
+const acceptanceChecklistCases = [
+  'state-resume',
+  'state-integrity',
+  'recovery-fix',
+  'recovery-bounds',
+  'task-modification',
+  'completion-gates',
+  'parallel-batch',
+  'layer3-review',
+  'completion-finalizer',
+  'contract-wiring',
+];
 const cases = new Map([
   ['state-resume', verifyStateResume],
   ['state-integrity', verifyStateIntegrity],
@@ -16,11 +30,13 @@ const cases = new Map([
   ['layer3-review', verifyLayer3Review],
   ['completion-finalizer', verifyCompletionFinalizer],
   ['contract-wiring', verifyContractWiring],
+  [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
+  [cleanupCaseKey, verifyCleanup],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
 async function main() {
-  const caseName = requestedCase === 'all' ? 'state-resume' : requestedCase;
+  const caseName = requestedCase === 'all' ? acceptanceChecklistCaseKey : requestedCase;
   const verifyCase = cases.get(caseName);
   if (!verifyCase) {
     console.error(`Unknown verify case: ${caseName}`);
@@ -609,6 +625,20 @@ async function verifyCompletionFinalizer() {
   }
 }
 
+async function verifyAcceptanceChecklist() {
+  for (const caseName of acceptanceChecklistCases) {
+    const verifyCase = cases.get(caseName);
+    if (!verifyCase) {
+      throw new Error(`acceptance checklist references unknown verifier case: ${caseName}`);
+    }
+    await verifyCase();
+  }
+}
+
+async function verifyCleanup() {
+  await verifyCompletionFinalizer();
+}
+
 async function verifyContractWiring() {
   const schemaPath = join(root, 'schemas', 'spec.schema.json');
   const packagePath = join(root, 'package.json');
@@ -673,10 +703,13 @@ async function verifyContractWiring() {
     expectedFail('IndexArtifactContractV1 compatibility is not yet provable for implementation-loop finalization and index wiring.');
   }
 
-  if (!existsSync(manifestPath)
-    || !/RalphResourceManifestV1/.test(packagedResearch)
-    || !/references\/failure-recovery\.md/.test(packagedResearch + helperSource + indexSource)) {
-    expectedFail('RalphResourceManifestV1 compatibility is not yet provable for packaged implementation-loop references.');
+  const packagedManifestSignals = [
+    existsSync(manifestPath),
+    /RalphResourceManifestV1/.test(packagedResearch),
+    /mayNeedUpdate|needs packaged|consumes manifest\/resource contracts/i.test(packagedResearch),
+  ];
+  if (packagedManifestSignals.some((signal) => !signal)) {
+    expectedFail('RalphResourceManifestV1 compatibility or update-needed detection is not yet provable for packaged implementation-loop references.');
   }
 
   const refactorDelegationPatterns = [

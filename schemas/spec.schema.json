@@ -131,6 +131,12 @@
           "default": 3,
           "description": "Max fix tasks allowed per original task"
         },
+        "maxFixTaskDepth": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Max nesting depth allowed for recovery-generated fix task IDs"
+        },
         "fixTaskMap": {
           "type": "object",
           "description": "Tracks fix attempts per original task",
@@ -168,6 +174,104 @@
             },
             "required": ["count", "modifications"]
           }
+        },
+        "nativeTaskMap": {
+          "type": "object",
+          "description": "Maps canonical task-list indexes to Pi native task-card IDs",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "description": "Canonical implementation-loop evidence bundle for task completions, review checkpoints, recovery stops, and finalization state.",
+          "default": {},
+          "properties": {
+            "tasks": {
+              "type": "object",
+              "default": {},
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "signal": { "type": "string" },
+                  "proof": { "type": "string" },
+                  "agent": { "type": "string" },
+                  "completedAt": { "type": "string" }
+                },
+                "required": ["signal", "proof", "agent", "completedAt"]
+              }
+            },
+            "reviews": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "properties": {
+                  "taskIndex": { "type": "integer", "minimum": 0 },
+                  "status": { "type": "string", "enum": ["REVIEW_PASS", "REVIEW_FAIL"] },
+                  "iteration": { "type": "integer", "minimum": 1 },
+                  "checkpoint": { "type": "string", "enum": ["phaseBoundary", "every5", "finalTask", "none"] },
+                  "summary": { "type": "string" },
+                  "reviewedAt": { "type": "string" }
+                },
+                "required": ["taskIndex", "status", "iteration", "checkpoint", "summary", "reviewedAt"]
+              }
+            },
+            "recoveryStops": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "properties": {
+                  "originalTaskId": { "type": "string" },
+                  "failedTaskId": { "type": "string" },
+                  "insertionAnchorId": { "type": "string" },
+                  "attempts": { "type": "integer", "minimum": 0 },
+                  "lineageDepth": { "type": "integer", "minimum": 0 },
+                  "maxFixTasksPerOriginal": { "type": "integer", "minimum": 1 },
+                  "maxFixTaskDepth": { "type": "integer", "minimum": 1 },
+                  "fixTaskIds": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "lastError": { "type": "string" },
+                  "reason": { "type": "string" },
+                  "stoppedAt": { "type": "string" }
+                },
+                "required": [
+                  "originalTaskId",
+                  "failedTaskId",
+                  "insertionAnchorId",
+                  "attempts",
+                  "lineageDepth",
+                  "maxFixTasksPerOriginal",
+                  "maxFixTaskDepth",
+                  "fixTaskIds",
+                  "lastError",
+                  "reason",
+                  "stoppedAt"
+                ]
+              }
+            },
+            "final": {
+              "type": ["object", "null"],
+              "properties": {
+                "completedAt": { "type": "string" },
+                "epicUpdated": { "type": "boolean" },
+                "indexFinalized": { "type": "boolean" },
+                "indexError": { "type": "string" },
+                "indexSummary": { "type": "string" },
+                "deletedProgressFiles": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "prUrl": { "type": ["string", "null"] }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
         },
         "maxModificationsPerTask": {
           "type": "integer",

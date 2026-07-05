@@ -424,7 +424,7 @@
   - _Requirements: FR-1, FR-15, FR-17, AC-1.2, AC-4.4_
   - _Design: `schemas/spec.schema.json`; Parity verifier; File Structure_
 
-- [ ] 3.5 [GREEN] Pass test: align schema, related contracts, and discovered package verification wiring
+- [x] 3.5 [GREEN] Pass test: align schema, related contracts, and discovered package verification wiring
   - **Do**:
     1. Update `schemas/spec.schema.json` for the approved in-flight execution fields, including `maxFixTaskDepth`, `nativeTaskMap`, and canonical `evidence` shape.
     2. Extend `scripts/verify-implementation-loop-parity.mjs` so `contract-wiring` proves compatibility or update-needed detection for `StartCompatibilityContractV1`, `IndexArtifactContractV1`, `RalphResourceManifestV1`, and refactor-loop delegation expectations.
