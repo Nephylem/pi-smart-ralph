@@ -280,6 +280,15 @@
   - _Requirements: FR-10, AC-3.4_
   - _Design: `ExecutionBatch`; `[P]` sequential-batch decision; Data Flow_
 
+- [x] 2.7.1 [YELLOW] Fix contradictory `parallel-batch` verifier expectations
+  - **Do**:
+    1. Update `scripts/verify-implementation-loop-parity.mjs` so the `parallel-batch` case asserts GREEN batch behavior instead of simultaneously forbidding and requiring `ExecutionBatch` markers.
+    2. Keep the case checking downstream barrier preservation, listed-order sequential batch execution, per-task evidence support, and recovery-stop batch abort semantics.
+  - **Files**: `scripts/verify-implementation-loop-parity.mjs`
+  - **Done when**: The verifier can pass for a valid sequential `[P]` batch implementation and fail for the pre-batch single-task scheduler.
+  - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case parallel-batch`
+  - **Commit**: `test(implement): fix parallel batch green verifier`
+
 - [ ] 2.8 [GREEN] Pass test: execute `[P]` groups as deterministic sequential batches
   - **Do**:
     1. Detect contiguous `[P]` groups and run them in listed order as one batch.

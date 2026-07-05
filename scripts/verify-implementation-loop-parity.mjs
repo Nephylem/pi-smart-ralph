@@ -449,31 +449,34 @@ async function verifyParallelBatch() {
     expectedFail('could not locate nextImplementationTask selection logic.');
   }
 
-  if (/kind:\s*["']batch["']|batch:|taskIndices:|ExecutionBatch|parallel-sequential/.test(nextTaskSection[0])) {
-    throw new Error('parallel batch verifier expected pre-batch single-task scheduling, but batch selection markers are already present in nextImplementationTask.');
+  const batchSelectionPatterns = [
+    /kind:\s*["']batch["']|parallel-sequential/,
+    /taskIndices:\s*\[/,
+    /selectImplementationExecutionBatch|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
+  ];
+  if (batchSelectionPatterns.some((pattern) => !pattern.test(nextTaskSection[0]))) {
+    expectedFail('contiguous [P] groups still run as individual tasks: no isolated ExecutionBatch selection describes one sequential batch in listed task order.');
   }
 
-  if (!/const runnable = incomplete\.find\(\(task\) => dependenciesCompleted\(task, tasks\)\);[\s\S]*return \{ kind: ["']runnable["'], task: runnable \};/.test(nextTaskSection[0])) {
-    expectedFail('nextImplementationTask no longer clearly shows the single-task runnable selection that should fail before sequential batch support exists.');
-  }
-
-  const loopSection = indexSource.match(/while \(true\) \{[\s\S]*?const next = nextImplementationTask\(tasks, numberField\(state, ["']taskIndex["']\)\);[\s\S]*?const task = next\.task;[\s\S]*?const definition = implementationSubagentDefinition\(task\);[\s\S]*?validation = validateSubagentCompletion\(completion, definition, task, workspaceReport\);/);
+  const loopSection = indexSource.match(/while \(true\) \{[\s\S]*?const next = nextImplementationTask\(tasks, numberField\(state, ["']taskIndex["']\)\);[\s\S]*?validation = validateSubagentCompletion\(completion, definition, task, workspaceReport\);/);
   if (!loopSection) {
     expectedFail('could not locate implementation execution loop for runnable task delegation.');
   }
 
-  if (/for \(const batchTask of|batchTasks|executionBatch|parallelBatch/i.test(loopSection[0] + helperSource)) {
-    throw new Error('parallel batch verifier expected missing sequential batch orchestration, but batch execution markers already exist.');
-  }
-
+  const batchExecutionPatterns = [
+    /for \(const batchTask of|for \(const taskIndex of|batchTasks|executionBatch|parallelBatch/i,
+    /recordImplementationBatchTaskEvidence|applyImplementationBatchTaskEvidence|mergeImplementationBatchTaskEvidence/,
+    /parallel-sequential|sequential batch/i,
+  ];
   const helperBatchPatterns = [
     /ExecutionBatch/,
     /selectImplementationExecutionBatch|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
     /recordImplementationBatchTaskEvidence|applyImplementationBatchTaskEvidence|mergeImplementationBatchTaskEvidence/,
     /parallel-sequential|sequential batch/i,
   ];
-  if (helperBatchPatterns.some((pattern) => !pattern.test(helperSource))) {
-    expectedFail('contiguous [P] groups still run as individual tasks: no isolated ExecutionBatch selection/evidence helpers describe one sequential batch with listed-order semantics.');
+  if (batchExecutionPatterns.some((pattern) => !pattern.test(loopSection[0]))
+    || helperBatchPatterns.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('sequential batch execution is still missing listed-order orchestration or per-task batch evidence handling.');
   }
 
   const recoveryPatterns = [
