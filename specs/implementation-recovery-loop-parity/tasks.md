@@ -471,7 +471,7 @@
   - _Requirements: FR-2, FR-6, FR-10, FR-14, FR-16, FR-17, AC-1.1, AC-2.4, AC-3.4, AC-4.3, AC-4.5_
   - _Design: Edge Cases; Parity verifier_
 
-- [ ] Q11 [VERIFY] Quality check: edge-case verifier
+- [x] Q11 [VERIFY] Quality check: edge-case verifier
   - **Do**:
     1. Run the focused edge-case case and keep it in the acceptance bundle.
   - **Files**: None
