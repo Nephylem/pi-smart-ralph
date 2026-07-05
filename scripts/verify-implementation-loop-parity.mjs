@@ -436,14 +436,15 @@ async function verifyLayer3Review() {
   }
 
   const checkpointPatterns = [
-    /runArtifactReview\(/,
-    /REVIEW_PASS|REVIEW_FAIL/,
-    /taskIndex\s*>\s*0\s*&&\s*taskIndex\s*%\s*5\s*={1,3}\s*0/,
-    /totalTasks\s*-\s*1/,
-    /phase(?:Boundary|Changed|Change)|first task of a new phase/i,
+    ['review invocation', /runArtifactReview\(/],
+    ['review result handling', /REVIEW_PASS|REVIEW_FAIL/],
+    ['every-5th-task checkpoint', /taskIndex\s*>\s*0\s*&&\s*taskIndex\s*%\s*5\s*={1,3}\s*0/],
+    ['final-task checkpoint', /taskIndex\s*={1,3}\s*totalTasks\s*-\s*1|totalTasks\s*-\s*1/],
+    ['phase-boundary checkpoint', /phase(?:Boundary|Changed|Change)|first task of a new phase|phase-number change/i],
   ];
-  if (checkpointPatterns.some((pattern) => !pattern.test(loopSection[0] + helperSource))) {
-    expectedFail('Layer 3 review cadence is not yet wired for phase-boundary, every-5th-task, and final-task checkpoints.');
+  const missingCheckpointPatterns = checkpointPatterns.filter(([, pattern]) => !pattern.test(loopSection[0] + helperSource)).map(([label]) => label);
+  if (missingCheckpointPatterns.length > 0) {
+    expectedFail(`Layer 3 review cadence is not yet wired for phase-boundary, every-5th-task, and final-task checkpoints (${missingCheckpointPatterns.join(', ')}).`);
   }
 
   const evidenceSection = indexSource.match(/setTaskCheckboxStatus\(spec, task\.index, true\);[\s\S]*?completedSummaries\.push\(`- Completed task/);
@@ -452,12 +453,13 @@ async function verifyLayer3Review() {
   }
 
   const evidencePatterns = [
-    /reviews/,
-    /REVIEW_PASS|REVIEW_FAIL/,
-    /appendProgress|appendArtifactReviewProgress/,
+    ['canonical review evidence', /evidence[\s\S]{0,160}reviews|reviews[\s\S]{0,160}completedAt|reviews[\s\S]{0,160}summary/i],
+    ['review pass/fail status', /REVIEW_PASS|REVIEW_FAIL/],
+    ['progress evidence append', /appendProgress|appendArtifactReviewProgress/],
   ];
-  if (evidencePatterns.some((pattern) => !pattern.test(evidenceSection[0] + helperSource))) {
-    expectedFail('triggered Layer 3 reviews do not yet record REVIEW_PASS/REVIEW_FAIL evidence in progress or canonical evidence.');
+  const missingEvidencePatterns = evidencePatterns.filter(([, pattern]) => !pattern.test(evidenceSection[0] + helperSource)).map(([label]) => label);
+  if (missingEvidencePatterns.length > 0) {
+    expectedFail(`triggered Layer 3 reviews do not yet record REVIEW_PASS/REVIEW_FAIL evidence in progress or canonical evidence (${missingEvidencePatterns.join(', ')}).`);
   }
 
   const finalSection = indexSource.match(/if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",/);
@@ -466,12 +468,13 @@ async function verifyLayer3Review() {
   }
 
   const finalGatePatterns = [
-    /reviews/,
-    /REVIEW_PASS|REVIEW_FAIL/,
-    /runArtifactReview\(/,
+    ['review evidence lookup', /reviews/],
+    ['review status requirement', /REVIEW_PASS|REVIEW_FAIL/],
+    ['review-before-complete gate', /runArtifactReview\(|review.*before.*ALL_TASKS_COMPLETE|ALL_TASKS_COMPLETE[\s\S]{0,120}review/i],
   ];
-  if (finalGatePatterns.some((pattern) => !pattern.test(finalSection[0] + helperSource))) {
-    expectedFail('final completion is not yet gated on required Layer 3 review evidence before ALL_TASKS_COMPLETE.');
+  const missingFinalGatePatterns = finalGatePatterns.filter(([, pattern]) => !pattern.test(finalSection[0] + helperSource)).map(([label]) => label);
+  if (missingFinalGatePatterns.length > 0) {
+    expectedFail(`final completion is not yet gated on required Layer 3 review evidence before ALL_TASKS_COMPLETE (${missingFinalGatePatterns.join(', ')}).`);
   }
 }
 
