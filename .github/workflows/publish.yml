@@ -16,6 +16,8 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -60,9 +62,24 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Configure npm token auth fallback
+        if: steps.npmcheck.outputs.exists == 'false' && env.NPM_TOKEN != ''
+        run: |
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
+          echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc" >> "$GITHUB_ENV"
+
+      - name: Describe publish auth mode
+        if: steps.npmcheck.outputs.exists == 'false'
+        run: |
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            echo "Using NPM_TOKEN-based npm publish authentication."
+            echo "If publish returns EOTP, replace NPM_TOKEN with an automation/granular publish token that can bypass 2FA."
+          else
+            echo "No NPM_TOKEN secret configured; relying on npm trusted publishing via GitHub OIDC."
+            echo "If publish returns ENEEDAUTH, configure npm Trusted Publisher for this repo/workflow or add NPM_TOKEN."
+          fi
+
       # npm publish will also run this repo's prepack verification chain.
-      # Use npm trusted publishing via GitHub OIDC; passing NODE_AUTH_TOKEN here
-      # forces token auth and can trigger interactive EOTP failures in CI.
       # publishConfig.tag=beta from package.json remains in effect.
       - name: Publish to npm
         if: steps.npmcheck.outputs.exists == 'false'
