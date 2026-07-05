@@ -438,6 +438,8 @@ async function verifyLayer3Review() {
   const checkpointPatterns = [
     ['review invocation', /runArtifactReview\(/],
     ['review result handling', /REVIEW_PASS|REVIEW_FAIL/],
+    ['checkpoint calculator helper', /export function calculateImplementationReviewCheckpointFlags\(/],
+    ['checkpoint bridge helper', /createImplementationReviewCheckpoint\([\s\S]*?calculateImplementationReviewCheckpointFlags\(/],
     ['every-5th-task checkpoint', /taskIndex\s*>\s*0\s*&&\s*taskIndex\s*%\s*5\s*={1,3}\s*0/],
     ['final-task checkpoint', /taskIndex\s*={1,3}\s*totalTasks\s*-\s*1|totalTasks\s*-\s*1/],
     ['phase-boundary checkpoint', /phase(?:Boundary|Changed|Change)|first task of a new phase|phase-number change/i],
@@ -454,6 +456,8 @@ async function verifyLayer3Review() {
 
   const evidencePatterns = [
     ['canonical review evidence', /evidence[\s\S]{0,160}reviews|reviews[\s\S]{0,160}completedAt|reviews[\s\S]{0,160}summary/i],
+    ['review evidence entry helper', /export function createImplementationReviewEvidenceEntry\(/],
+    ['review recorder helper', /recordImplementationReviewEvidence\([\s\S]*?createImplementationReviewEvidenceEntry\(/],
     ['review pass/fail status', /REVIEW_PASS|REVIEW_FAIL/],
     ['progress evidence append', /appendProgress|appendArtifactReviewProgress/],
   ];

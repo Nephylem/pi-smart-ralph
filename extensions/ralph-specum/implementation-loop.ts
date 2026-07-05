@@ -155,6 +155,22 @@ export type ImplementationReviewEvidenceEntry = {
 	reviewedAt: string;
 };
 
+export type ImplementationReviewEvidenceInput = {
+	taskIndex: number;
+	status: ImplementationReviewStatus;
+	iteration: number;
+	checkpoint: ImplementationReviewCheckpoint["checkpoint"];
+	summary: string;
+	reviewedAt?: string;
+};
+
+export type ImplementationReviewCheckpointFlags = {
+	phaseBoundary: boolean;
+	phaseChanged: boolean;
+	everyFifth: boolean;
+	finalTask: boolean;
+};
+
 export type ImplementationTaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
 
 export type ImplementationTaskModificationRequest = {
@@ -780,16 +796,29 @@ export function hasImplementationPhaseBoundary(
 	return currentKey !== previousKey;
 }
 
+export function calculateImplementationReviewCheckpointFlags(
+	taskIndex: number,
+	totalTasks: number,
+	currentTask: ImplementationReviewTaskLike,
+	previousTask?: ImplementationReviewTaskLike | null,
+): ImplementationReviewCheckpointFlags {
+	const phaseBoundary = hasImplementationPhaseBoundary(currentTask, previousTask);
+	return {
+		phaseBoundary,
+		phaseChanged: phaseBoundary,
+		everyFifth: taskIndex > 0 && taskIndex % 5 === 0,
+		finalTask: taskIndex === totalTasks - 1,
+	};
+}
+
 export function createImplementationReviewCheckpoint(
 	taskIndex: number,
 	totalTasks: number,
 	currentTask: ImplementationReviewTaskLike,
 	previousTask?: ImplementationReviewTaskLike | null,
 ): ImplementationReviewCheckpoint {
-	const phaseBoundary = hasImplementationPhaseBoundary(currentTask, previousTask);
-	const phaseChanged = phaseBoundary;
-	const everyFifth = taskIndex > 0 && taskIndex % 5 === 0;
-	const finalTask = taskIndex === totalTasks - 1;
+	const checkpointFlags = calculateImplementationReviewCheckpointFlags(taskIndex, totalTasks, currentTask, previousTask);
+	const { phaseBoundary, phaseChanged, everyFifth, finalTask } = checkpointFlags;
 	if (phaseBoundary) {
 		return {
 			required: true,
@@ -834,6 +863,19 @@ export function createImplementationReviewCheckpoint(
 	};
 }
 
+export function createImplementationReviewEvidenceEntry(
+	input: ImplementationReviewEvidenceInput,
+): ImplementationReviewEvidenceEntry {
+	return {
+		taskIndex: input.taskIndex,
+		status: input.status,
+		iteration: input.iteration,
+		checkpoint: input.checkpoint,
+		summary: normalizeImplementationWhitespace(input.summary),
+		reviewedAt: input.reviewedAt ?? new Date().toISOString(),
+	};
+}
+
 export function recordImplementationReviewEvidence(
 	existing: unknown,
 	entry: ImplementationReviewEvidenceEntry,
@@ -842,7 +884,7 @@ export function recordImplementationReviewEvidence(
 	const reviews = Array.isArray(evidence.reviews) ? [...evidence.reviews] : [];
 	return {
 		...evidence,
-		reviews: [...reviews, entry],
+		reviews: [...reviews, createImplementationReviewEvidenceEntry(entry)],
 	};
 }
 

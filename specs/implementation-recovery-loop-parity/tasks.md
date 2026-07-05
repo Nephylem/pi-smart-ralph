@@ -345,7 +345,7 @@
   - _Requirements: FR-11, AC-3.5_
   - _Design: Reviewer reuse; Evidence storage; Implementation loop core_
 
-- [ ] 2.12 [YELLOW] Refactor: extract checkpoint calculator and review recorder
+- [x] 2.12 [YELLOW] Refactor: extract checkpoint calculator and review recorder
   - **Do**:
     1. Isolate checkpoint calculation from reviewer execution.
     2. Keep review recording format stable for acceptance-bundle assertions.
@@ -356,7 +356,7 @@
   - _Requirements: FR-11, AC-3.5_
   - _Design: `Layer3ReviewInput`; Technical Decisions_
 
-- [ ] Q8 [VERIFY] Quality check: Layer 3 review verifier
+- [x] Q8 [VERIFY] Quality check: Layer 3 review verifier
   - **Do**:
     1. Run the focused Layer 3 cadence case.
   - **Files**: None
