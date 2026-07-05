@@ -64,8 +64,132 @@ export type ImplementationRecoveryBounds = {
 	maxFixTaskDepth: number;
 };
 
+export type ImplementationTaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
+
+export type ImplementationTaskModificationRequest = {
+	type: ImplementationTaskModificationType;
+	originalTaskId: string;
+	reasoning: string;
+	proposedTasks: string[];
+};
+
+export type ImplementationTaskModificationRecord = {
+	id: string;
+	ids: string[];
+	type: ImplementationTaskModificationType;
+	reason: string;
+	appliedAt: string;
+};
+
+export type ImplementationTaskModificationStatePatch = Record<string, unknown>;
+
+export type ApplyImplementationTaskModificationInput = {
+	modificationMap: Record<string, unknown>;
+	originalTaskId: string;
+	existingEntry: unknown;
+	priorCount: number;
+	request: Pick<ImplementationTaskModificationRequest, "type" | "reasoning">;
+	proposedTaskIds: string[];
+	appliedAt?: string;
+};
+
+export type ApplyImplementationTaskModificationResult = {
+	modificationRecord: ImplementationTaskModificationRecord;
+	modificationStatePatch: ImplementationTaskModificationStatePatch;
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
+}
+
+export function parseImplementationTaskModification(output: string): ImplementationTaskModificationRequest | null {
+	if (!/TASK_MODIFICATION_REQUEST/i.test(output)) return null;
+
+	const payloadText = extractImplementationTaggedJsonPayload(output, "TASK_MODIFICATION_REQUEST");
+	if (!payloadText) throw new Error("TASK_MODIFICATION_REQUEST was present but no JSON payload was found.");
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(payloadText) as unknown;
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`TASK_MODIFICATION_REQUEST payload is not valid JSON: ${message}`);
+	}
+	if (!isRecord(parsed)) throw new Error("TASK_MODIFICATION_REQUEST payload must be a JSON object.");
+
+	const typeValue = typeof parsed.type === "string" ? parsed.type.trim().toUpperCase() : "";
+	if (typeValue !== "SPLIT_TASK" && typeValue !== "ADD_PREREQUISITE" && typeValue !== "ADD_FOLLOWUP") {
+		throw new Error(`Unsupported TASK_MODIFICATION_REQUEST type: ${String(parsed.type ?? "")}.`);
+	}
+
+	const originalTaskId = typeof parsed.originalTaskId === "string" ? parsed.originalTaskId.trim() : "";
+	if (!originalTaskId) throw new Error("TASK_MODIFICATION_REQUEST must include originalTaskId.");
+
+	const reasoningSource = typeof parsed.reasoning === "string"
+		? parsed.reasoning
+		: typeof parsed.reason === "string"
+			? parsed.reason
+			: "";
+	const reasoning = normalizeImplementationWhitespace(reasoningSource);
+	if (!reasoning) throw new Error("TASK_MODIFICATION_REQUEST must include reasoning.");
+
+	const proposedTasks = Array.isArray(parsed.proposedTasks)
+		? parsed.proposedTasks.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean)
+		: [];
+	if (proposedTasks.length === 0) throw new Error("TASK_MODIFICATION_REQUEST must include at least one proposed task block.");
+	if ((typeValue === "ADD_PREREQUISITE" || typeValue === "ADD_FOLLOWUP") && proposedTasks.length !== 1) {
+		throw new Error(`${typeValue} must propose exactly one task block.`);
+	}
+
+	return {
+		type: typeValue,
+		originalTaskId,
+		reasoning,
+		proposedTasks,
+	};
+}
+
+export function createImplementationTaskModificationStatePatch(
+	modificationMap: Record<string, unknown>,
+	originalTaskId: string,
+	existingEntry: unknown,
+	priorCount: number,
+	modificationRecord: ImplementationTaskModificationRecord,
+): ImplementationTaskModificationStatePatch {
+	const existingModifications = isRecord(existingEntry) && Array.isArray(existingEntry.modifications)
+		? [...existingEntry.modifications]
+		: [];
+	return {
+		...modificationMap,
+		[originalTaskId]: {
+			...(isRecord(existingEntry) ? existingEntry : {}),
+			count: priorCount + 1,
+			modifications: [...existingModifications, modificationRecord],
+		},
+	};
+}
+
+export function applyImplementationTaskModification(
+	input: ApplyImplementationTaskModificationInput,
+): ApplyImplementationTaskModificationResult {
+	const appliedAt = normalizeImplementationField(input.appliedAt) || new Date().toISOString();
+	const modificationRecord = {
+		id: input.proposedTaskIds[0] ?? input.originalTaskId,
+		ids: [...input.proposedTaskIds],
+		type: input.request.type,
+		reason: input.request.reasoning,
+		appliedAt,
+	};
+	return {
+		modificationRecord,
+		modificationStatePatch: createImplementationTaskModificationStatePatch(
+			input.modificationMap,
+			input.originalTaskId,
+			input.existingEntry,
+			input.priorCount,
+			modificationRecord,
+		),
+	};
 }
 
 export function resolveImplementationRetryTarget(task: ImplementationRecoveryTaskLike): string {
@@ -475,6 +599,58 @@ function compareImplementationFixTaskIds(left: string, right: string): number {
 
 function normalizeImplementationField(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeImplementationWhitespace(value: unknown): string {
+	return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+}
+
+function extractImplementationTaggedJsonPayload(output: string, marker: string): string | null {
+	const markerMatch = new RegExp(marker, "i").exec(output);
+	if (!markerMatch || markerMatch.index < 0) return null;
+	const tail = output.slice(markerMatch.index + markerMatch[0].length);
+	const fenced = tail.match(/(?:```|~~~)\s*(?:json)?\s*\n?([\s\S]*?)\n?(?:```|~~~)/i);
+	if (fenced?.[1]) return fenced[1].trim();
+	return extractImplementationBalancedJsonObject(tail)?.trim() ?? null;
+}
+
+function extractImplementationBalancedJsonObject(content: string): string | null {
+	const start = content.indexOf("{");
+	if (start < 0) return null;
+
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < content.length; index += 1) {
+		const character = content[index];
+		if (inString) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (character === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (character === '"') inString = false;
+			continue;
+		}
+
+		if (character === '"') {
+			inString = true;
+			continue;
+		}
+		if (character === "{") {
+			depth += 1;
+			continue;
+		}
+		if (character === "}") {
+			depth -= 1;
+			if (depth === 0) return content.slice(start, index + 1);
+		}
+	}
+
+	return null;
 }
 
 function positiveInteger(value: unknown): number | undefined {

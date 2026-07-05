@@ -78,6 +78,7 @@ import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBACK_SAFE_HELP_LINE } from "./feedback.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
+	applyImplementationTaskModification,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
 	createImplementationStateDefaults,
@@ -88,6 +89,7 @@ import {
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 	implementationNativeTaskMapFromState,
+	parseImplementationTaskModification,
 	recordImplementationTaskEvidence,
 	validateImplementationExecutionState,
 } from "./implementation-loop.ts";
@@ -6323,6 +6325,9 @@ function parseTaskModificationRequest(output: string): TaskModificationRequest |
 		throw new Error(`${typeValue} must propose exactly one task block.`);
 	}
 
+	const helperRequest = parseImplementationTaskModification(output);
+	if (helperRequest) return helperRequest;
+
 	return {
 		type: typeValue,
 		originalTaskId,
@@ -6448,22 +6453,14 @@ function handleTaskModificationRequest(
 		const updatedTasks = readImplementationTasks(spec).tasks;
 		const next = nextImplementationTask(updatedTasks);
 		const mirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
-		const existingModifications = isRecordValue(existingEntry) && Array.isArray(existingEntry.modifications) ? [...existingEntry.modifications] : [];
-		const modificationRecord = {
-			id: proposedTaskIds[0] ?? request.originalTaskId,
-			ids: proposedTaskIds,
-			type: request.type,
-			reason: request.reasoning,
-			appliedAt: new Date().toISOString(),
-		};
-		const modificationStatePatch = {
-			...modificationMap,
-			[request.originalTaskId]: {
-				...(isRecordValue(existingEntry) ? existingEntry : {}),
-				count: priorCount + 1,
-				modifications: [...existingModifications, modificationRecord],
-			},
-		};
+		const { modificationRecord, modificationStatePatch } = applyImplementationTaskModification({
+			modificationMap,
+			originalTaskId: request.originalTaskId,
+			existingEntry,
+			priorCount,
+			request,
+			proposedTaskIds,
+		});
 		const progressCommit = appendTaskModificationProgress(spec, task, request, proposedTaskIds, options);
 		const progressCommitSummary = progressCommit.committed
 			? `; coordinator progress commit ${progressCommit.hash ?? "unknown"}`

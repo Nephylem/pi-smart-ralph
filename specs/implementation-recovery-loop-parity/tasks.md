@@ -192,7 +192,7 @@
   - _Requirements: FR-6, AC-2.4_
   - _Design: Implementation loop core; Error Handling; Edge Cases_
 
-- [ ] 2.2 [GREEN] Pass test: validate modification payloads and apply safe task-list mutations
+- [x] 2.2 [GREEN] Pass test: validate modification payloads and apply safe task-list mutations
   - **Do**:
     1. Reject invalid `TASK_MODIFICATION_REQUEST` payloads before any file mutation.
     2. Apply valid task-list updates to `tasks.md` and persist `modificationMap` history.
