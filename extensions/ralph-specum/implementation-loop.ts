@@ -128,6 +128,13 @@ export type ImplementationBatchTaskEvidenceEntry = {
 
 export type ImplementationReviewStatus = "REVIEW_PASS" | "REVIEW_FAIL";
 
+export type ImplementationFinalizerTaskLike = {
+	checkboxKey?: string;
+	stableKey: string;
+	taskNumber?: string;
+	status?: string | null;
+};
+
 export type ImplementationReviewTaskLike = {
 	index: number;
 	taskNumber?: string;
@@ -903,6 +910,67 @@ export function latestImplementationReviewStatus(existing: unknown): Implementat
 		}
 	}
 	return null;
+}
+
+export function describeImplementationOutstandingCompletionWork(
+	tasks: readonly ImplementationFinalizerTaskLike[],
+	state: RalphState | null,
+): string[] {
+	const blockers: string[] = [];
+	if (state?.blocked === true) blockers.push("execution is blocked");
+	if (normalizeImplementationField(state?.validationError)) blockers.push("validation error is still present");
+	if (isRecord(state?.activeTaskPendingEvidence)) blockers.push("task evidence is still pending");
+
+	const completedTaskIds = new Set(
+		tasks
+			.filter((task) => task.status === "completed")
+			.map((task) => normalizeImplementationField(task.taskNumber) || normalizeImplementationField(task.checkboxKey) || normalizeImplementationField(task.stableKey))
+			.filter(Boolean),
+	);
+	const incompleteTaskIds = new Set(
+		tasks
+			.filter((task) => task.status !== "completed")
+			.map((task) => normalizeImplementationField(task.taskNumber) || normalizeImplementationField(task.checkboxKey) || normalizeImplementationField(task.stableKey))
+			.filter(Boolean),
+	);
+	if (incompleteTaskIds.size > 0) blockers.push("not every task checkbox is complete");
+
+	const fixTaskMap = implementationStateRecord(state?.fixTaskMap);
+	for (const [originalTaskId, value] of Object.entries(fixTaskMap)) {
+		const entry = implementationFixTaskEntryFromUnknown(value);
+		if (incompleteTaskIds.has(originalTaskId) || entry.fixTaskIds.some((taskId) => incompleteTaskIds.has(taskId))) {
+			blockers.push(`recovery work remains for ${originalTaskId}`);
+		}
+	}
+
+	const modificationMap = implementationStateRecord(state?.modificationMap);
+	for (const [originalTaskId, value] of Object.entries(modificationMap)) {
+		const entry = isRecord(value) ? value : {};
+		const modifications = Array.isArray(entry.modifications) ? entry.modifications : [];
+		const unresolved = modifications.some((record) => isRecord(record)
+			&& Array.isArray(record.ids)
+			&& record.ids.some((taskId) => typeof taskId === "string" && incompleteTaskIds.has(taskId)));
+		if (incompleteTaskIds.has(originalTaskId) || unresolved) {
+			blockers.push(`task modification follow-up remains for ${originalTaskId}`);
+		}
+	}
+
+	return [...new Set(blockers)];
+}
+
+export function createImplementationFinalEvidence(
+	existing: unknown,
+	patch: Record<string, unknown>,
+): Record<string, unknown> {
+	const evidence = createImplementationEvidenceScaffold(existing);
+	const currentFinal = isRecord(evidence.final) ? evidence.final : {};
+	return {
+		...evidence,
+		final: {
+			...currentFinal,
+			...patch,
+		},
+	};
 }
 
 // Final completion must only happen after runArtifactReview(...) checkpoints record REVIEW_PASS/REVIEW_FAIL under evidence.reviews.

@@ -379,7 +379,7 @@
   - _Requirements: FR-12, FR-13, FR-14, FR-15, FR-16, AC-4.1, AC-4.2, AC-4.3, AC-4.4, AC-4.5_
   - _Design: Completion finalizer; Error Handling; Data Flow_
 
-- [ ] 3.2 [GREEN] Pass test: implement parity finalizer ordering and index-failure suppression
+- [x] 3.2 [GREEN] Pass test: implement parity finalizer ordering and index-failure suppression
   - **Do**:
     1. Gate terminal success on every checkbox complete and no unresolved recovery or modification work.
     2. Finalize in order: epic update, index finalization once, stale temp cleanup, state deletion, optional PR URL output.

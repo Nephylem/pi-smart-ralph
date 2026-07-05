@@ -81,11 +81,13 @@ import {
 	applyImplementationTaskModification,
 	createImplementationCompletionBridgeInput,
 	createImplementationExecutionBatch,
+	createImplementationFinalEvidence,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
 	createImplementationReviewCheckpoint,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
+	describeImplementationOutstandingCompletionWork,
 	formatImplementationSubagentCompletionOutput,
 	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
@@ -4237,6 +4239,37 @@ function unlinkIfExists(filePath: string): boolean {
 	return true;
 }
 
+function cleanupStaleImplementationProgressFiles(spec: SpecEntry): string[] {
+	const cutoffMs = Date.now() - (60 * 60 * 1000);
+	const removed: string[] = [];
+	for (const entry of readdirSync(spec.absolutePath, { withFileTypes: true })) {
+		if (!entry.isFile() || !/^\.progress-task-.*\.md$/i.test(entry.name)) continue;
+		const filePath = join(spec.absolutePath, entry.name);
+		try {
+			const stats = statSync(filePath);
+			if (stats.mtimeMs > cutoffMs) continue;
+			unlinkSync(filePath);
+			removed.push(entry.name);
+		} catch {
+			// Ignore cleanup failures here; finalizer will continue and preserve progress/state behavior.
+		}
+	}
+	return removed.sort();
+}
+
+function lookupImplementationPullRequestUrl(cwd: string): string | null {
+	const result = spawnSync("gh", ["pr", "view", "--json", "url", "-q", ".url"], {
+		cwd,
+		encoding: "utf8",
+		env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PAGER: "cat" },
+		stdio: ["ignore", "pipe", "pipe"],
+		timeout: 30_000,
+	});
+	if (result.status !== 0) return null;
+	const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
+	return stdout.length > 0 ? stdout.split(/\r?\n/).at(-1)?.trim() ?? null : null;
+}
+
 function clearCurrentSpecIfMatches(spec: SpecEntry, options: RalphPathOptions): boolean {
 	if (currentSpecPath(options) !== spec.absolutePath) return false;
 	return unlinkIfExists(getCurrentSpecFilePath(options));
@@ -7274,6 +7307,33 @@ function formatEpicCompletionNotification(result: ReturnType<typeof completeEpic
 	return { lines, type: "info" };
 }
 
+const IMPLEMENTATION_STALE_PROGRESS_MAX_AGE_MS = 60 * 60 * 1000;
+
+function cleanupStaleImplementationProgressFiles(spec: SpecEntry, maxAgeMs = IMPLEMENTATION_STALE_PROGRESS_MAX_AGE_MS): string[] {
+	const deleted: string[] = [];
+	for (const entry of readdirSync(spec.absolutePath, { withFileTypes: true })) {
+		if (!entry.isFile() || !/^\.progress-task-.*\.md$/i.test(entry.name)) continue;
+		const entryPath = join(spec.absolutePath, entry.name);
+		const ageMs = Date.now() - statSync(entryPath).mtimeMs;
+		if (ageMs < maxAgeMs) continue;
+		unlinkSync(entryPath);
+		deleted.push(entry.name);
+	}
+	return deleted.sort();
+}
+
+function readImplementationPrUrl(cwd: string): string | null {
+	const result = spawnSync("gh", ["pr", "view", "--json", "url", "-q", ".url"], {
+		cwd,
+		encoding: "utf8",
+		env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (result.status !== 0) return null;
+	const prUrl = result.stdout.trim();
+	return prUrl.length > 0 ? prUrl : null;
+}
+
 function completeEpicChildAfterImplementation(spec: SpecEntry, finalState: RalphState, options: RalphPathOptions): EpicCompletionNotification {
 	const identity = epicIdentityFromState(spec, finalState);
 	if (!identity) return { lines: [], type: "info" };
@@ -7438,7 +7498,107 @@ async function runImplementCommand(
 					);
 					return;
 				}
-				const finalState = mergeRalphState(
+				const completionBlockers = describeImplementationOutstandingCompletionWork(tasks, state);
+				if (completionBlockers.length > 0) {
+					await blockImplementation(
+						ctx,
+						spec,
+						null,
+						`Implementation cannot finalize yet: ${completionBlockers.join("; ")}.`,
+						options,
+						{
+							taskIndex: tasks.length,
+							totalTasks: tasks.length,
+							evidence: stateRecordField(state, "evidence"),
+						},
+					);
+					return;
+				}
+				const completedAt = new Date().toISOString();
+				state = mergeRalphState(
+					spec,
+					{
+						phase: "execution",
+						taskIndex: tasks.length,
+						totalTasks: tasks.length,
+						awaitingApproval: false,
+						blocked: false,
+						validationError: null,
+						activeTaskPendingEvidence: null,
+						completedAt,
+						evidence: createImplementationFinalEvidence(state?.evidence, {
+							completedAt,
+							epicUpdated: false,
+							indexFinalized: false,
+							prUrl: null,
+						}),
+					},
+					options,
+				);
+				const epicCompletion = completeEpicChildAfterImplementation(spec, state, options);
+				state = mergeRalphState(
+					spec,
+					{
+						phase: "execution",
+						taskIndex: tasks.length,
+						totalTasks: tasks.length,
+						awaitingApproval: false,
+						blocked: false,
+						validationError: null,
+						activeTaskPendingEvidence: null,
+						evidence: createImplementationFinalEvidence(state?.evidence, {
+							completedAt,
+							epicUpdated: true,
+							indexFinalized: false,
+							prUrl: null,
+						}),
+					},
+					options,
+				);
+				const indexResult = await runRalphIndex({ cwd: ctx.cwd, args: [] });
+				if (!indexResult.ok) {
+					const indexError = normalizeWhitespace(indexResult.error || indexResult.message || "Index finalization failed.");
+					state = mergeRalphState(
+						spec,
+						{
+							phase: "execution",
+							taskIndex: tasks.length,
+							totalTasks: tasks.length,
+							awaitingApproval: false,
+							blocked: true,
+							validationError: `Implementation completion index finalization failed: ${indexError}`,
+							finalizationError: indexError,
+							finalizationErrorAt: new Date().toISOString(),
+							activeTaskPendingEvidence: null,
+							evidence: createImplementationFinalEvidence(state?.evidence, {
+								completedAt,
+								epicUpdated: true,
+								indexFinalized: false,
+								indexError,
+								prUrl: null,
+							}),
+						},
+						options,
+					);
+					await notify(
+						ctx,
+						[
+							`Ralph implementation blocked for spec: ${spec.name}`,
+							"",
+							`Tasks: ${tasks.length}/${tasks.length} completed`,
+							`State: ${getRalphStatePath(spec, options)}`,
+							...(epicCompletion.lines.length > 0 ? ["", ...epicCompletion.lines] : []),
+							"",
+							`Index finalization failed: ${indexError}`,
+							formatRalphIndexCommandResult(indexResult),
+						].join("\n"),
+						"warning",
+					);
+					return;
+				}
+				const deletedProgressFiles = cleanupStaleImplementationProgressFiles(spec);
+				const prUrl = readImplementationPrUrl(ctx.cwd);
+				state = mergeRalphState(
 					spec,
 					{
 						phase: "completed",
@@ -7448,23 +7608,34 @@ async function runImplementCommand(
 						blocked: false,
 						validationError: null,
 						activeTaskPendingEvidence: null,
-						completedAt: new Date().toISOString(),
+						completedAt,
+						evidence: createImplementationFinalEvidence(state?.evidence, {
+							completedAt,
+							epicUpdated: true,
+							indexFinalized: true,
+							indexSummary: indexResult.message,
+							deletedTempFiles: deletedProgressFiles,
+							prUrl,
+						}),
 					},
 					options,
 				);
-				const epicCompletion = completeEpicChildAfterImplementation(spec, finalState, options);
+				unlinkIfExists(getRalphStatePath(spec, options));
 				await notify(
 					ctx,
 					[
 						`Ralph implementation complete for spec: ${spec.name}`,
 						"",
 						`Tasks: ${tasks.length}/${tasks.length} completed`,
-						`State: ${getRalphStatePath(spec, options)}`,
-						`phase: ${stringField(finalState, "phase")}`,
+						`State: ${getRalphStatePath(spec, options)} deleted`,
 						...completedSummaries,
 						...(epicCompletion.lines.length > 0 ? ["", ...epicCompletion.lines] : []),
 						"",
+						formatRalphIndexCommandResult(indexResult),
+						`Temporary progress cleanup (.progress-task-*.md): ${deletedProgressFiles.length > 0 ? deletedProgressFiles.join(", ") : "none removed"}`,
+						"",
 						"ALL_TASKS_COMPLETE",
+						...(prUrl ? [`PR URL: ${prUrl}`] : []),
 					].join("\n"),
 					epicCompletion.type,
 				);
