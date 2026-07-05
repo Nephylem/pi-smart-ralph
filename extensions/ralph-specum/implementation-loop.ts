@@ -2,6 +2,15 @@ import type { RalphState } from "./state.ts";
 
 export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH = 3;
+export const IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK = 3;
+export const IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH = 2;
+
+export type ImplementationTaskEvidenceEntry = {
+	signal: string;
+	proof: string;
+	agent: string;
+	completedAt: string;
+};
 
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
@@ -24,34 +33,10 @@ export function createImplementationEvidenceScaffold(existing: unknown): Record<
 	return next;
 }
 
-export function createImplementationStatePatch(
-	state: RalphState | null,
-	patch: Record<string, unknown>,
-): Record<string, unknown> {
-	return {
-		...patch,
-		maxFixTasksPerOriginal: positiveInteger(patch.maxFixTasksPerOriginal)
-			?? positiveInteger(state?.maxFixTasksPerOriginal)
-			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
-		maxFixTaskDepth: positiveInteger(patch.maxFixTaskDepth)
-			?? positiveInteger(state?.maxFixTaskDepth)
-			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
-		fixTaskMap: implementationStateRecord(patch.fixTaskMap ?? state?.fixTaskMap),
-		modificationMap: implementationStateRecord(patch.modificationMap ?? state?.modificationMap),
-		nativeTaskMap: implementationStateRecord(patch.nativeTaskMap ?? state?.nativeTaskMap),
-		evidence: createImplementationEvidenceScaffold(patch.evidence ?? state?.evidence),
-	};
-}
-
-export function recordImplementationTaskEvidence(
+export function createImplementationTaskEvidence(
 	existing: unknown,
 	taskKey: string,
-	entry: {
-		signal: string;
-		proof: string;
-		agent: string;
-		completedAt: string;
-	},
+	entry: ImplementationTaskEvidenceEntry,
 ): Record<string, unknown> {
 	const evidence = createImplementationEvidenceScaffold(existing);
 	const tasks = implementationStateRecord(evidence.tasks);
@@ -62,6 +47,48 @@ export function recordImplementationTaskEvidence(
 			[taskKey]: entry,
 		},
 	};
+}
+
+export function createImplementationStatePatch(
+	state: RalphState | null,
+	patch: Record<string, unknown>,
+): Record<string, unknown> {
+	return {
+		...patch,
+		...createImplementationStateDefaults(state, patch),
+	};
+}
+
+export function createImplementationStateDefaults(
+	state: RalphState | null,
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+	return {
+		maxFixTasksPerOriginal: positiveInteger(overrides.maxFixTasksPerOriginal)
+			?? positiveInteger(state?.maxFixTasksPerOriginal)
+			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+		maxFixTaskDepth: positiveInteger(overrides.maxFixTaskDepth)
+			?? positiveInteger(state?.maxFixTaskDepth)
+			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+		fixTaskMap: implementationStateRecord(overrides.fixTaskMap ?? state?.fixTaskMap),
+		modificationMap: implementationStateRecord(overrides.modificationMap ?? state?.modificationMap),
+		nativeTaskMap: implementationStateRecord(overrides.nativeTaskMap ?? state?.nativeTaskMap),
+		evidence: createImplementationEvidenceScaffold(overrides.evidence ?? state?.evidence),
+		maxModificationsPerTask: positiveInteger(overrides.maxModificationsPerTask)
+			?? positiveInteger(state?.maxModificationsPerTask)
+			?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+		maxModificationDepth: positiveInteger(overrides.maxModificationDepth)
+			?? positiveInteger(state?.maxModificationDepth)
+			?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+	};
+}
+
+export function recordImplementationTaskEvidence(
+	existing: unknown,
+	taskKey: string,
+	entry: ImplementationTaskEvidenceEntry,
+): Record<string, unknown> {
+	return createImplementationTaskEvidence(existing, taskKey, entry);
 }
 
 function positiveInteger(value: unknown): number | undefined {

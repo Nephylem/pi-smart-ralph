@@ -26,7 +26,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: `extensions/ralph-specum/implementation-loop.ts`; `ImplementationLoopStateV1`_
 
-- [ ] 1.3 [YELLOW] Refactor: centralize execution defaults and evidence initializers
+- [x] 1.3 [YELLOW] Refactor: centralize execution defaults and evidence initializers
   - **Do**:
     1. Consolidate execution-state defaults and evidence builders behind a small helper surface.
     2. Keep `index.ts` focused on command-shell orchestration only.
