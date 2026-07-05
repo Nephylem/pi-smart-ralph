@@ -17,6 +17,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
+      NPM_PUBLISH_AUTH_MODE: ${{ vars.NPM_PUBLISH_AUTH_MODE || 'trusted' }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
@@ -62,21 +63,37 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Configure npm token auth fallback
-        if: steps.npmcheck.outputs.exists == 'false' && env.NPM_TOKEN != ''
+      - name: Validate publish auth mode
+        if: steps.npmcheck.outputs.exists == 'false'
         run: |
+          case "$NPM_PUBLISH_AUTH_MODE" in
+            trusted|token) ;;
+            *)
+              echo "Unsupported NPM_PUBLISH_AUTH_MODE: $NPM_PUBLISH_AUTH_MODE"
+              echo "Use 'trusted' (default) or 'token'."
+              exit 1
+              ;;
+          esac
+
+      - name: Configure npm token auth
+        if: steps.npmcheck.outputs.exists == 'false' && env.NPM_PUBLISH_AUTH_MODE == 'token'
+        run: |
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "NPM_PUBLISH_AUTH_MODE=token requires the NPM_TOKEN secret."
+            exit 1
+          fi
           printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/.npmrc"
           echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/.npmrc" >> "$GITHUB_ENV"
 
       - name: Describe publish auth mode
         if: steps.npmcheck.outputs.exists == 'false'
         run: |
-          if [ -n "${NPM_TOKEN:-}" ]; then
-            echo "Using NPM_TOKEN-based npm publish authentication."
-            echo "If publish returns EOTP, replace NPM_TOKEN with an automation/granular publish token that can bypass 2FA."
+          if [ "$NPM_PUBLISH_AUTH_MODE" = "token" ]; then
+            echo "Using token-based npm publish authentication."
+            echo "NPM_TOKEN must be an automation/granular publish token that can bypass 2FA, or npm will return EOTP."
           else
-            echo "No NPM_TOKEN secret configured; relying on npm trusted publishing via GitHub OIDC."
-            echo "If publish returns ENEEDAUTH, configure npm Trusted Publisher for this repo/workflow or add NPM_TOKEN."
+            echo "Using npm trusted publishing via GitHub OIDC."
+            echo "If publish returns ENEEDAUTH, configure npm Trusted Publisher for this repo/workflow or switch NPM_PUBLISH_AUTH_MODE to token with a valid publish token."
           fi
 
       # npm publish will also run this repo's prepack verification chain.
