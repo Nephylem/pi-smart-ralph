@@ -7423,7 +7423,7 @@ async function runImplementCommand(
 			if (next.kind === "complete") {
 				// runArtifactReview(...) checkpoint evidence must end in REVIEW_PASS before ALL_TASKS_COMPLETE.
 				const latestReview = latestImplementationReviewStatus(state?.evidence);
-				if (latestReview !== "REVIEW_PASS") {
+				if (tasks.length > 0 && latestReview !== "REVIEW_PASS") {
 					await blockImplementation(
 						ctx,
 						spec,
@@ -7712,12 +7712,18 @@ async function runImplementCommand(
 						review.output,
 						options,
 					);
+					const reviewSummary = truncateForPrompt(
+						[reviewCheckpoint.reason, review.error, review.output]
+							.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+							.join("\n\n"),
+						4000,
+					);
 					implementationEvidence = recordImplementationReviewEvidence(implementationEvidence, {
 						taskIndex: task.index,
 						status: review.passed ? "REVIEW_PASS" : "REVIEW_FAIL",
 						iteration: reviewIteration,
 						checkpoint: reviewCheckpoint.checkpoint,
-						summary: reviewCheckpoint.reason,
+						summary: reviewSummary,
 						reviewedAt: new Date().toISOString(),
 					});
 					if (!review.passed) {
