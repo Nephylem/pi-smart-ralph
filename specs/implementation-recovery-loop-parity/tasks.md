@@ -312,7 +312,7 @@
   - _Requirements: FR-10, AC-3.4_
   - _Design: `ExecutionBatch`; Technical Decisions_
 
-- [ ] Q7 [VERIFY] Quality check: sequential batch verifier
+- [x] Q7 [VERIFY] Quality check: sequential batch verifier
   - **Do**:
     1. Run the focused `[P]` batch case.
   - **Files**: None
@@ -322,7 +322,7 @@
   - _Requirements: FR-10, FR-17, AC-3.4_
   - _Design: Parity verifier_
 
-- [ ] 2.10 [RED] Failing test: Layer 3 review runs only at approved checkpoints and records evidence
+- [x] 2.10 [RED] Failing test: Layer 3 review runs only at approved checkpoints and records evidence
   - **Do**:
     1. Add a `layer3-review` case covering phase-boundary, every-5th-task, and final-task checkpoints.
     2. Assert each triggered review records pass/fail evidence before final completion is allowed.

@@ -13,6 +13,7 @@ const cases = new Map([
   ['task-modification', verifyTaskModification],
   ['completion-gates', verifyCompletionGates],
   ['parallel-batch', verifyParallelBatch],
+  ['layer3-review', verifyLayer3Review],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -416,6 +417,61 @@ async function verifyCompletionGates() {
   const missingBehavior = behaviorPatterns.filter((pattern) => !pattern.test(validationSection[0] + helperSource));
   if (missingBehavior.length > 0) {
     expectedFail('completion gate coverage does not yet prove normal-task success, contradiction rejection, keyed evidence, and [VERIFY] pass/fail handling.');
+  }
+}
+
+async function verifyLayer3Review() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const loopSection = indexSource.match(/implementationLoop: while \(true\) \{[\s\S]*?completedSummaries\.push\(`- Completed task/);
+  if (!loopSection) {
+    expectedFail('could not locate implementation execution loop for Layer 3 review checkpoints.');
+  }
+
+  const checkpointPatterns = [
+    /runArtifactReview\(/,
+    /REVIEW_PASS|REVIEW_FAIL/,
+    /taskIndex\s*>\s*0\s*&&\s*taskIndex\s*%\s*5\s*={1,3}\s*0/,
+    /totalTasks\s*-\s*1/,
+    /phase(?:Boundary|Changed|Change)|first task of a new phase/i,
+  ];
+  if (checkpointPatterns.some((pattern) => !pattern.test(loopSection[0] + helperSource))) {
+    expectedFail('Layer 3 review cadence is not yet wired for phase-boundary, every-5th-task, and final-task checkpoints.');
+  }
+
+  const evidenceSection = indexSource.match(/setTaskCheckboxStatus\(spec, task\.index, true\);[\s\S]*?completedSummaries\.push\(`- Completed task/);
+  if (!evidenceSection) {
+    expectedFail('could not locate successful task completion state update for Layer 3 review evidence.');
+  }
+
+  const evidencePatterns = [
+    /reviews/,
+    /REVIEW_PASS|REVIEW_FAIL/,
+    /appendProgress|appendArtifactReviewProgress/,
+  ];
+  if (evidencePatterns.some((pattern) => !pattern.test(evidenceSection[0] + helperSource))) {
+    expectedFail('triggered Layer 3 reviews do not yet record REVIEW_PASS/REVIEW_FAIL evidence in progress or canonical evidence.');
+  }
+
+  const finalSection = indexSource.match(/if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",/);
+  if (!finalSection) {
+    expectedFail('could not locate ALL_TASKS_COMPLETE finalization path.');
+  }
+
+  const finalGatePatterns = [
+    /reviews/,
+    /REVIEW_PASS|REVIEW_FAIL/,
+    /runArtifactReview\(/,
+  ];
+  if (finalGatePatterns.some((pattern) => !pattern.test(finalSection[0] + helperSource))) {
+    expectedFail('final completion is not yet gated on required Layer 3 review evidence before ALL_TASKS_COMPLETE.');
   }
 }
 
