@@ -109,6 +109,23 @@ export type ImplementationRecoveryBounds = {
 	maxFixTaskDepth: number;
 };
 
+export type ImplementationExecutionBatchTaskLike = {
+	index: number;
+	isParallel: boolean;
+	status?: string | null;
+};
+
+export type ExecutionBatch = {
+	kind: "single" | "batch";
+	mode: "single" | "parallel-sequential";
+	taskIndices: number[];
+};
+
+export type ImplementationBatchTaskEvidenceEntry = {
+	taskKey: string;
+	entry: ImplementationTaskEvidenceEntry;
+};
+
 export type ImplementationTaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
 
 export type ImplementationTaskModificationRequest = {
@@ -755,6 +772,47 @@ export function recordImplementationTaskEvidence(
 	entry: ImplementationTaskEvidenceEntry,
 ): Record<string, unknown> {
 	return createImplementationTaskEvidence(existing, taskKey, entry);
+}
+
+export function recordImplementationBatchTaskEvidence(
+	existing: unknown,
+	taskKey: string,
+	entry: ImplementationTaskEvidenceEntry,
+): Record<string, unknown> {
+	return createImplementationTaskEvidence(existing, taskKey, entry);
+}
+
+export function mergeImplementationBatchTaskEvidence(
+	existing: unknown,
+	entries: readonly ImplementationBatchTaskEvidenceEntry[],
+): Record<string, unknown> {
+	return entries.reduce<Record<string, unknown>>(
+		(current, { taskKey, entry }) => recordImplementationBatchTaskEvidence(current, taskKey, entry),
+		createImplementationEvidenceScaffold(existing),
+	);
+}
+
+export function createImplementationExecutionBatch(
+	tasks: readonly ImplementationExecutionBatchTaskLike[],
+	task: ImplementationExecutionBatchTaskLike,
+): ExecutionBatch {
+	if (!task.isParallel) {
+		return { kind: "single", mode: "single", taskIndices: [task.index] };
+	}
+
+	const taskIndices: number[] = [];
+	for (let index = task.index; index < tasks.length; index += 1) {
+		const candidate = tasks[index];
+		if (!candidate?.isParallel) break;
+		if (candidate.status === "completed") continue;
+		taskIndices.push(candidate.index);
+	}
+
+	return {
+		kind: taskIndices.length > 1 ? "batch" : "single",
+		mode: taskIndices.length > 1 ? "parallel-sequential" : "single",
+		taskIndices: taskIndices.length > 0 ? taskIndices : [task.index],
+	};
 }
 
 export function validateImplementationExecutionState(state: RalphState | null, specOrStatePath: string | { absolutePath: string }): void {

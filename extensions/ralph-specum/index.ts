@@ -80,6 +80,7 @@ import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completi
 import {
 	applyImplementationTaskModification,
 	createImplementationCompletionBridgeInput,
+	createImplementationExecutionBatch,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
 	createImplementationStateDefaults,
@@ -91,6 +92,7 @@ import {
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 	implementationNativeTaskMapFromState,
+	mergeImplementationBatchTaskEvidence,
 	parseImplementationTaskModification,
 	recordImplementationTaskEvidence,
 	validateImplementationExecutionState,
@@ -6035,6 +6037,7 @@ type TaskModificationProcessResult = {
 type NextTaskResult =
 	| { kind: "complete" }
 	| { kind: "runnable"; task: ParsedNativeTask }
+	| { kind: "batch"; task: ParsedNativeTask; taskIndices: number[]; mode: "parallel-sequential" }
 	| { kind: "blocked"; task: ParsedNativeTask; blockers: number[] };
 
 type NativeExecutionUpdate = {
@@ -6171,15 +6174,22 @@ function nextImplementationTask(tasks: ParsedNativeTask[], preferredTaskIndex?: 
 	const incomplete = tasks.filter((task) => task.status !== "completed");
 	if (incomplete.length === 0) return { kind: "complete" };
 
-	if (typeof preferredTaskIndex === "number" && Number.isInteger(preferredTaskIndex) && preferredTaskIndex >= 0) {
-		const preferredTask = tasks[preferredTaskIndex];
-		if (preferredTask && preferredTask.status !== "completed" && dependenciesCompleted(preferredTask, tasks)) {
-			return { kind: "runnable", task: preferredTask };
+	const resolveRunnable = (candidate: ParsedNativeTask | undefined): NextTaskResult | null => {
+		if (!candidate || candidate.status === "completed" || !dependenciesCompleted(candidate, tasks)) return null;
+		const batch = createImplementationExecutionBatch(tasks, candidate);
+		if (batch.kind === "batch") {
+			return { kind: "batch", task: candidate, taskIndices: [...batch.taskIndices], mode: "parallel-sequential" };
 		}
+		return { kind: "runnable", task: candidate };
+	};
+
+	if (typeof preferredTaskIndex === "number" && Number.isInteger(preferredTaskIndex) && preferredTaskIndex >= 0) {
+		const preferredResult = resolveRunnable(tasks[preferredTaskIndex]);
+		if (preferredResult) return preferredResult;
 	}
 
 	const runnable = incomplete.find((task) => dependenciesCompleted(task, tasks));
-	if (runnable) return { kind: "runnable", task: runnable };
+	if (runnable) return resolveRunnable(runnable) ?? { kind: "runnable", task: runnable };
 
 	const blocked = incomplete[0];
 	const blockers = blocked.blockedByIndices.filter((dependencyIndex) => tasks[dependencyIndex]?.status !== "completed");
@@ -7416,6 +7426,9 @@ async function runImplementCommand(
 			}
 
 			const task = next.task;
+			const executionBatch = next.kind === "batch" ? next.taskIndices : [task.index];
+			const applyImplementationBatchTaskEvidence = mergeImplementationBatchTaskEvidence;
+			const batchPosition = Math.max(0, executionBatch.indexOf(task.index));
 			const globalIteration = numberField(state, "globalIteration") ?? 1;
 			if (globalIteration > parsed.maxGlobalIterations) {
 				await blockImplementation(ctx, spec, task, `Max global iterations exceeded (${parsed.maxGlobalIterations}).`, options);
@@ -7443,7 +7456,12 @@ async function runImplementCommand(
 				return;
 			}
 
-			setRalphStatus(ctx, `Ralph implement: ${task.activeForm}`);
+			setRalphStatus(
+				ctx,
+				executionBatch.length > 1
+					? `Ralph implement: ${task.activeForm} (sequential batch ${batchPosition + 1}/${executionBatch.length})`
+					: `Ralph implement: ${task.activeForm}`,
+			);
 			const workspaceReport = analyzeTaskWorkspace({
 				basePath: spec.absolutePath,
 				filesDirective: task.fields["files"],
@@ -7606,13 +7624,30 @@ async function runImplementCommand(
 			}
 
 			const refreshedTasks = readImplementationTasks(spec).tasks;
-			const following = nextImplementationTask(refreshedTasks, numberField(state, "taskIndex"));
+			const remainingBatchTask = executionBatch
+				.slice(batchPosition + 1)
+				.map((taskIndex) => refreshedTasks[taskIndex])
+				.find((candidate) => candidate && candidate.status !== "completed");
+			const following = remainingBatchTask
+				? {
+					kind: "batch" as const,
+					task: remainingBatchTask,
+					taskIndices: executionBatch,
+					mode: "parallel-sequential" as const,
+				}
+				: nextImplementationTask(refreshedTasks, numberField(state, "taskIndex"));
 			const completedAt = new Date().toISOString();
+			const evidenceEntry = {
+				signal: definition.completionSignal,
+				proof: validation.evidence ?? "",
+				agent: definition.agentName,
+				completedAt,
+			};
 			state = mergeRalphState(
 				spec,
 				{
 					phase: following.kind === "complete" ? "completed" : "execution",
-					taskIndex: following.kind === "runnable" ? following.task.index : refreshedTasks.length,
+					taskIndex: following.kind === "runnable" || following.kind === "batch" ? following.task.index : refreshedTasks.length,
 					totalTasks: refreshedTasks.length,
 					taskIteration: 1,
 					globalIteration: globalIteration + 1,
@@ -7622,12 +7657,9 @@ async function runImplementCommand(
 						fixTaskMap: stateRecordField(state, "fixTaskMap"),
 						modificationMap: stateRecordField(state, "modificationMap"),
 						nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
-						evidence: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, {
-							signal: definition.completionSignal,
-							proof: validation.evidence ?? "",
-							agent: definition.agentName,
-							completedAt,
-						}),
+						evidence: executionBatch.length > 1
+							? applyImplementationBatchTaskEvidence(state?.evidence, [{ taskKey: task.checkboxKey, entry: evidenceEntry }])
+							: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, evidenceEntry),
 						maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 						maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 					}),
@@ -7644,6 +7676,11 @@ async function runImplementCommand(
 							evidence: validation.evidence,
 							agent: definition.agentName,
 							completedAt,
+							batch: executionBatch.length > 1 ? {
+								mode: "parallel-sequential",
+								position: batchPosition + 1,
+								size: executionBatch.length,
+							} : undefined,
 						},
 					},
 				},
@@ -7654,7 +7691,7 @@ async function runImplementCommand(
 				: coordinatorProgressCommit.error
 					? `; coordinator progress commit failed: ${coordinatorProgressCommit.error}`
 					: "";
-			completedSummaries.push(`- Completed task ${task.index + 1}: ${task.subject} (${definition.completionSignal}; ${validation.evidence}${progressCommitSummary})`);
+			completedSummaries.push(`- Completed task ${task.index + 1}: ${task.subject} (${definition.completionSignal}; ${validation.evidence}${executionBatch.length > 1 ? `; sequential batch ${batchPosition + 1}/${executionBatch.length}` : ""}${progressCommitSummary})`);
 		}
 	} catch (error) {
 		await blockImplementation(ctx, spec, null, formatError(error), options);

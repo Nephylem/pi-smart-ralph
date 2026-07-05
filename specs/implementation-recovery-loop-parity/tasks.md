@@ -289,7 +289,7 @@
   - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case parallel-batch`
   - **Commit**: `test(implement): fix parallel batch green verifier`
 
-- [ ] 2.8 [GREEN] Pass test: execute `[P]` groups as deterministic sequential batches
+- [x] 2.8 [GREEN] Pass test: execute `[P]` groups as deterministic sequential batches
   - **Do**:
     1. Detect contiguous `[P]` groups and run them in listed order as one batch.
     2. Store completion evidence per task within the batch.
