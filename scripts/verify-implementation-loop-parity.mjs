@@ -15,6 +15,7 @@ const cases = new Map([
   ['parallel-batch', verifyParallelBatch],
   ['layer3-review', verifyLayer3Review],
   ['completion-finalizer', verifyCompletionFinalizer],
+  ['contract-wiring', verifyContractWiring],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -606,6 +607,106 @@ async function verifyCompletionFinalizer() {
   if (indexFailurePatterns.some((pattern) => !pattern.test(finalSection[0] + helperSource))) {
     expectedFail('completion finalizer does not yet prove a failing-index path suppresses ALL_TASKS_COMPLETE and preserves resume-safe error evidence.');
   }
+}
+
+async function verifyContractWiring() {
+  const schemaPath = join(root, 'schemas', 'spec.schema.json');
+  const packagePath = join(root, 'package.json');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  const startRequirementsPath = join(root, 'specs', 'start-and-new-flow-parity', 'requirements.md');
+  const indexingResearchPath = join(root, 'specs', 'indexing-command-parity', 'research.md');
+  const packagedResearchPath = join(root, 'specs', 'packaged-resource-parity', 'research.md');
+  const refactorResearchPath = join(root, 'specs', 'spec-refactor-command-parity', 'research.md');
+  const manifestPath = join(root, 'references', 'ralph-resource-manifest.v1.json');
+
+  const schema = readJson(schemaPath);
+  const packageJson = readJson(packagePath);
+  const indexSource = readFileSync(indexPath, 'utf8');
+  const helperSource = existsSync(helperPath) ? readFileSync(helperPath, 'utf8') : '';
+  const startRequirements = readFileSync(startRequirementsPath, 'utf8');
+  const indexingResearch = readFileSync(indexingResearchPath, 'utf8');
+  const packagedResearch = readFileSync(packagedResearchPath, 'utf8');
+  const refactorResearch = readFileSync(refactorResearchPath, 'utf8');
+
+  const stateSchema = schema?.definitions?.state;
+  if (!stateSchema || typeof stateSchema !== 'object') {
+    throw new Error('schemas/spec.schema.json is missing definitions.state.');
+  }
+
+  const stateProperties = stateSchema.properties ?? {};
+  const requiredStateFields = [
+    'phase',
+    'taskIndex',
+    'totalTasks',
+    'taskIteration',
+    'globalIteration',
+    'recoveryMode',
+    'maxFixTasksPerOriginal',
+    'maxFixTaskDepth',
+    'fixTaskMap',
+    'modificationMap',
+    'nativeTaskMap',
+    'evidence',
+  ];
+  const missingSchemaFields = requiredStateFields.filter((field) => !(field in stateProperties));
+  if (missingSchemaFields.length > 0) {
+    expectedFail(`schemas/spec.schema.json is missing ImplementationLoopStateV1 fields: ${missingSchemaFields.join(', ')}`);
+  }
+
+  const phaseEnum = stateProperties.phase?.enum;
+  if (!Array.isArray(phaseEnum) || !phaseEnum.includes('execution')) {
+    expectedFail('schemas/spec.schema.json must keep state.phase compatible with in-flight execution state.');
+  }
+  if (phaseEnum.includes('completed')) {
+    throw new Error('schemas/spec.schema.json must not allow completed as an in-flight execution phase value.');
+  }
+
+  if (!/StartCompatibilityContractV1/.test(indexSource)
+    || !/startCompatibility/.test(indexSource)
+    || !/command, aliasOf\?, options, branchDecision, specRoot, statePatch/.test(startRequirements)) {
+    expectedFail('StartCompatibilityContractV1 compatibility is not yet provable for implementation-loop bootstrap metadata.');
+  }
+
+  if (!/IndexArtifactContractV1/.test(indexingResearch)
+    || !/runRalphIndex\(/.test(indexSource + helperSource)) {
+    expectedFail('IndexArtifactContractV1 compatibility is not yet provable for implementation-loop finalization and index wiring.');
+  }
+
+  if (!existsSync(manifestPath)
+    || !/RalphResourceManifestV1/.test(packagedResearch)
+    || !/references\/failure-recovery\.md/.test(packagedResearch + helperSource + indexSource)) {
+    expectedFail('RalphResourceManifestV1 compatibility is not yet provable for packaged implementation-loop references.');
+  }
+
+  const refactorDelegationPatterns = [
+    /ralph-refactor-specialist/,
+    /if \(/,
+    /refactor/i,
+  ];
+  if (!/spec-refactor-command-parity/.test(refactorResearch)
+    || refactorDelegationPatterns.some((pattern) => !pattern.test(indexSource))) {
+    expectedFail('Shared refactor-loop delegation expectations are not yet provable for implementation execution.');
+  }
+
+  const scripts = packageJson.scripts ?? {};
+  const prepack = String(scripts.prepack ?? '');
+  const verifyIndex = String(scripts['verify:index'] ?? '');
+  const verifyPack = String(scripts['verify:pack'] ?? '');
+  const verifierScript = 'node scripts/verify-implementation-loop-parity.mjs';
+  if (!prepack.includes(verifierScript)
+    || !verifyIndex.includes(`${verifierScript} --case acceptance-checklist`)
+    || !verifyPack.includes(`${verifierScript} --case cleanup`)) {
+    expectedFail('package verification scripts do not yet wire implementation-loop parity through prepack, verify:index, and verify:pack with acceptance-checklist/cleanup cases.');
+  }
+
+  if (!cases.has('acceptance-checklist') || !cases.has('cleanup')) {
+    throw new Error('implementation-loop verifier must expose acceptance-checklist and cleanup cases once package wiring is added.');
+  }
+}
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 function expectedFail(message) {

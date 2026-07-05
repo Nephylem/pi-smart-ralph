@@ -402,7 +402,7 @@
   - _Requirements: FR-12, FR-13, FR-14, FR-15, FR-16, AC-4.1, AC-4.2, AC-4.3, AC-4.4, AC-4.5_
   - _Design: Completion finalizer; Technical Decisions_
 
-- [ ] Q9 [VERIFY] Quality check: completion finalizer verifier
+- [x] Q9 [VERIFY] Quality check: completion finalizer verifier
   - **Do**:
     1. Run the focused completion-finalizer case.
   - **Files**: None
@@ -412,7 +412,7 @@
   - _Requirements: FR-12, FR-13, FR-14, FR-15, FR-16, FR-17, AC-4.1, AC-4.2, AC-4.3, AC-4.4, AC-4.5_
   - _Design: Parity verifier_
 
-- [ ] 3.4 [RED] Failing test: schema, related-contract compatibility, and package verification wiring expose implementation-loop parity coverage
+- [x] 3.4 [RED] Failing test: schema, related-contract compatibility, and package verification wiring expose implementation-loop parity coverage
   - **Do**:
     1. Add a `contract-wiring` case asserting `schemas/spec.schema.json` matches in-flight `ImplementationLoopStateV1` fields and keeps `phase` limited to in-flight execution values.
     2. Extend the case to verify `StartCompatibilityContractV1` (`start-and-new-flow-parity`), `IndexArtifactContractV1` (`indexing-command-parity`), `RalphResourceManifestV1` (`packaged-resource-parity`), and refactor-loop delegation expectations shared with `spec-refactor-command-parity` still align with implementation-loop bootstrap/finalization behavior.
