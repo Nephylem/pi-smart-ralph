@@ -228,8 +228,9 @@
     "originalPath": "schemas/spec.schema.json",
     "piPath": "schemas/spec.schema.json",
     "kind": "schema",
-    "status": "copied",
-    "sha256": "6b1b7a4d9a0ce0aebfc33698fe679895f350105e5c0d82a19def7afac1b796d3"
+    "status": "adapted",
+    "notes": "Packaged schema is intentionally adapted for Pi runtime parity, including implementation-loop state and in-flight execution constraints.",
+    "sha256": "2c718325a4dc7ddafd304e211361b524305aa6b824114a4b8e445b34f9dc65a0"
   },
   {
     "originalPath": "skills/communication-style/references/examples.md",
@@ -362,9 +363,9 @@
     "originalPath": "templates/prompts/executor-prompt.md",
     "piPath": "prompts/executor-prompt.md",
     "kind": "prompt",
-    "status": "renamed",
-    "notes": "Original prompt template is packaged in the Pi prompts root for predictable package consumption.",
-    "sha256": "efbe45ada13970860fb676f78f2743dd16c1d13f8c409c93e3a752704e6edf92"
+    "status": "adapted",
+    "notes": "Packaged prompt keeps the Pi prompts-root location and includes topology-aware executor guidance required by this package.",
+    "sha256": "589f886b3f80ae50f7f81cda42f95e7d8646a8fa02bdbfa56fe52978c1e6a47f"
   },
   {
     "originalPath": "templates/prompts/research-prompt.md",
@@ -401,6 +402,6 @@
     "kind": "template",
     "status": "adapted",
     "notes": "Packaged tasks template is intentionally adapted for Pi task-scoped verification defaults and blocker-safe execution guidance.",
-    "sha256": "e6a8ad73166adcb057a85ae334491c55659dad827eafa6e4fbb78684e19ad6eb"
+    "sha256": "3ff147a3bacce89b9e61469bde9ed404d055215f5fb85d62510205da87c2a98f"
   }
 ]

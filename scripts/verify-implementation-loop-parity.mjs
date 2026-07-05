@@ -757,20 +757,16 @@ async function verifyContractWiring() {
   const packagePath = join(root, 'package.json');
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
-  const startRequirementsPath = join(root, 'specs', 'start-and-new-flow-parity', 'requirements.md');
-  const indexingResearchPath = join(root, 'specs', 'indexing-command-parity', 'research.md');
-  const packagedResearchPath = join(root, 'specs', 'packaged-resource-parity', 'research.md');
-  const refactorResearchPath = join(root, 'specs', 'spec-refactor-command-parity', 'research.md');
+  const indexingPath = join(root, 'extensions', 'ralph-specum', 'indexing.ts');
+  const refactorAgentPath = join(root, 'agents', 'ralph-refactor-specialist.md');
   const manifestPath = join(root, 'references', 'ralph-resource-manifest.v1.json');
 
   const schema = readJson(schemaPath);
   const packageJson = readJson(packagePath);
   const indexSource = readFileSync(indexPath, 'utf8');
   const helperSource = existsSync(helperPath) ? readFileSync(helperPath, 'utf8') : '';
-  const startRequirements = readFileSync(startRequirementsPath, 'utf8');
-  const indexingResearch = readFileSync(indexingResearchPath, 'utf8');
-  const packagedResearch = readFileSync(packagedResearchPath, 'utf8');
-  const refactorResearch = readFileSync(refactorResearchPath, 'utf8');
+  const indexingSource = existsSync(indexingPath) ? readFileSync(indexingPath, 'utf8') : '';
+  const refactorAgentSource = existsSync(refactorAgentPath) ? readFileSync(refactorAgentPath, 'utf8') : '';
 
   const stateSchema = schema?.definitions?.state;
   if (!stateSchema || typeof stateSchema !== 'object') {
@@ -805,25 +801,38 @@ async function verifyContractWiring() {
     throw new Error('schemas/spec.schema.json must not allow completed as an in-flight execution phase value.');
   }
 
-  if (!/StartCompatibilityContractV1/.test(indexSource)
-    || !/startCompatibility/.test(indexSource)
-    || !/command, aliasOf\?, options, branchDecision, specRoot, statePatch/.test(startRequirements)) {
+  const startCompatibilitySignals = [
+    /type\s+StartCompatibilityContractV1\s*=\s*\{[\s\S]*?command:\s*StartCommandName;[\s\S]*?aliasOf\?:\s*["']ralph-start["'];[\s\S]*?options:\s*StartOptionsSnapshot;[\s\S]*?branchDecision:\s*BranchDecision;[\s\S]*?specRoot:\s*\{[\s\S]*?path:\s*string;[\s\S]*?absolutePath:\s*string;[\s\S]*?source:\s*["']default["']\s*\|\s*["']settings["'][\s\S]*?\};[\s\S]*?statePatch:\s*Record<\s*string\s*,\s*unknown\s*>;[\s\S]*?\}/,
+    /const\s+specRoot\s*=\s*\{[\s\S]*?path:\s*rootForSpec\.path,[\s\S]*?absolutePath:\s*rootForSpec\.absolutePath,[\s\S]*?source:\s*rootForSpec\.source,[\s\S]*?\}/,
+    /startCompatibility:\s*\{[\s\S]*?command:\s*invocation\.command[\s\S]*?options:\s*buildStartOptionsSnapshot\(parsed\)[\s\S]*?branchDecision:\s*branchDecision[\s\S]*?specRoot:\s*specRoot[\s\S]*?statePatch:\s*\{[\s\S]*?phase,[\s\S]*?commitSpec:\s*statePatch\.commitSpec,[\s\S]*?relatedSpecs:\s*statePatch\.relatedSpecs,[\s\S]*?discoveredSkills:\s*statePatch\.discoveredSkills,[\s\S]*?\}[\s\S]*?\}\s*satisfies\s*StartCompatibilityContractV1/,
+  ];
+  if (startCompatibilitySignals.some((pattern) => !pattern.test(indexSource))) {
     expectedFail('StartCompatibilityContractV1 compatibility is not yet provable for implementation-loop bootstrap metadata.');
   }
 
-  if (!/IndexArtifactContractV1/.test(indexingResearch)
-    || !/runRalphIndex\(/.test(indexSource + helperSource)) {
+  const indexArtifactSignals = [
+    /export\s+interface\s+IndexRunResult\s*\{[\s\S]*?ok:\s*boolean;[\s\S]*?dryRun:\s*boolean;[\s\S]*?indexRoot:\s*string;[\s\S]*?statePath:\s*string;[\s\S]*?summaryPath:\s*string;[\s\S]*?writes:\s*PlannedWrite\[\];[\s\S]*?message:\s*string;[\s\S]*?error\?:\s*string;[\s\S]*?\}/,
+    /export\s+async\s+function\s+runRalphIndex\s*\(/,
+    /import\s*\{\s*formatRalphIndexCommandResult,\s*runRalphIndex\s*\}\s*from\s*["']\.\/indexing\.ts["']/,
+    /const\s+indexResult\s*=\s*await\s+runRalphIndex\(\{\s*cwd:\s*ctx\.cwd,\s*args:\s*\[\]\s*\}\)[\s\S]*?const\s+indexSummary\s*=\s*formatRalphIndexCommandResult\(indexResult\)/,
+  ];
+  if (indexArtifactSignals.some((pattern) => !pattern.test(indexSource + indexingSource + helperSource))) {
     expectedFail('IndexArtifactContractV1 compatibility is not yet provable for implementation-loop finalization and index wiring.');
   }
 
   const manifest = existsSync(manifestPath) ? readJson(manifestPath) : null;
-  const hasFailureRecoveryManifestEntry = Array.isArray(manifest)
-    && manifest.some((entry) => entry?.piPath === 'references/failure-recovery.md');
+  const manifestEntries = Array.isArray(manifest) ? manifest : [];
+  const findManifestEntry = (piPath) => manifestEntries.find((entry) => entry?.piPath === piPath);
+  const schemaManifestEntry = findManifestEntry('schemas/spec.schema.json');
+  const executorPromptManifestEntry = findManifestEntry('prompts/executor-prompt.md');
+  const tasksTemplateManifestEntry = findManifestEntry('templates/tasks.md');
+  const hasFailureRecoveryManifestEntry = manifestEntries.some((entry) => entry?.piPath === 'references/failure-recovery.md');
   const packagedManifestSignals = [
     Array.isArray(manifest),
-    /RalphResourceManifestV1/.test(packagedResearch),
-    /mayNeedUpdate|needs packaged|consumes manifest\/resource contracts/i.test(packagedResearch),
     hasFailureRecoveryManifestEntry,
+    schemaManifestEntry?.status === 'adapted' && /implementation-loop|in-flight execution/i.test(String(schemaManifestEntry?.notes ?? '')),
+    executorPromptManifestEntry?.status === 'adapted' && /prompts-root|executor guidance|topology-aware/i.test(String(executorPromptManifestEntry?.notes ?? '')),
+    tasksTemplateManifestEntry?.status === 'adapted' && /verification|blocker-safe|Pi task-scoped/i.test(String(tasksTemplateManifestEntry?.notes ?? '')),
   ];
   if (packagedManifestSignals.some((signal) => !signal)) {
     expectedFail('RalphResourceManifestV1 compatibility or update-needed detection is not yet provable for packaged implementation-loop references.');
@@ -834,8 +843,12 @@ async function verifyContractWiring() {
     /if \(/,
     /refactor/i,
   ];
-  if (!/spec-refactor-command-parity/.test(refactorResearch)
-    || refactorDelegationPatterns.some((pattern) => !pattern.test(indexSource))) {
+  const refactorCompatibilitySignals = [
+    existsSync(refactorAgentPath),
+    /Ralph refactor specialist|spec refactoring specialist/i.test(refactorAgentSource),
+    ...refactorDelegationPatterns.map((pattern) => pattern.test(indexSource)),
+  ];
+  if (refactorCompatibilitySignals.some((signal) => !signal)) {
     expectedFail('Shared refactor-loop delegation expectations are not yet provable for implementation execution.');
   }
 

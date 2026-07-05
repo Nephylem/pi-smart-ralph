@@ -110,7 +110,10 @@ const optionParitySmokeCases = [
     label: '<spec-name> [goal]',
     ac12Token: '<spec-name> [goal]',
     snapshotFields: ['reference', 'goalProvided'],
-    parserPatterns: [/positionals\.push\(token\)/, /goal\s*=\s*positionals\.slice\(1\)\.join\(["'] ["']\)\.trim\(\)/],
+    parserPatterns: [
+      /positionals\.push\(token\)/,
+      /(goal\s*=\s*positionals\.slice\(1\)\.join\(["'] ["']\)\.trim\(\))|(const\s+remaining\s*=\s*positionals\.slice\(1\)\.join\(["'] ["']\)\.trim\(\)[\s\S]*goal\s*=\s*\[remaining,\s*literalGoal\]\.filter\(Boolean\)\.join\(["'] ["']\)\.trim\(\))/,
+    ],
   },
   {
     label: '--skip-research',
@@ -1292,7 +1295,7 @@ assert(
 );
 
 assert(
-  /formatStartSummary\(pointer\.spec,\s*resolved\.target\.isNew,\s*phase,\s*state,\s*pointer\.value,\s*progressPath,\s*startSummaryMetadata,\s*parsed\.warnings\)/.test(source),
+  /formatStartSummary\([\s\S]*?resolved\.target\.isNew,[\s\S]*?phase,[\s\S]*?state,[\s\S]*?progressPath,[\s\S]*?startSummaryMetadata,[\s\S]*?parsed\.warnings(?:,[\s\S]*?nextCommandOverride)?[\s\S]*?\)/.test(source),
   'runStartCommand must pass separate summary metadata to existing summary output without changing quick flow handoff.',
 );
 
