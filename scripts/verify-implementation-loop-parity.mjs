@@ -7,6 +7,7 @@ const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
 const cases = new Map([
   ['state-resume', verifyStateResume],
+  ['state-integrity', verifyStateIntegrity],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -110,6 +111,51 @@ async function verifyStateResume() {
 
   if (missingResumeFields.length > 0) {
     expectedFail(`resumed execution state does not preserve in-flight fields: ${missingResumeFields.join(', ')}`);
+  }
+}
+
+async function verifyStateIntegrity() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution bootstrap helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  if (!/createImplementationStateDefaults\(/.test(helperSource)) {
+    expectedFail('pre-execution state upgrade helper is not available yet.');
+  }
+
+  const startupSection = indexSource.match(/taskData = readImplementationTasks\(spec\);[\s\S]*?state = ensureNativeTaskCardsForImplementation\(pi, ctx, spec, options, state, taskData\.tasks\);/);
+  if (!startupSection) {
+    expectedFail('could not locate implementation startup state bootstrap and native-task repair sequence.');
+  }
+
+  if (!/export function validateImplementationExecutionState\(/.test(helperSource)) {
+    expectedFail('implementation-loop.ts does not export validateImplementationExecutionState for corrupt execution-state rejection yet.');
+  }
+
+  if (!/validateImplementationExecutionState\(state[,\s]/.test(startupSection[0])) {
+    expectedFail('implementation startup does not validate corrupt execution state before delegation or native-task repair.');
+  }
+
+  if (!/\.ralph-state\.json/.test(helperSource) || !/missing required|invalid|required top-level/i.test(helperSource)) {
+    expectedFail('corrupt execution-state diagnostics do not yet name .ralph-state.json and the missing or invalid field.');
+  }
+
+  const staleMapRepairSection = indexSource.match(/function ensureNativeTaskCardsForImplementation\([\s\S]*?return state \?\? \{\};\n\}/);
+  if (!staleMapRepairSection) {
+    expectedFail('could not locate native task map repair helper.');
+  }
+
+  if (!/nativeTaskRepairReason\(/.test(staleMapRepairSection[0]) || !/mirrorTasksToNativeTaskCards\(/.test(staleMapRepairSection[0])) {
+    expectedFail('native task map repair is not wired to canonical tasks.md mirroring yet.');
+  }
+
+  if (!/mergeRalphState\(spec, \{ \.\.\.nativeTaskMirrorStatePatch\(mirror\), nativeTaskRepairReason: repairReason \}, options\)/.test(staleMapRepairSection[0])) {
+    expectedFail('stale native task map repair does not persist the rebuilt mapping before continuing execution.');
   }
 }
 

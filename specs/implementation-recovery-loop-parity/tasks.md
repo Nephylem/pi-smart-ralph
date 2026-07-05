@@ -37,7 +37,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: Implementation loop core; Evidence storage decision_
 
-- [ ] Q1 [VERIFY] Quality check: state bootstrap verifier
+- [x] Q1 [VERIFY] Quality check: state bootstrap verifier
   - **Do**:
     1. Run the focused verifier case built from the research verifier-script pattern row for full `ImplementationLoopStateV1` bootstrap/resume coverage.
   - **Files**: None
@@ -47,7 +47,7 @@
   - _Requirements: FR-1, FR-2, FR-17, AC-1.1, AC-1.2_
   - _Design: Parity verifier_
 
-- [ ] 1.4 [RED] Failing test: corrupt execution state stops early and stale native task maps self-repair
+- [x] 1.4 [RED] Failing test: corrupt execution state stops early and stale native task maps self-repair
   - **Do**:
     1. Add a `state-integrity` case covering corrupt or missing required execution fields, pre-execution state upgrade, and empty/stale `nativeTaskMap` repair from canonical `tasks.md` order.
     2. Assert the loop exits before delegation on corrupt state and persists a repaired map before continuing when the map is stale but recoverable.
