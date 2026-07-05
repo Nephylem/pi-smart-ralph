@@ -49,7 +49,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: Verification recovery classifier_
 
-- [ ] Q1 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for recovery policy
+- [x] Q1 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for recovery policy
   - **Do**:
     1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the new `verification-recovery-policy` case.
   - **Files**: None
@@ -61,7 +61,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
 
 ## Phase 2: Auto-recovery loop for `[VERIFY]` failures
 
-- [ ] 2.1 [RED] Failing test: recoverable verification failures rerun inside same `/ralph-implement` session
+- [x] 2.1 [RED] Failing test: recoverable verification failures rerun inside same `/ralph-implement` session
   - **Do**:
     1. Add a `verify-auto-recovery` case to `scripts/verify-implementation-loop-parity.mjs`.
     2. Cover: cleanup artifact failure, transient verifier failure, shared-contract drift repaired in-place.

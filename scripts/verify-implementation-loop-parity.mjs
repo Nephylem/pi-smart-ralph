@@ -33,6 +33,7 @@ const cases = new Map([
   ['contract-wiring', verifyContractWiring],
   ['edge-cases', verifyEdgeCases],
   ['verification-recovery-policy', verifyVerificationRecoveryPolicy],
+  ['verify-auto-recovery', verifyVerifyAutoRecovery],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -793,6 +794,80 @@ async function verifyVerificationRecoveryPolicy() {
   ];
   if (indexRoutingPatterns.some((pattern) => !pattern.test(indexSource))) {
     expectedFail('runImplementCommand does not yet route verification failures through the implementation-loop recovery-policy helper before blocking.');
+  }
+}
+
+async function verifyVerifyAutoRecovery() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('verify auto-recovery helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const recoveryExports = [
+    /export interface VerificationRecoveryAttempt\s*\{/,
+    /export interface (?:ImplementationLoopStateV1Plus|ImplementationVerificationRecoveryState)\s*\{[\s\S]*?maxVerificationRecoveryAttempts[\s\S]*?verificationRecovery/s,
+    /export function (?:getImplementationVerificationRecoveryBudget|getVerificationRecoveryBudget)\(/,
+    /export function (?:createImplementationVerificationRecoveryAttempt|createVerificationRecoveryAttempt)\(/,
+    /export function (?:rerunImplementationVerifierExactly|rerunExactImplementationVerifier|rerunVerificationCommandExactly)\(/,
+    /export function (?:planImplementationVerificationRecovery|createImplementationVerificationRecoveryPlan|recoverImplementationVerificationFailure)\(/,
+  ];
+  if (recoveryExports.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('implementation-loop.ts does not yet export bounded verify auto-recovery helpers for retry budget, attempt history, exact verifier rerun, and in-loop recovery planning.');
+  }
+
+  const scenarioContracts = [
+    {
+      label: 'cleanup artifact failure',
+      category: 'cleanup_artifact_failure',
+      action: 'cleanup_artifacts',
+      signal: 'VERIFICATION_PASS',
+    },
+    {
+      label: 'transient verifier failure',
+      category: 'transient_tool_failure',
+      action: 'retry_verifier',
+      signal: 'VERIFICATION_PASS',
+    },
+    {
+      label: 'shared-contract drift repaired in-place',
+      category: 'shared_contract_drift',
+      action: 'repair_shared_contract',
+      signal: 'VERIFICATION_PASS',
+    },
+  ];
+  const missingScenarioContracts = scenarioContracts.filter((contract) => {
+    const pattern = new RegExp(
+      `${escapeRegExp(contract.category)}[\\s\\S]{0,400}${escapeRegExp(contract.action)}[\\s\\S]{0,800}${escapeRegExp(contract.signal)}[\\s\\S]{0,800}(rerun|retry|exact verifier|failing verifier)`,
+      'i',
+    );
+    return !pattern.test(helperSource + indexSource);
+  });
+  if (missingScenarioContracts.length > 0) {
+    expectedFail(`verify auto-recovery does not yet cover cleanup artifact failure, transient verifier failure, and shared-contract drift repaired in-place inside the same /ralph-implement session (${missingScenarioContracts.map((contract) => contract.label).join(', ')}).`);
+  }
+
+  const failureSection = indexSource.match(/if \(!validation\.ok\) \{[\s\S]*?continue implementationLoop;[\s\S]*?\n\s*\}/);
+  if (!failureSection) {
+    expectedFail('could not locate implementation failure handling branch for verify auto-recovery.');
+  }
+
+  if (/definition\.completionSignal === "VERIFICATION_PASS"[\s\S]{0,400}blockImplementation\(/.test(failureSection[0])) {
+    expectedFail('runImplementCommand still blocks VERIFICATION_PASS failures before any bounded in-loop recovery attempt can rerun the exact failing verifier.');
+  }
+
+  const indexRecoveryPatterns = [
+    /definition\.completionSignal === "VERIFICATION_PASS"[\s\S]{0,2000}(planImplementationVerificationRecovery|createImplementationVerificationRecoveryPlan|recoverImplementationVerificationFailure)/,
+    /(planImplementationVerificationRecovery|createImplementationVerificationRecoveryPlan|recoverImplementationVerificationFailure)[\s\S]{0,1600}(rerunImplementationVerifierExactly|rerunExactImplementationVerifier|rerunVerificationCommandExactly)/,
+    /verificationRecovery[\s\S]{0,800}attempts[\s\S]{0,800}history/s,
+    /maxVerificationRecoveryAttempts/,
+    /continue implementationLoop;[\s\S]{0,400}(verificationRecovery|VERIFICATION_PASS)/s,
+  ];
+  if (indexRecoveryPatterns.some((pattern) => !pattern.test(indexSource + helperSource))) {
+    expectedFail('runImplementCommand does not yet capture verification evidence, persist bounded verificationRecovery attempts/history, rerun the exact verifier, and continue the same session on success.');
   }
 }
 
