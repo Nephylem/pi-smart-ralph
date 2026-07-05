@@ -248,6 +248,17 @@ async function verifyRecoveryBounds() {
     expectedFail('recovery mode still lacks explicit maxFixTasksPerOriginal/maxFixTaskDepth stop checks before inserting more fix tasks.');
   }
 
+  const extractedHelperPatterns = [
+    /export function getImplementationRecoveryBounds\(/,
+    /export function isImplementationRecoveryStopRequired\(/,
+    /export function formatImplementationRecoveryStopMessage\(/,
+    /createImplementationRecoveryStopPlan\([\s\S]*?getImplementationRecoveryBounds\(/,
+    /createImplementationRecoveryStopPlan\([\s\S]*?formatImplementationRecoveryStopMessage\(/,
+  ];
+  if (!extractedHelperPatterns.every((pattern) => pattern.test(helperSource))) {
+    expectedFail('recovery bounds are not yet isolated behind reusable helper exports for bounds and stop-message formatting.');
+  }
+
   const stopBranch = failureSection[0].match(/if \([^\n]*maxFix[^\)]*\) \{[\s\S]*?blockImplementation\([\s\S]*?return;[\s\S]*?\}/);
   if (!stopBranch) {
     expectedFail('recovery mode does not yet stop non-successfully when fix-task count or depth limits are exceeded.');
@@ -260,6 +271,11 @@ async function verifyRecoveryBounds() {
   const hasStopProof = stopProofPatterns.every((pattern) => pattern.test(stopBranch[0] + helperSource));
   if (!hasStopProof) {
     expectedFail('recovery over-limit stop does not yet report the original task id plus fix-task history or lineage.');
+  }
+
+  const stableStopMessagePattern = /Recovery (?:limit|depth) reached for .*: (?:fix history .* already used .* attempts\.|lineage .* is already at depth .*\.)/;
+  if (!stableStopMessagePattern.test(helperSource)) {
+    expectedFail('recovery stop-message formatting is not stable enough for verifier assertions.');
   }
 
   if (/ALL_TASKS_COMPLETE/.test(stopBranch[0])) {

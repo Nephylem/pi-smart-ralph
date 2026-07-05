@@ -59,6 +59,11 @@ export type ImplementationRecoveryStopPlan = {
 	evidence: Record<string, unknown>;
 };
 
+export type ImplementationRecoveryBounds = {
+	maxFixTasksPerOriginal: number;
+	maxFixTaskDepth: number;
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
 }
@@ -138,14 +143,17 @@ export function createImplementationRecoveryStopPlan(
 	const priorEntry = implementationFixTaskEntryFromUnknown(fixTaskMap[originalTaskId]);
 	const attempts = priorEntry.attempts;
 	const lineageDepth = getImplementationFixTaskDepth(task, originalTaskId);
-	const maxFixTasksPerOriginal = positiveInteger(state?.maxFixTasksPerOriginal)
-		?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL;
-	const maxFixTaskDepth = positiveInteger(state?.maxFixTaskDepth)
-		?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH;
+	const { maxFixTasksPerOriginal, maxFixTaskDepth } = getImplementationRecoveryBounds(state);
 	const normalizedError = normalizeImplementationField(lastError) || "Task execution failed without reported evidence.";
-	const reason = attempts >= maxFixTasksPerOriginal
-		? `Recovery limit reached for ${originalTaskId}: fix history ${formatImplementationFixTaskIds(priorEntry.fixTaskIds)} already used ${attempts}/${maxFixTasksPerOriginal} attempts.`
-		: `Recovery depth reached for ${originalTaskId}: lineage ${failedTaskId} is already at depth ${lineageDepth}/${maxFixTaskDepth}.`;
+	const reason = formatImplementationRecoveryStopMessage({
+		originalTaskId,
+		failedTaskId,
+		attempts,
+		lineageDepth,
+		maxFixTasksPerOriginal,
+		maxFixTaskDepth,
+		fixTaskIds: priorEntry.fixTaskIds,
+	});
 	const evidence = createImplementationRecoveryStopEvidence(state?.evidence, {
 		originalTaskId,
 		failedTaskId,
@@ -172,6 +180,32 @@ export function createImplementationRecoveryStopPlan(
 		reason,
 		evidence,
 	};
+}
+
+export function getImplementationRecoveryBounds(state: RalphState | null): ImplementationRecoveryBounds {
+	return {
+		maxFixTasksPerOriginal: positiveInteger(state?.maxFixTasksPerOriginal)
+			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+		maxFixTaskDepth: positiveInteger(state?.maxFixTaskDepth)
+			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+	};
+}
+
+export function isImplementationRecoveryStopRequired(
+	attempts: number,
+	lineageDepth: number,
+	bounds: ImplementationRecoveryBounds,
+): boolean {
+	return attempts >= bounds.maxFixTasksPerOriginal || lineageDepth >= bounds.maxFixTaskDepth;
+}
+
+export function formatImplementationRecoveryStopMessage(
+	plan: Pick<ImplementationRecoveryStopPlan, "originalTaskId" | "failedTaskId" | "attempts" | "lineageDepth" | "maxFixTasksPerOriginal" | "maxFixTaskDepth" | "fixTaskIds">,
+): string {
+	return isImplementationRecoveryStopRequired(plan.attempts, plan.lineageDepth, plan)
+		&& plan.attempts >= plan.maxFixTasksPerOriginal
+		? `Recovery limit reached for ${plan.originalTaskId}: fix history ${formatImplementationFixTaskIds(plan.fixTaskIds)} already used ${plan.attempts}/${plan.maxFixTasksPerOriginal} attempts.`
+		: `Recovery depth reached for ${plan.originalTaskId}: lineage ${plan.failedTaskId} is already at depth ${plan.lineageDepth}/${plan.maxFixTaskDepth}.`;
 }
 
 export function createImplementationEvidenceScaffold(existing: unknown): Record<string, unknown> {

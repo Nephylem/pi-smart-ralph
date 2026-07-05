@@ -158,7 +158,7 @@
   - _Requirements: FR-5, AC-2.3_
   - _Design: Error Handling; Implementation loop core_
 
-- [ ] 1.12 [YELLOW] Refactor: normalize recovery-stop reporting and bound checks
+- [x] 1.12 [YELLOW] Refactor: normalize recovery-stop reporting and bound checks
   - **Do**:
     1. Extract reusable bound-check helpers and stop-message formatting.
     2. Keep recovery stop output stable for verifier assertions.
