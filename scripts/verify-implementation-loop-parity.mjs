@@ -11,6 +11,8 @@ const cases = new Map([
   ['recovery-fix', verifyRecoveryFix],
   ['recovery-bounds', verifyRecoveryBounds],
   ['task-modification', verifyTaskModification],
+  ['completion-gates', verifyCompletionGates],
+  ['parallel-batch', verifyParallelBatch],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -368,6 +370,119 @@ async function verifyTaskModification() {
 
   if (!/from\s+["']\.\/implementation-loop(?:\.ts)?["'][\s\S]*ImplementationTaskModification/.test(indexSource)) {
     expectedFail('runImplementCommand does not yet delegate task modification request handling through implementation-loop.ts helpers.');
+  }
+}
+
+async function verifyCompletionGates() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
+  if (!validationSection) {
+    expectedFail('could not locate validateSubagentCompletion completion gate validator.');
+  }
+
+  const helperGatePatterns = [
+    /export function hasImplementationCompletionSignal\(/,
+    /export function detectImplementationCompletionContradiction\(/,
+    /export function extractImplementationCompletionEvidence\(/,
+    /export function validateImplementationTaskCompletion\(/,
+  ];
+  if (!helperGatePatterns.every((pattern) => pattern.test(helperSource))) {
+    expectedFail('completion gate parsing and validation are not yet isolated behind implementation-loop.ts helper exports.');
+  }
+
+  if (!/from\s+["']\.\/implementation-loop(?:\.ts)?["'][\s\S]*validateImplementationTaskCompletion/.test(indexSource)) {
+    expectedFail('runImplementCommand does not yet import completion gate validation helpers from implementation-loop.ts.');
+  }
+
+  if (!/validateSubagentCompletion\([\s\S]*validateImplementationTaskCompletion\(/.test(indexSource)) {
+    expectedFail('validateSubagentCompletion does not yet delegate normal and \[VERIFY\] completion gates through implementation-loop.ts.');
+  }
+
+  const behaviorPatterns = [
+    /TASK_COMPLETE/,
+    /VERIFICATION_PASS/,
+    /VERIFICATION_FAIL/,
+    /requires manual|cannot be automated|USER_INPUT_REQUIRED|TASK_MODIFICATION_REQUEST/i,
+    /verify\|verification\|evidence/i,
+  ];
+  const missingBehavior = behaviorPatterns.filter((pattern) => !pattern.test(validationSection[0] + helperSource));
+  if (missingBehavior.length > 0) {
+    expectedFail('completion gate coverage does not yet prove normal-task success, contradiction rejection, keyed evidence, and [VERIFY] pass/fail handling.');
+  }
+}
+
+async function verifyParallelBatch() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const dependencySection = indexSource.match(/function assignNativeTaskDependencies\([\s\S]*?\n}\n\nfunction activeToolDependencyError/);
+  if (!dependencySection) {
+    expectedFail('could not locate native-task dependency assignment for [P] tasks.');
+  }
+
+  const barrierPatterns = [
+    /let barrier: number\[\] = \[\];/,
+    /let parallelGroup: number\[\] = \[\];/,
+    /if \(task\.isParallel\) \{[\s\S]*?task\.blockedByIndices = \[\.\.\.barrier\];[\s\S]*?parallelGroup\.push\(task\.index\);/,
+    /if \(parallelGroup\.length > 0\) \{[\s\S]*?barrier = \[\.\.\.parallelGroup\];[\s\S]*?parallelGroup = \[\];/,
+  ];
+  if (!barrierPatterns.every((pattern) => pattern.test(dependencySection[0]))) {
+    throw new Error('parallel task metadata no longer preserves downstream barrier prerequisites for contiguous [P] groups.');
+  }
+
+  const nextTaskSection = indexSource.match(/function nextImplementationTask\([\s\S]*?\n}\n\nfunction stateRecordField/);
+  if (!nextTaskSection) {
+    expectedFail('could not locate nextImplementationTask selection logic.');
+  }
+
+  if (/kind:\s*["']batch["']|batch:|taskIndices:|ExecutionBatch|parallel-sequential/.test(nextTaskSection[0])) {
+    throw new Error('parallel batch verifier expected pre-batch single-task scheduling, but batch selection markers are already present in nextImplementationTask.');
+  }
+
+  if (!/const runnable = incomplete\.find\(\(task\) => dependenciesCompleted\(task, tasks\)\);[\s\S]*return \{ kind: ["']runnable["'], task: runnable \};/.test(nextTaskSection[0])) {
+    expectedFail('nextImplementationTask no longer clearly shows the single-task runnable selection that should fail before sequential batch support exists.');
+  }
+
+  const loopSection = indexSource.match(/while \(true\) \{[\s\S]*?const next = nextImplementationTask\(tasks, numberField\(state, ["']taskIndex["']\)\);[\s\S]*?const task = next\.task;[\s\S]*?const definition = implementationSubagentDefinition\(task\);[\s\S]*?validation = validateSubagentCompletion\(completion, definition, task, workspaceReport\);/);
+  if (!loopSection) {
+    expectedFail('could not locate implementation execution loop for runnable task delegation.');
+  }
+
+  if (/for \(const batchTask of|batchTasks|executionBatch|parallelBatch/i.test(loopSection[0] + helperSource)) {
+    throw new Error('parallel batch verifier expected missing sequential batch orchestration, but batch execution markers already exist.');
+  }
+
+  const helperBatchPatterns = [
+    /ExecutionBatch/,
+    /selectImplementationExecutionBatch|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
+    /recordImplementationBatchTaskEvidence|applyImplementationBatchTaskEvidence|mergeImplementationBatchTaskEvidence/,
+    /parallel-sequential|sequential batch/i,
+  ];
+  if (helperBatchPatterns.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('contiguous [P] groups still run as individual tasks: no isolated ExecutionBatch selection/evidence helpers describe one sequential batch with listed-order semantics.');
+  }
+
+  const recoveryPatterns = [
+    /recovery stop|Recovery limit/i,
+    /fixTaskIds|lineage/,
+    /batch/i,
+  ];
+  if (recoveryPatterns.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('batch verification still lacks explicit recovery-stop coverage for aborting a contiguous [P] group before any downstream barrier task can run.');
   }
 }
 

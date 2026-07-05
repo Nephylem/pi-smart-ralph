@@ -259,7 +259,7 @@
   - _Requirements: FR-7, FR-8, AC-3.1, AC-3.2_
   - _Design: Implementation loop core; Completion validation bridge_
 
-- [ ] Q6 [VERIFY] Quality check: completion gate verifier
+- [x] Q6 [VERIFY] Quality check: completion gate verifier
   - **Do**:
     1. Run the focused completion-gates case.
   - **Files**: None
@@ -269,7 +269,7 @@
   - _Requirements: FR-7, FR-8, FR-17, AC-3.1, AC-3.2_
   - _Design: Parity verifier_
 
-- [ ] 2.7 [RED] Failing test: contiguous `[P]` groups run as one sequential batch with downstream barriers
+- [x] 2.7 [RED] Failing test: contiguous `[P]` groups run as one sequential batch with downstream barriers
   - **Do**:
     1. Add a `parallel-batch` case covering a contiguous `[P]` group, per-task evidence capture, downstream barrier behavior, and recovery stop inside the batch.
     2. Assert listed order execution is preserved even though the group is treated as one batch.
