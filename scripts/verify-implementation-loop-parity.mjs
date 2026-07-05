@@ -9,6 +9,7 @@ const cases = new Map([
   ['state-resume', verifyStateResume],
   ['state-integrity', verifyStateIntegrity],
   ['recovery-fix', verifyRecoveryFix],
+  ['recovery-bounds', verifyRecoveryBounds],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -218,6 +219,51 @@ async function verifyRecoveryFix() {
   const hasLineage = lineagePatterns.every((pattern) => pattern.test(indexSource + helperSource));
   if (!hasLineage) {
     expectedFail('recovery mode does not yet preserve the original task as the retry target in recorded fix-task lineage.');
+  }
+}
+
+async function verifyRecoveryBounds() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const failureSection = indexSource.match(/if \(!validation\.ok\) \{[\s\S]*?continue;\n\s*\}/);
+  if (!failureSection) {
+    expectedFail('could not locate implementation failure handling branch.');
+  }
+
+  const boundedRecoveryPatterns = [
+    /maxFixTasksPerOriginal/,
+    /maxFixTaskDepth/,
+    /attempts\s*>?=\s*(?:maxFixTasksPerOriginal|numberField\([^\n]+maxFixTasksPerOriginal)/,
+    /(?:depth|lineage)[\s\S]{0,160}>?=\s*(?:maxFixTaskDepth|numberField\([^\n]+maxFixTaskDepth)/,
+  ];
+  const hasBoundChecks = boundedRecoveryPatterns.every((pattern) => pattern.test(indexSource + helperSource));
+  if (!hasBoundChecks) {
+    expectedFail('recovery mode still lacks explicit maxFixTasksPerOriginal/maxFixTaskDepth stop checks before inserting more fix tasks.');
+  }
+
+  const stopBranch = failureSection[0].match(/if \([^\n]*maxFix[^\)]*\) \{[\s\S]*?blockImplementation\([\s\S]*?return;[\s\S]*?\}/);
+  if (!stopBranch) {
+    expectedFail('recovery mode does not yet stop non-successfully when fix-task count or depth limits are exceeded.');
+  }
+
+  const stopProofPatterns = [
+    /originalTaskId|retry target|retryTarget/,
+    /fixTaskIds|lineage|history/,
+  ];
+  const hasStopProof = stopProofPatterns.every((pattern) => pattern.test(stopBranch[0] + helperSource));
+  if (!hasStopProof) {
+    expectedFail('recovery over-limit stop does not yet report the original task id plus fix-task history or lineage.');
+  }
+
+  if (/ALL_TASKS_COMPLETE/.test(stopBranch[0])) {
+    throw new Error('recovery over-limit stop branch must not emit ALL_TASKS_COMPLETE.');
   }
 }
 

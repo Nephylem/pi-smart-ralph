@@ -135,7 +135,7 @@
   - _Requirements: FR-4, FR-17, AC-2.1, AC-2.2_
   - _Design: Parity verifier_
 
-- [ ] 1.10 [RED] Failing test: recovery limits stop safely without false completion
+- [x] 1.10 [RED] Failing test: recovery limits stop safely without false completion
   - **Do**:
     1. Add a `recovery-bounds` case asserting `maxFixTasksPerOriginal` and `maxFixTaskDepth` stop the loop non-successfully.
     2. Assert the failure reports the original task ID plus fix-task history or lineage and emits no `ALL_TASKS_COMPLETE`.
