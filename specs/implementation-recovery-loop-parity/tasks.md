@@ -391,7 +391,7 @@
   - _Requirements: FR-12, FR-13, FR-14, FR-15, FR-16, AC-4.1, AC-4.2, AC-4.3, AC-4.4, AC-4.5_
   - _Design: Completion finalizer; `runRalphIndex` reuse; optional PR output_
 
-- [ ] 3.3 [YELLOW] Refactor: isolate finalizer side effects and terminal output formatting
+- [x] 3.3 [YELLOW] Refactor: isolate finalizer side effects and terminal output formatting
   - **Do**:
     1. Extract finalizer steps behind a small helper surface.
     2. Keep index-failure and PR-output formatting stable for verifier assertions.

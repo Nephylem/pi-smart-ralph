@@ -135,6 +135,26 @@ export type ImplementationFinalizerTaskLike = {
 	status?: string | null;
 };
 
+export type ImplementationFinalizerFailureOutputInput = {
+	specName: string;
+	taskCount: number;
+	statePath: string;
+	epicLines: readonly string[];
+	indexError: string;
+	indexSummary: string;
+};
+
+export type ImplementationFinalizerSuccessOutputInput = {
+	specName: string;
+	taskCount: number;
+	statePath: string;
+	completedSummaries: readonly string[];
+	epicLines: readonly string[];
+	indexSummary: string;
+	deletedProgressFiles: readonly string[];
+	prUrl: string | null;
+};
+
 export type ImplementationReviewTaskLike = {
 	index: number;
 	taskNumber?: string;
@@ -971,6 +991,135 @@ export function createImplementationFinalEvidence(
 			...patch,
 		},
 	};
+}
+
+export function createImplementationFinalizerStartedPatch(
+	existing: unknown,
+	taskCount: number,
+	completedAt: string,
+): Record<string, unknown> {
+	return {
+		phase: "execution",
+		taskIndex: taskCount,
+		totalTasks: taskCount,
+		awaitingApproval: false,
+		blocked: false,
+		validationError: null,
+		activeTaskPendingEvidence: null,
+		completedAt,
+		evidence: createImplementationFinalEvidence(existing, {
+			completedAt,
+			epicUpdated: false,
+			indexFinalized: false,
+			prUrl: null,
+		}),
+	};
+}
+
+export function createImplementationFinalizerEpicUpdatedPatch(
+	existing: unknown,
+	taskCount: number,
+	completedAt: string,
+): Record<string, unknown> {
+	return {
+		phase: "execution",
+		taskIndex: taskCount,
+		totalTasks: taskCount,
+		awaitingApproval: false,
+		blocked: false,
+		validationError: null,
+		activeTaskPendingEvidence: null,
+		evidence: createImplementationFinalEvidence(existing, {
+			completedAt,
+			epicUpdated: true,
+			indexFinalized: false,
+			prUrl: null,
+		}),
+	};
+}
+
+export function createImplementationFinalizerIndexFailurePatch(
+	existing: unknown,
+	taskCount: number,
+	completedAt: string,
+	indexError: string,
+): Record<string, unknown> {
+	return {
+		phase: "execution",
+		taskIndex: taskCount,
+		totalTasks: taskCount,
+		awaitingApproval: false,
+		blocked: true,
+		validationError: `Implementation completion index finalization failed: ${indexError}`,
+		finalizationError: indexError,
+		finalizationErrorAt: new Date().toISOString(),
+		activeTaskPendingEvidence: null,
+		evidence: createImplementationFinalEvidence(existing, {
+			completedAt,
+			epicUpdated: true,
+			indexFinalized: false,
+			indexError,
+			prUrl: null,
+		}),
+	};
+}
+
+export function createImplementationFinalizerSuccessPatch(
+	existing: unknown,
+	taskCount: number,
+	completedAt: string,
+	indexSummary: string | undefined,
+	deletedProgressFiles: readonly string[],
+	prUrl: string | null,
+): Record<string, unknown> {
+	return {
+		phase: "completed",
+		taskIndex: taskCount,
+		totalTasks: taskCount,
+		awaitingApproval: false,
+		blocked: false,
+		validationError: null,
+		activeTaskPendingEvidence: null,
+		completedAt,
+		evidence: createImplementationFinalEvidence(existing, {
+			completedAt,
+			epicUpdated: true,
+			indexFinalized: true,
+			indexSummary,
+			deletedTempFiles: [...deletedProgressFiles],
+			prUrl,
+		}),
+	};
+}
+
+export function formatImplementationFinalizerIndexFailureOutput(input: ImplementationFinalizerFailureOutputInput): string {
+	return [
+		`Ralph implementation blocked for spec: ${input.specName}`,
+		"",
+		`Tasks: ${input.taskCount}/${input.taskCount} completed`,
+		`State: ${input.statePath}`,
+		...(input.epicLines.length > 0 ? ["", ...input.epicLines] : []),
+		"",
+		`Index finalization failed: ${input.indexError}`,
+		input.indexSummary,
+	].join("\n");
+}
+
+export function formatImplementationFinalizerSuccessOutput(input: ImplementationFinalizerSuccessOutputInput): string {
+	return [
+		`Ralph implementation complete for spec: ${input.specName}`,
+		"",
+		`Tasks: ${input.taskCount}/${input.taskCount} completed`,
+		`State: ${input.statePath} deleted`,
+		...input.completedSummaries,
+		...(input.epicLines.length > 0 ? ["", ...input.epicLines] : []),
+		"",
+		input.indexSummary,
+		`Temporary progress cleanup (.progress-task-*.md): ${input.deletedProgressFiles.length > 0 ? input.deletedProgressFiles.join(", ") : "none removed"}`,
+		"",
+		"ALL_TASKS_COMPLETE",
+		...(input.prUrl ? [`PR URL: ${input.prUrl}`] : []),
+	].join("\n");
 }
 
 // Final completion must only happen after runArtifactReview(...) checkpoints record REVIEW_PASS/REVIEW_FAIL under evidence.reviews.
