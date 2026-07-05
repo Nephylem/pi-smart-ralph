@@ -7378,7 +7378,7 @@ async function runImplementCommand(
 	setRalphStatus(ctx, `Ralph implement: ${spec.name}`);
 
 	try {
-		while (true) {
+		implementationLoop: while (true) {
 			state = readRalphState(spec, options) ?? state;
 			taskData = readImplementationTasks(spec);
 			let tasks = restoreUnverifiedActiveTaskIfNeeded(spec, state, taskData.tasks, options);
@@ -7425,273 +7425,277 @@ async function runImplementCommand(
 				return;
 			}
 
-			const task = next.task;
-			const executionBatch = next.kind === "batch" ? next.taskIndices : [task.index];
+			const batchTasks = next.kind === "batch"
+				? next.taskIndices.map((taskIndex) => tasks[taskIndex]).filter((candidate): candidate is ParsedNativeTask => Boolean(candidate))
+				: [next.task];
+			const executionBatch = batchTasks.map((task) => task.index);
 			const applyImplementationBatchTaskEvidence = mergeImplementationBatchTaskEvidence;
-			const batchPosition = Math.max(0, executionBatch.indexOf(task.index));
-			const globalIteration = numberField(state, "globalIteration") ?? 1;
-			if (globalIteration > parsed.maxGlobalIterations) {
-				await blockImplementation(ctx, spec, task, `Max global iterations exceeded (${parsed.maxGlobalIterations}).`, options);
-				return;
-			}
 
-			const sameTask = numberField(state, "taskIndex") === task.index;
-			const taskIteration = sameTask ? numberField(state, "taskIteration") ?? 1 : 1;
-			if (taskIteration > parsed.maxTaskIterations) {
-				await blockImplementation(ctx, spec, task, `Max task iterations exceeded (${parsed.maxTaskIterations}).`, options);
-				return;
-			}
+			for (const batchTask of batchTasks) {
+				const task = batchTask;
+				const batchPosition = Math.max(0, executionBatch.indexOf(task.index));
+				const globalIteration = numberField(state, "globalIteration") ?? 1;
+				if (globalIteration > parsed.maxGlobalIterations) {
+					await blockImplementation(ctx, spec, task, `Max global iterations exceeded (${parsed.maxGlobalIterations}).`, options);
+					return;
+				}
 
-			const definition = implementationSubagentDefinition(task);
-			state = mergeRalphState(spec, implementationAttemptPatch(spec, state, parsed, task, tasks.length, taskIteration, globalIteration), options);
+				const sameTask = numberField(state, "taskIndex") === task.index;
+				const taskIteration = sameTask ? numberField(state, "taskIteration") ?? 1 : 1;
+				if (taskIteration > parsed.maxTaskIterations) {
+					await blockImplementation(ctx, spec, task, `Max task iterations exceeded (${parsed.maxTaskIterations}).`, options);
+					return;
+				}
 
-			let nativeUpdate: NativeExecutionUpdate;
-			try {
-				nativeUpdate = setNativeTaskExecutionStatus(ctx, state, task, "in_progress", {
-					ralphExecutionAgent: definition.agentName,
-					ralphExecutionSignalRequired: definition.completionSignal,
+				const definition = implementationSubagentDefinition(task);
+				state = mergeRalphState(spec, implementationAttemptPatch(spec, state, parsed, task, tasks.length, taskIteration, globalIteration), options);
+
+				let nativeUpdate: NativeExecutionUpdate;
+				try {
+					nativeUpdate = setNativeTaskExecutionStatus(ctx, state, task, "in_progress", {
+						ralphExecutionAgent: definition.agentName,
+						ralphExecutionSignalRequired: definition.completionSignal,
+					});
+				} catch (error) {
+					await blockImplementation(ctx, spec, task, `Failed to mark native pi-task in_progress: ${formatError(error)}`, options);
+					return;
+				}
+
+				setRalphStatus(
+					ctx,
+					executionBatch.length > 1
+						? `Ralph implement: ${task.activeForm} (sequential batch ${batchPosition + 1}/${executionBatch.length})`
+						: `Ralph implement: ${task.activeForm}`,
+				);
+				const workspaceReport = analyzeTaskWorkspace({
+					basePath: spec.absolutePath,
+					filesDirective: task.fields["files"],
+					tasksPath: artifactPath(spec, "tasks"),
+					progressPath: getProgressPath(spec, options),
+					commitDirective: task.fields["commit"],
 				});
-			} catch (error) {
-				await blockImplementation(ctx, spec, task, `Failed to mark native pi-task in_progress: ${formatError(error)}`, options);
-				return;
-			}
+				pendingImplementationPromptWorkspaceReport = workspaceReport;
+				const prompt = buildImplementationPrompt(task, definition, spec, state, options);
+				let validation: CompletionValidation;
+				let completionOutput = "";
+				try {
+					const completion = await runRalphSubagent(pi, definition, prompt, (agentId) => {
+						return startRalphSubagentStatusTicker(ctx, `implement ${task.activeForm}`, definition.agentName, agentId);
+					});
+					completionOutput = subagentCompletionOutput(completion);
+					validation = validateSubagentCompletion(completion, definition, task, workspaceReport);
+				} catch (error) {
+					validation = {
+						ok: false,
+						signal: definition.completionSignal,
+						error: `Subagent failed: ${formatError(error)}`,
+						output: "",
+					};
+				}
 
-			setRalphStatus(
-				ctx,
-				executionBatch.length > 1
-					? `Ralph implement: ${task.activeForm} (sequential batch ${batchPosition + 1}/${executionBatch.length})`
-					: `Ralph implement: ${task.activeForm}`,
-			);
-			const workspaceReport = analyzeTaskWorkspace({
-				basePath: spec.absolutePath,
-				filesDirective: task.fields["files"],
-				tasksPath: artifactPath(spec, "tasks"),
-				progressPath: getProgressPath(spec, options),
-				commitDirective: task.fields["commit"],
-			});
-			pendingImplementationPromptWorkspaceReport = workspaceReport;
-			const prompt = buildImplementationPrompt(task, definition, spec, state, options);
-			let validation: CompletionValidation;
-			let completionOutput = "";
-			try {
-				const completion = await runRalphSubagent(pi, definition, prompt, (agentId) => {
-					return startRalphSubagentStatusTicker(ctx, `implement ${task.activeForm}`, definition.agentName, agentId);
-				});
-				completionOutput = subagentCompletionOutput(completion);
-				validation = validateSubagentCompletion(completion, definition, task, workspaceReport);
-			} catch (error) {
-				validation = {
-					ok: false,
-					signal: definition.completionSignal,
-					error: `Subagent failed: ${formatError(error)}`,
-					output: "",
-				};
-			}
+				if (!validation.ok) {
+					const recoveryMode = parsed.recoveryMode || booleanField(state, "recoveryMode") === true;
+					const modificationResult = definition.completionSignal === "TASK_COMPLETE"
+						? handleTaskModificationRequest(pi, ctx, spec, task, state, completionOutput || validation.output, options)
+						: { present: false, applied: false };
+					if (modificationResult.present) {
+						if (!modificationResult.applied) {
+							const reason = modificationResult.error ?? validation.error ?? "Task modification request could not be applied.";
+							const blockerPatch = {
+								taskIndex: task.index,
+								totalTasks: tasks.length,
+								taskIteration,
+								globalIteration: globalIteration + 1,
+								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+							};
+							await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
+							return;
+						}
+						state = modificationResult.state ?? state;
+						if (modificationResult.summary) completedSummaries.push(modificationResult.summary);
+						continue implementationLoop;
+					}
 
-			if (!validation.ok) {
-				const recoveryMode = parsed.recoveryMode || booleanField(state, "recoveryMode") === true;
-				const modificationResult = definition.completionSignal === "TASK_COMPLETE"
-					? handleTaskModificationRequest(pi, ctx, spec, task, state, completionOutput || validation.output, options)
-					: { present: false, applied: false };
-				if (modificationResult.present) {
-					if (!modificationResult.applied) {
-						const reason = modificationResult.error ?? validation.error ?? "Task modification request could not be applied.";
+					setTaskCheckboxStatus(spec, task.index, false);
+					const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
+					const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
+					if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
+						const recoveryStop = createImplementationRecoveryStopPlan(state, task, completionOutput || validation.output || reason);
+						const maxFixTasksPerOriginal = recoveryStop.maxFixTasksPerOriginal;
+						const maxFixTaskDepth = recoveryStop.maxFixTaskDepth;
+						if (recoveryStop.attempts >= maxFixTasksPerOriginal || recoveryStop.lineageDepth >= maxFixTaskDepth) {
+							const stopReason = `${recoveryStop.reason} originalTaskId=${recoveryStop.originalTaskId}; fixTaskIds=${recoveryStop.fixTaskIds.join(",") || "none"}; lineage=${recoveryStop.failedTaskId}; batch=parallel-sequential;`;
+							await blockImplementation(ctx, spec, task, stopReason, options, {
+								taskIndex: task.index,
+								totalTasks: tasks.length,
+								taskIteration,
+								globalIteration: globalIteration + 1,
+								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+								...createImplementationStateDefaults(state, {
+									fixTaskMap: stateRecordField(state, "fixTaskMap"),
+									maxFixTasksPerOriginal,
+									maxFixTaskDepth,
+									modificationMap: stateRecordField(state, "modificationMap"),
+									nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+									evidence: recoveryStop.evidence,
+									maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+									maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+								}),
+							});
+							return;
+						}
+						const recoveryPlan = createImplementationFixTaskPlan(state, task, completionOutput || validation.output || reason);
+						insertTaskBlocks(spec, task, [recoveryPlan.fixTaskBlock], "after");
+						const refreshedTasks = readImplementationTasks(spec).tasks;
+						const insertedFixTask = refreshedTasks.find((candidate) => candidate.taskNumber === recoveryPlan.fixTaskId);
+						const insertedFixTaskIndex = insertedFixTask?.index;
+						if (insertedFixTaskIndex === undefined || !insertedFixTask) {
+							await blockImplementation(ctx, spec, task, `Recovery mode could not locate inserted fix task ${recoveryPlan.fixTaskId}.`, options, {
+								taskIndex: task.index,
+								totalTasks: refreshedTasks.length,
+								taskIteration,
+								globalIteration: globalIteration + 1,
+								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+							});
+							return;
+						}
+						state = mergeRalphState(
+							spec,
+							{
+								phase: "execution",
+								taskIndex: insertedFixTaskIndex,
+								totalTasks: tasks.length + 1,
+								taskIteration: 1,
+								globalIteration: globalIteration + 1,
+								blocked: false,
+								validationError: reason,
+								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+								...createImplementationStateDefaults(state, {
+									fixTaskMap: recoveryPlan.fixTaskMap,
+									maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+									maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+									modificationMap: stateRecordField(state, "modificationMap"),
+									nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+									evidence: stateRecordField(state, "evidence"),
+									maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+									maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+								}),
+							},
+							options,
+						);
+						state = ensureNativeTaskCardsForImplementation(pi, ctx, spec, options, state, refreshedTasks);
+						continue implementationLoop;
+					}
+					if (exhausted) {
 						const blockerPatch = {
 							taskIndex: task.index,
 							totalTasks: tasks.length,
 							taskIteration,
 							globalIteration: globalIteration + 1,
-							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+							lastSubagentOutput: truncateForPrompt(validation.output, 6000),
 						};
 						await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
 						return;
 					}
-					state = modificationResult.state ?? state;
-					if (modificationResult.summary) completedSummaries.push(modificationResult.summary);
-					continue; // modification handled; restart task scan with updated tasks.md/state
-				}
-
-				setTaskCheckboxStatus(spec, task.index, false);
-				const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
-				const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
-				if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
-					const recoveryStop = createImplementationRecoveryStopPlan(state, task, completionOutput || validation.output || reason);
-					const maxFixTasksPerOriginal = recoveryStop.maxFixTasksPerOriginal;
-					const maxFixTaskDepth = recoveryStop.maxFixTaskDepth;
-					if (recoveryStop.attempts >= maxFixTasksPerOriginal || recoveryStop.lineageDepth >= maxFixTaskDepth) {
-						const stopReason = `${recoveryStop.reason} originalTaskId=${recoveryStop.originalTaskId}; fixTaskIds=${recoveryStop.fixTaskIds.join(",") || "none"}; lineage=${recoveryStop.failedTaskId};`;
-						await blockImplementation(ctx, spec, task, stopReason, options, {
-							taskIndex: task.index,
-							totalTasks: tasks.length,
-							taskIteration,
-							globalIteration: globalIteration + 1,
-							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
-							...createImplementationStateDefaults(state, {
-								fixTaskMap: stateRecordField(state, "fixTaskMap"),
-								maxFixTasksPerOriginal,
-								maxFixTaskDepth,
-								modificationMap: stateRecordField(state, "modificationMap"),
-								nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
-								evidence: recoveryStop.evidence,
-								maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
-								maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
-							}),
-						});
-						return;
-					}
-					const recoveryPlan = createImplementationFixTaskPlan(state, task, completionOutput || validation.output || reason);
-					insertTaskBlocks(spec, task, [recoveryPlan.fixTaskBlock], "after");
-					const refreshedTasks = readImplementationTasks(spec).tasks;
-					const insertedFixTask = refreshedTasks.find((candidate) => candidate.taskNumber === recoveryPlan.fixTaskId);
-					const insertedFixTaskIndex = insertedFixTask?.index;
-					if (insertedFixTaskIndex === undefined || !insertedFixTask) {
-						await blockImplementation(ctx, spec, task, `Recovery mode could not locate inserted fix task ${recoveryPlan.fixTaskId}.`, options, {
-							taskIndex: task.index,
-							totalTasks: refreshedTasks.length,
-							taskIteration,
-							globalIteration: globalIteration + 1,
-							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
-						});
-						return;
-					}
+					appendImplementationRetry(spec, task, reason, options);
 					state = mergeRalphState(
 						spec,
 						{
 							phase: "execution",
-							taskIndex: insertedFixTaskIndex,
-							totalTasks: tasks.length + 1,
-							taskIteration: 1,
+							taskIndex: task.index,
+							totalTasks: tasks.length,
+							taskIteration: taskIteration + 1,
 							globalIteration: globalIteration + 1,
 							blocked: false,
 							validationError: reason,
-							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
-							...createImplementationStateDefaults(state, {
-								fixTaskMap: recoveryPlan.fixTaskMap,
-								maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
-								maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
-								modificationMap: stateRecordField(state, "modificationMap"),
-								nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
-								evidence: stateRecordField(state, "evidence"),
-								maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
-								maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
-							}),
+							lastSubagentOutput: truncateForPrompt(validation.output, 6000),
 						},
 						options,
 					);
-					state = ensureNativeTaskCardsForImplementation(pi, ctx, spec, options, state, refreshedTasks);
-					continue;
+					continue implementationLoop;
 				}
-				if (exhausted) {
-					const blockerPatch = {
-						taskIndex: task.index,
-						totalTasks: tasks.length,
-						taskIteration,
-						globalIteration: globalIteration + 1,
-						lastSubagentOutput: truncateForPrompt(validation.output, 6000),
-					};
-					await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
+
+				setTaskCheckboxStatus(spec, task.index, true);
+				const coordinatorProgressCommit = appendImplementationProgress(spec, task, definition, validation.evidence ?? "", nativeUpdate.taskId, options);
+				try {
+					setNativeTaskExecutionStatus(ctx, state, task, "completed", {
+						ralphExecutionAgent: definition.agentName,
+						ralphExecutionSignal: definition.completionSignal,
+						ralphExecutionEvidence: validation.evidence,
+					});
+				} catch (error) {
+					await blockImplementation(ctx, spec, task, `Task completed but native pi-task completion update failed: ${formatError(error)}`, options);
 					return;
 				}
-				appendImplementationRetry(spec, task, reason, options);
+
+				const refreshedTasks = readImplementationTasks(spec).tasks;
+				const remainingBatchTasks = executionBatch
+					.slice(batchPosition + 1)
+					.map((taskIndex) => refreshedTasks[taskIndex])
+					.filter((candidate): candidate is ParsedNativeTask => Boolean(candidate) && candidate.status !== "completed");
+				const following = remainingBatchTasks.length > 0
+					? { kind: "batch" as const, task: remainingBatchTasks[0], taskIndices: executionBatch, mode: "parallel-sequential" as const }
+					: nextImplementationTask(refreshedTasks, task.index);
+				const completedAt = new Date().toISOString();
+				const evidenceEntry = {
+					signal: definition.completionSignal,
+					proof: validation.evidence ?? "",
+					agent: definition.agentName,
+					completedAt,
+				};
 				state = mergeRalphState(
 					spec,
 					{
-						phase: "execution",
-						taskIndex: task.index,
-						totalTasks: tasks.length,
-						taskIteration: taskIteration + 1,
+						phase: following.kind === "complete" ? "completed" : "execution",
+						taskIndex: following.kind === "runnable" || following.kind === "batch"
+							? following.task.index
+							: refreshedTasks.length,
+						totalTasks: refreshedTasks.length,
+						taskIteration: 1,
 						globalIteration: globalIteration + 1,
+						...createImplementationStateDefaults(state, {
+							maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+							maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+							fixTaskMap: stateRecordField(state, "fixTaskMap"),
+							modificationMap: stateRecordField(state, "modificationMap"),
+							nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+							evidence: executionBatch.length > 1
+								? applyImplementationBatchTaskEvidence(state?.evidence, [{ taskKey: task.checkboxKey, entry: evidenceEntry }])
+								: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, evidenceEntry),
+							maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+							maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+						}),
+						awaitingApproval: false,
 						blocked: false,
-						validationError: reason,
-						lastSubagentOutput: truncateForPrompt(validation.output, 6000),
+						validationError: null,
+						activeTaskPendingEvidence: null,
+						lastCompletedTaskIndex: task.index,
+						lastCompletedTaskSignal: definition.completionSignal,
+						lastCompletedTaskEvidence: validation.evidence,
+						verifiedTaskEvidence: {
+							[task.checkboxKey]: {
+								signal: definition.completionSignal,
+								evidence: validation.evidence,
+								agent: definition.agentName,
+								completedAt,
+								batch: executionBatch.length > 1 ? {
+									mode: "parallel-sequential",
+									position: batchPosition + 1,
+									size: executionBatch.length,
+								} : undefined,
+							},
+						},
 					},
 					options,
 				);
-				continue;
+				const progressCommitSummary = coordinatorProgressCommit.committed
+					? `; coordinator progress commit ${coordinatorProgressCommit.hash ?? "unknown"}`
+					: coordinatorProgressCommit.error
+						? `; coordinator progress commit failed: ${coordinatorProgressCommit.error}`
+						: "";
+				completedSummaries.push(`- Completed task ${task.index + 1}: ${task.subject} (${definition.completionSignal}; ${validation.evidence}${executionBatch.length > 1 ? `; sequential batch ${batchPosition + 1}/${executionBatch.length}` : ""}${progressCommitSummary})`);
 			}
 
-			setTaskCheckboxStatus(spec, task.index, true);
-			const coordinatorProgressCommit = appendImplementationProgress(spec, task, definition, validation.evidence ?? "", nativeUpdate.taskId, options);
-			try {
-				setNativeTaskExecutionStatus(ctx, state, task, "completed", {
-					ralphExecutionAgent: definition.agentName,
-					ralphExecutionSignal: definition.completionSignal,
-					ralphExecutionEvidence: validation.evidence,
-				});
-			} catch (error) {
-				await blockImplementation(ctx, spec, task, `Task completed but native pi-task completion update failed: ${formatError(error)}`, options);
-				return;
-			}
-
-			const refreshedTasks = readImplementationTasks(spec).tasks;
-			const remainingBatchTask = executionBatch
-				.slice(batchPosition + 1)
-				.map((taskIndex) => refreshedTasks[taskIndex])
-				.find((candidate) => candidate && candidate.status !== "completed");
-			const following = remainingBatchTask
-				? {
-					kind: "batch" as const,
-					task: remainingBatchTask,
-					taskIndices: executionBatch,
-					mode: "parallel-sequential" as const,
-				}
-				: nextImplementationTask(refreshedTasks, numberField(state, "taskIndex"));
-			const completedAt = new Date().toISOString();
-			const evidenceEntry = {
-				signal: definition.completionSignal,
-				proof: validation.evidence ?? "",
-				agent: definition.agentName,
-				completedAt,
-			};
-			state = mergeRalphState(
-				spec,
-				{
-					phase: following.kind === "complete" ? "completed" : "execution",
-					taskIndex: following.kind === "runnable" || following.kind === "batch" ? following.task.index : refreshedTasks.length,
-					totalTasks: refreshedTasks.length,
-					taskIteration: 1,
-					globalIteration: globalIteration + 1,
-					...createImplementationStateDefaults(state, {
-						maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
-						maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
-						fixTaskMap: stateRecordField(state, "fixTaskMap"),
-						modificationMap: stateRecordField(state, "modificationMap"),
-						nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
-						evidence: executionBatch.length > 1
-							? applyImplementationBatchTaskEvidence(state?.evidence, [{ taskKey: task.checkboxKey, entry: evidenceEntry }])
-							: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, evidenceEntry),
-						maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
-						maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
-					}),
-					awaitingApproval: false,
-					blocked: false,
-					validationError: null,
-					activeTaskPendingEvidence: null,
-					lastCompletedTaskIndex: task.index,
-					lastCompletedTaskSignal: definition.completionSignal,
-					lastCompletedTaskEvidence: validation.evidence,
-					verifiedTaskEvidence: {
-						[task.checkboxKey]: {
-							signal: definition.completionSignal,
-							evidence: validation.evidence,
-							agent: definition.agentName,
-							completedAt,
-							batch: executionBatch.length > 1 ? {
-								mode: "parallel-sequential",
-								position: batchPosition + 1,
-								size: executionBatch.length,
-							} : undefined,
-						},
-					},
-				},
-				options,
-			);
-			const progressCommitSummary = coordinatorProgressCommit.committed
-				? `; coordinator progress commit ${coordinatorProgressCommit.hash ?? "unknown"}`
-				: coordinatorProgressCommit.error
-					? `; coordinator progress commit failed: ${coordinatorProgressCommit.error}`
-					: "";
-			completedSummaries.push(`- Completed task ${task.index + 1}: ${task.subject} (${definition.completionSignal}; ${validation.evidence}${executionBatch.length > 1 ? `; sequential batch ${batchPosition + 1}/${executionBatch.length}` : ""}${progressCommitSummary})`);
 		}
 	} catch (error) {
 		await blockImplementation(ctx, spec, null, formatError(error), options);
