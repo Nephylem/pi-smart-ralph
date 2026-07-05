@@ -81,7 +81,7 @@
   - _Requirements: FR-3, FR-9, AC-1.3, AC-3.3_
   - _Design: Implementation loop core; Error Handling_
 
-- [ ] Q2 [VERIFY] Quality check: state integrity verifier
+- [x] Q2 [VERIFY] Quality check: state integrity verifier
   - **Do**:
     1. Run the focused integrity case for corrupt-state rejection and native-map repair.
   - **Files**: None
@@ -102,7 +102,7 @@
   - _Requirements: FR-4, AC-2.1, AC-2.2_
   - _Design: Fix-task planning; `FixTaskEntry`; Data Flow_
 
-- [ ] 1.8 [GREEN] Pass test: generate fix-task chains and persist recovery metadata
+- [x] 1.8 [GREEN] Pass test: generate fix-task chains and persist recovery metadata
   - **Do**:
     1. Update the loop to patch `fixTaskMap[originalTaskId]` with `attempts`, `fixTaskIds`, and `lastError` before the next iteration.
     2. Insert recovery tasks into `tasks.md` immediately after the failed block with deterministic IDs.

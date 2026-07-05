@@ -17,8 +17,73 @@ export type ImplementationTaskEvidenceEntry = {
 	completedAt: string;
 };
 
+export type ImplementationRecoveryTaskLike = {
+	taskNumber?: string;
+	stableKey: string;
+	rawTitle?: string;
+	subject: string;
+	fields: Record<string, string>;
+};
+
+export type ImplementationFixTaskEntry = {
+	attempts: number;
+	fixTaskIds: string[];
+	lastError?: string;
+};
+
+export type ImplementationFixTaskPlan = {
+	originalTaskId: string;
+	attempts: number;
+	fixTaskId: string;
+	fixTaskBlock: string;
+	fixTaskMap: Record<string, unknown>;
+	lastError: string;
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
+}
+
+export function resolveImplementationRetryTarget(task: ImplementationRecoveryTaskLike): string {
+	const retryTarget = normalizeImplementationField(task.fields["retry target"]);
+	if (retryTarget) return retryTarget;
+
+	const fixMatch = `${task.rawTitle ?? ""} ${task.subject}`.match(/\[FIX\s+([^\]]+)\]/i);
+	if (fixMatch?.[1]?.trim()) return fixMatch[1].trim();
+
+	return task.taskNumber?.trim() || task.stableKey;
+}
+
+export function createImplementationFixTaskPlan(
+	state: RalphState | null,
+	task: ImplementationRecoveryTaskLike,
+	lastError: string,
+): ImplementationFixTaskPlan {
+	const originalTaskId = resolveImplementationRetryTarget(task);
+	const fixTaskMap = implementationStateRecord(state?.fixTaskMap);
+	const priorEntry = implementationFixTaskEntryFromUnknown(fixTaskMap[originalTaskId]);
+	const attempts = priorEntry.attempts + 1;
+	const fixTaskId = `${originalTaskId}.${attempts}`;
+	const fixTaskIds = priorEntry.fixTaskIds.includes(fixTaskId)
+		? [...priorEntry.fixTaskIds]
+		: [...priorEntry.fixTaskIds, fixTaskId];
+	const normalizedError = normalizeImplementationField(lastError) || "Task execution failed without reported evidence.";
+
+	return {
+		originalTaskId,
+		attempts,
+		fixTaskId,
+		lastError: normalizedError,
+		fixTaskMap: {
+			...fixTaskMap,
+			[originalTaskId]: {
+				attempts,
+				fixTaskIds,
+				lastError: normalizedError,
+			},
+		},
+		fixTaskBlock: buildImplementationFixTaskBlock(task, originalTaskId, fixTaskId, normalizedError),
+	};
 }
 
 export function createImplementationEvidenceScaffold(existing: unknown): Record<string, unknown> {
@@ -178,6 +243,64 @@ function implementationExecutionFieldError(
 	}
 
 	return null;
+}
+
+function implementationFixTaskEntryFromUnknown(value: unknown): ImplementationFixTaskEntry {
+	if (!isRecord(value)) {
+		return { attempts: 0, fixTaskIds: [] };
+	}
+
+	const attempts = positiveInteger(value.attempts) ?? 0;
+	const fixTaskIds = Array.isArray(value.fixTaskIds)
+		? value.fixTaskIds.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+		: [];
+	const lastError = normalizeImplementationField(value.lastError);
+
+	return {
+		attempts,
+		fixTaskIds,
+		...(lastError ? { lastError } : {}),
+	};
+}
+
+function buildImplementationFixTaskBlock(
+	task: ImplementationRecoveryTaskLike,
+	originalTaskId: string,
+	fixTaskId: string,
+	lastError: string,
+): string {
+	const subject = normalizeImplementationField(task.subject) || "Recover failed task";
+	const files = normalizeImplementationField(task.fields.files) || "None";
+	const doneWhen = normalizeImplementationField(task.fields["done when"]) || "The original task can be retried safely.";
+	const verify = normalizeImplementationField(task.fields.verify) || "None";
+	const commit = normalizeImplementationField(task.fields.commit) || "Commit: None";
+	const requirements = normalizeImplementationField(task.fields.requirements);
+	const design = normalizeImplementationField(task.fields.design);
+	const doLines = [
+		"1. Diagnose and fix the blocker that prevented the retry target from completing.",
+		"2. Re-run the original verifier and record proof so the coordinator can retry the original task.",
+	];
+
+	const lines = [
+		`- [ ] ${fixTaskId} [FIX ${originalTaskId}] ${subject}`,
+		"  - **Do**:",
+		...doLines.map((line) => `    ${line}`),
+		`  - **Files**: ${files}`,
+		`  - **Retry target**: \`${originalTaskId}\``,
+		`  - **Last error**: ${lastError}`,
+		`  - **Done when**: ${doneWhen}`,
+		`  - **Verify**: ${verify}`,
+		`  - **Commit**: ${commit}`,
+	];
+
+	if (requirements) lines.push(`  - _Requirements: ${requirements}_`);
+	if (design) lines.push(`  - _Design: ${design}_`);
+
+	return lines.join("\n");
+}
+
+function normalizeImplementationField(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
 }
 
 function positiveInteger(value: unknown): number | undefined {

@@ -78,6 +78,7 @@ import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBACK_SAFE_HELP_LINE } from "./feedback.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
+	createImplementationFixTaskPlan,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
 	getImplementationNativeTaskRepairReason,
@@ -6164,9 +6165,16 @@ function dependenciesCompleted(task: ParsedNativeTask, tasks: ParsedNativeTask[]
 	return task.blockedByIndices.every((dependencyIndex) => tasks[dependencyIndex]?.status === "completed");
 }
 
-function nextImplementationTask(tasks: ParsedNativeTask[]): NextTaskResult {
+function nextImplementationTask(tasks: ParsedNativeTask[], preferredTaskIndex?: number | null): NextTaskResult {
 	const incomplete = tasks.filter((task) => task.status !== "completed");
 	if (incomplete.length === 0) return { kind: "complete" };
+
+	if (typeof preferredTaskIndex === "number" && Number.isInteger(preferredTaskIndex) && preferredTaskIndex >= 0) {
+		const preferredTask = tasks[preferredTaskIndex];
+		if (preferredTask && preferredTask.status !== "completed" && dependenciesCompleted(preferredTask, tasks)) {
+			return { kind: "runnable", task: preferredTask };
+		}
+	}
 
 	const runnable = incomplete.find((task) => dependenciesCompleted(task, tasks));
 	if (runnable) return { kind: "runnable", task: runnable };
@@ -7474,7 +7482,7 @@ async function runImplementCommand(
 			tasks = readImplementationTasks(spec).tasks;
 			syncNativeCardsFromTasks(ctx, state, tasks);
 
-			const next = nextImplementationTask(tasks);
+			const next = nextImplementationTask(tasks, numberField(state, "taskIndex"));
 			if (next.kind === "complete") {
 				const finalState = mergeRalphState(
 					spec,
@@ -7570,6 +7578,7 @@ async function runImplementCommand(
 			}
 
 			if (!validation.ok) {
+				const recoveryMode = parsed.recoveryMode || booleanField(state, "recoveryMode") === true;
 				const modificationResult = definition.completionSignal === "TASK_COMPLETE"
 					? handleTaskModificationRequest(pi, ctx, spec, task, state, completionOutput || validation.output, options)
 					: { present: false, applied: false };
@@ -7594,6 +7603,49 @@ async function runImplementCommand(
 				setTaskCheckboxStatus(spec, task.index, false);
 				const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
 				const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
+				if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
+					const recoveryPlan = createImplementationFixTaskPlan(state, task, completionOutput || validation.output || reason);
+					insertTaskBlocks(spec, task, [recoveryPlan.fixTaskBlock], "after");
+					const refreshedTasks = readImplementationTasks(spec).tasks;
+					const insertedFixTask = refreshedTasks.find((candidate) => candidate.taskNumber === recoveryPlan.fixTaskId);
+					const insertedFixTaskIndex = insertedFixTask?.index;
+					if (insertedFixTaskIndex === undefined || !insertedFixTask) {
+						await blockImplementation(ctx, spec, task, `Recovery mode could not locate inserted fix task ${recoveryPlan.fixTaskId}.`, options, {
+							taskIndex: task.index,
+							totalTasks: refreshedTasks.length,
+							taskIteration,
+							globalIteration: globalIteration + 1,
+							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+						});
+						return;
+					}
+					state = mergeRalphState(
+						spec,
+						{
+							phase: "execution",
+							taskIndex: insertedFixTaskIndex,
+							totalTasks: tasks.length + 1,
+							taskIteration: 1,
+							globalIteration: globalIteration + 1,
+							blocked: false,
+							validationError: reason,
+							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+							...createImplementationStateDefaults(state, {
+								fixTaskMap: recoveryPlan.fixTaskMap,
+								maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+								maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+								modificationMap: stateRecordField(state, "modificationMap"),
+								nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+								evidence: stateRecordField(state, "evidence"),
+								maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+								maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+							}),
+						},
+						options,
+					);
+					state = ensureNativeTaskCardsForImplementation(pi, ctx, spec, options, state, refreshedTasks);
+					continue;
+				}
 				if (exhausted) {
 					const blockerPatch = {
 						taskIndex: task.index,
@@ -7637,7 +7689,7 @@ async function runImplementCommand(
 			}
 
 			const refreshedTasks = readImplementationTasks(spec).tasks;
-			const following = nextImplementationTask(refreshedTasks);
+			const following = nextImplementationTask(refreshedTasks, numberField(state, "taskIndex"));
 			const completedAt = new Date().toISOString();
 			state = mergeRalphState(
 				spec,
