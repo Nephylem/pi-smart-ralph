@@ -38,7 +38,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: Verification recovery classifier; Loop runtime_
 
-- [ ] 1.3 [YELLOW] Refactor: extract failure-envelope and recovery-policy helpers
+- [x] 1.3 [YELLOW] Refactor: extract failure-envelope and recovery-policy helpers
   - **Do**:
     1. Isolate failure normalization from loop orchestration.
     2. Keep policy output stable for later verifier cases.

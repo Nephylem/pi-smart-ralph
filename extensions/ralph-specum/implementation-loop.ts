@@ -155,6 +155,12 @@ export type ImplementationVerificationRecoveryPolicy = {
 	nextStep: string;
 };
 
+export type ImplementationVerificationFailureEnvelope = {
+	output: string;
+	normalizedOutput: string;
+	policy: ImplementationVerificationRecoveryPolicy;
+};
+
 export type ImplementationFinalizerTaskLike = {
 	checkboxKey?: string;
 	stableKey: string;
@@ -357,8 +363,12 @@ export function implementationStateRecord(value: unknown): Record<string, unknow
 	return isRecord(value) ? { ...value } : {};
 }
 
+export function normalizeImplementationVerificationFailureOutput(output: string): string {
+	return normalizeImplementationWhitespace(output).toLowerCase();
+}
+
 export function classifyImplementationVerificationFailure(output: string): VerificationFailureCategory {
-	const normalized = normalizeImplementationWhitespace(output).toLowerCase();
+	const normalized = normalizeImplementationVerificationFailureOutput(output);
 	if (!normalized) return "fatal_runtime_failure";
 	if (/command not found|no such file or directory|network|timeout|temporar|eai_again|etimedout|tool registry unavailable/.test(normalized)) {
 		return "transient_tool_failure";
@@ -400,6 +410,23 @@ export function createImplementationVerificationRecoveryPolicy(
 		attemptCount,
 		nextStep: nextStep.trim(),
 	};
+}
+
+export function createImplementationVerificationFailureEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationFailureEnvelope {
+	return {
+		output,
+		normalizedOutput: normalizeImplementationVerificationFailureOutput(output),
+		policy: createImplementationVerificationRecoveryPolicy(output, attemptCount),
+	};
+}
+
+export function formatImplementationVerificationRecoveryPolicy(
+	policy: ImplementationVerificationRecoveryPolicy,
+): string {
+	return `${policy.reasonCode}: recoverable=${policy.recoverable}; recoveryAction=${policy.recoveryAction}; attemptCount=${policy.attemptCount}; nextStep=${policy.nextStep}`;
 }
 
 export function hasImplementationCompletionSignal(output: string, signal: ImplementationCompletionSignal): boolean {

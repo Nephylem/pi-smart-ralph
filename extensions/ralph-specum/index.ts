@@ -81,6 +81,7 @@ import {
 	applyImplementationTaskModification,
 	createImplementationCompletionBridgeInput,
 	createImplementationExecutionBatch,
+	createImplementationVerificationFailureEnvelope,
 	createImplementationVerificationRecoveryPolicy,
 	createImplementationFinalizerEpicUpdatedPatch,
 	createImplementationFinalizerIndexFailurePatch,
@@ -95,6 +96,7 @@ import {
 	formatImplementationFinalizerIndexFailureOutput,
 	formatImplementationFinalizerSuccessOutput,
 	formatImplementationSubagentCompletionOutput,
+	formatImplementationVerificationRecoveryPolicy,
 	extractImplementationCompletionEvidence as implementationExtractCompletionEvidence,
 	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
@@ -7667,11 +7669,21 @@ async function runImplementCommand(
 					}
 
 					setTaskCheckboxStatus(spec, task.index, false);
-					const verificationPolicy = definition.completionSignal === "VERIFICATION_PASS"
-						? createImplementationVerificationRecoveryPolicy(completionOutput || validation.output || validation.error || "")
+					const verificationFailureEnvelope = definition.completionSignal === "VERIFICATION_PASS"
+						? createImplementationVerificationFailureEnvelope(completionOutput || validation.output || validation.error || "")
 						: null;
+					const verificationPolicy = verificationFailureEnvelope?.policy
+						?? (definition.completionSignal === "VERIFICATION_PASS"
+							? createImplementationVerificationRecoveryPolicy(completionOutput || validation.output || validation.error || "")
+							: null);
+					const { reasonCode, recoverable, recoveryAction } = verificationPolicy ?? {};
 					const reason = verificationPolicy
-						? `${verificationPolicy.reasonCode}: recoverable=${verificationPolicy.recoverable}; recoveryAction=${verificationPolicy.recoveryAction}; attemptCount=${verificationPolicy.attemptCount}; nextStep=${verificationPolicy.nextStep}`
+						? formatImplementationVerificationRecoveryPolicy({
+							...verificationPolicy,
+							reasonCode: reasonCode ?? verificationPolicy.reasonCode,
+							recoverable: recoverable ?? verificationPolicy.recoverable,
+							recoveryAction: recoveryAction ?? verificationPolicy.recoveryAction,
+						})
 						: validation.error ?? "Subagent completion did not pass coordinator validation.";
 					const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
 					if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
