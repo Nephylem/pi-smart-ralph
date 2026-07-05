@@ -78,6 +78,14 @@ import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBACK_SAFE_HELP_LINE } from "./feedback.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
+	createImplementationEvidenceScaffold,
+	createImplementationStatePatch,
+	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+	IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+	implementationStateRecord,
+	recordImplementationTaskEvidence,
+} from "./implementation-loop.ts";
+import {
 	buildApprovedRefactorCascadeRequest,
 	buildRefactorCascadePrompt,
 	buildRefactorCoordinatorStatePatch,
@@ -4111,7 +4119,8 @@ async function runStartCommand(
 
 	let state: RalphState;
 	try {
-		state = mergeRalphState(spec, statePatch, options);
+		const updatedState = mergeRalphState(spec, statePatch, options);
+		state = updatedState;
 	} catch (error) {
 		await notify(ctx, `Failed to write Ralph state: ${formatError(error)}`, "warning");
 		return;
@@ -5629,7 +5638,8 @@ async function runPhaseCommand(pi: ExtensionAPI, definition: PhaseDefinition, ar
 	if (definition.phase === "tasks") {
 		try {
 			nativeTaskMirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
-			state = mergeRalphState(spec, nativeTaskMirrorStatePatch(nativeTaskMirror), options);
+			const updatedState = mergeRalphState(spec, nativeTaskMirrorStatePatch(nativeTaskMirror), options);
+			state = updatedState;
 		} catch (error) {
 			try {
 				mergeRalphState(spec, nativeTaskMirrorFailurePatch(state, error), options);
@@ -5648,7 +5658,8 @@ async function runPhaseCommand(pi: ExtensionAPI, definition: PhaseDefinition, ar
 	const decision = await requestPhaseApproval(ctx, definition, summary, isNormalPhaseMode(state, parsed));
 
 	try {
-		state = mergeRalphState(spec, finalPhasePatch(definition, spec, decision, parsed, state), options);
+		const updatedState = mergeRalphState(spec, finalPhasePatch(definition, spec, decision, parsed, state), options);
+		state = updatedState;
 	} catch (error) {
 		await notify(ctx, `Failed to finalize Ralph state: ${formatError(error)}`, "warning");
 		return;
@@ -5813,7 +5824,7 @@ async function runReviewedPhase(
 		if (shouldGenerate) {
 			state = await generatePhaseArtifact(pi, ctx, definition, spec, state, parsed, options, { iteration, priorFindings });
 		} else {
-			state = mergeRalphState(
+			const updatedState = mergeRalphState(
 				spec,
 				{
 					phase: definition.phase,
@@ -5824,13 +5835,14 @@ async function runReviewedPhase(
 				},
 				options,
 			);
+			state = updatedState;
 		}
 
 		const validationErrors = validatePhaseOutput(definition, spec);
 		if (validationErrors.length > 0) {
 			const finding = coordinatorValidationFinding(definition, validationErrors);
 			priorFindings.push(finding);
-			state = mergeRalphState(
+			const updatedState = mergeRalphState(
 				spec,
 				{
 					phase: definition.phase,
@@ -5848,6 +5860,7 @@ async function runReviewedPhase(
 				},
 				options,
 			);
+			state = updatedState;
 			if (iteration === ARTIFACT_REVIEW_MAX_ITERATIONS) throw new Error(finding);
 			shouldGenerate = true;
 			continue;
@@ -5855,21 +5868,24 @@ async function runReviewedPhase(
 
 		const review = await runArtifactReview(pi, ctx, definition, spec, state, iteration, priorFindings, options);
 		appendArtifactReviewProgress(spec, definition, iteration, review, options);
-		state = mergeRalphState(spec, artifactReviewStatePatch(definition, iteration, review), options);
+		const updatedState = mergeRalphState(spec, artifactReviewStatePatch(definition, iteration, review), options);
+		state = updatedState;
 
 		if (review.passed) {
 			let nativeTaskMirror: NativeTaskMirrorResult | null = null;
 			if (definition.phase === "tasks") {
 				try {
 					nativeTaskMirror = mirrorTasksToNativeTaskCards(pi, ctx, spec, options);
-					state = mergeRalphState(spec, nativeTaskMirrorStatePatch(nativeTaskMirror), options);
+					const updatedState = mergeRalphState(spec, nativeTaskMirrorStatePatch(nativeTaskMirror), options);
+					state = updatedState;
 				} catch (error) {
 					mergeRalphState(spec, nativeTaskMirrorFailurePatch(state, error), options);
 					throw new Error(`Native pi-tasks mirroring failed after reviewed tasks.md: ${formatError(error)}`);
 				}
 			}
 
-			state = mergeRalphState(spec, finalPhasePatch(definition, spec, "skipped_non_normal", parsed, state), options);
+			const updatedState = mergeRalphState(spec, finalPhasePatch(definition, spec, "skipped_non_normal", parsed, state), options);
+			state = updatedState;
 			appendPhaseProgressEntry(spec, definition, "skipped_non_normal", options);
 			const summary = [
 				buildPhaseSummary(definition, spec),
@@ -7163,7 +7179,7 @@ function implementationAttemptPatch(
 	taskIteration: number,
 	globalIteration: number,
 ): Record<string, unknown> {
-	return {
+	const executionPatch = createImplementationStatePatch(state, {
 		source: state?.source ?? "spec",
 		name: spec.name,
 		basePath: spec.path,
@@ -7172,12 +7188,21 @@ function implementationAttemptPatch(
 		totalTasks,
 		taskIteration,
 		maxTaskIterations: parsed.maxTaskIterations,
-		recoveryMode: parsed.recoveryMode,
+		recoveryMode: parsed.recoveryMode || booleanField(state, "recoveryMode") === true,
 		globalIteration,
 		maxGlobalIterations: parsed.maxGlobalIterations,
+		maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? 3,
+		maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? 3,
+		fixTaskMap: stateRecordField(state, "fixTaskMap"),
 		modificationMap: stateRecordField(state, "modificationMap"),
+		nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+		evidence: stateRecordField(state, "evidence"),
 		maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? 3,
 		maxModificationDepth: numberField(state, "maxModificationDepth") ?? 2,
+	});
+
+	return {
+		...executionPatch,
 		awaitingApproval: false,
 		blocked: false,
 		validationError: null,
@@ -7416,10 +7441,15 @@ async function runImplementCommand(
 				totalTasks: taskData.tasks.length,
 				maxTaskIterations: parsed.maxTaskIterations,
 				maxGlobalIterations: parsed.maxGlobalIterations,
-				recoveryMode: parsed.recoveryMode,
+				recoveryMode: parsed.recoveryMode || booleanField(state, "recoveryMode") === true,
 				globalIteration: numberField(state, "globalIteration") ?? 1,
 				taskIteration: numberField(state, "taskIteration") ?? 1,
+				maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+				maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+				fixTaskMap: implementationStateRecord(state?.fixTaskMap),
 				modificationMap: stateRecordField(state, "modificationMap"),
+				nativeTaskMap: implementationStateRecord(state?.nativeTaskMap),
+				evidence: createImplementationEvidenceScaffold(state?.evidence),
 				maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? 3,
 				maxModificationDepth: numberField(state, "maxModificationDepth") ?? 2,
 				awaitingApproval: false,
@@ -7613,6 +7643,7 @@ async function runImplementCommand(
 
 			const refreshedTasks = readImplementationTasks(spec).tasks;
 			const following = nextImplementationTask(refreshedTasks);
+			const completedAt = new Date().toISOString();
 			state = mergeRalphState(
 				spec,
 				{
@@ -7621,6 +7652,17 @@ async function runImplementCommand(
 					totalTasks: refreshedTasks.length,
 					taskIteration: 1,
 					globalIteration: globalIteration + 1,
+					maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+					maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+					fixTaskMap: stateRecordField(state, "fixTaskMap"),
+					modificationMap: stateRecordField(state, "modificationMap"),
+					nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+					evidence: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, {
+						signal: definition.completionSignal,
+						proof: validation.evidence ?? "",
+						agent: definition.agentName,
+						completedAt,
+					}),
 					awaitingApproval: false,
 					blocked: false,
 					validationError: null,
@@ -7633,7 +7675,7 @@ async function runImplementCommand(
 							signal: definition.completionSignal,
 							evidence: validation.evidence,
 							agent: definition.agentName,
-							completedAt: new Date().toISOString(),
+							completedAt,
 						},
 					},
 				},

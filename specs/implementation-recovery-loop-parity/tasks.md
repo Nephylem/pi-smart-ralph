@@ -14,7 +14,7 @@
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: `/ralph-implement` command shell; Implementation loop core; Parity verifier_
 
-- [ ] 1.2 [GREEN] Pass test: extract loop bootstrap and persist canonical execution state
+- [x] 1.2 [GREEN] Pass test: extract loop bootstrap and persist canonical execution state
   - **Do**:
     1. Create `extensions/ralph-specum/implementation-loop.ts` with exported state init/merge helpers for execution runs.
     2. Update `extensions/ralph-specum/index.ts` so `/ralph-implement` delegates bootstrap/resume work to the helper module.
