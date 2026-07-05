@@ -128,6 +128,33 @@ export type ImplementationBatchTaskEvidenceEntry = {
 
 export type ImplementationReviewStatus = "REVIEW_PASS" | "REVIEW_FAIL";
 
+export type VerificationFailureCategory =
+	| "transient_tool_failure"
+	| "cleanup_artifact_failure"
+	| "shared_contract_drift"
+	| "stale_state_failure"
+	| "publish_bundle_failure"
+	| "real_product_failure"
+	| "fatal_runtime_failure";
+
+export type VerificationRecoveryAction =
+	| "retry_verifier"
+	| "cleanup_artifacts"
+	| "repair_shared_contract"
+	| "repair_state"
+	| "repair_publish_bundle"
+	| "delegate_fix_task"
+	| "block";
+
+export type ImplementationVerificationRecoveryPolicy = {
+	category: VerificationFailureCategory;
+	reasonCode: string;
+	recoverable: boolean;
+	recoveryAction: VerificationRecoveryAction;
+	attemptCount: number;
+	nextStep: string;
+};
+
 export type ImplementationFinalizerTaskLike = {
 	checkboxKey?: string;
 	stableKey: string;
@@ -288,8 +315,91 @@ export type CreateImplementationResumeRepairStatePatchInput = {
 	totalTasks: number;
 };
 
+const IMPLEMENTATION_VERIFICATION_POLICY_MATRIX: Record<VerificationFailureCategory, Omit<ImplementationVerificationRecoveryPolicy, "category" | "attemptCount" | "nextStep">> = {
+	transient_tool_failure: {
+		reasonCode: "VERIFY_TRANSIENT_TOOL_FAILURE",
+		recoverable: true,
+		recoveryAction: "retry_verifier",
+	},
+	cleanup_artifact_failure: {
+		reasonCode: "VERIFY_CLEANUP_ARTIFACT_FAILURE",
+		recoverable: true,
+		recoveryAction: "cleanup_artifacts",
+	},
+	shared_contract_drift: {
+		reasonCode: "VERIFY_SHARED_CONTRACT_DRIFT",
+		recoverable: true,
+		recoveryAction: "repair_shared_contract",
+	},
+	stale_state_failure: {
+		reasonCode: "VERIFY_STALE_STATE_FAILURE",
+		recoverable: true,
+		recoveryAction: "repair_state",
+	},
+	publish_bundle_failure: {
+		reasonCode: "VERIFY_PUBLISH_BUNDLE_FAILURE",
+		recoverable: true,
+		recoveryAction: "repair_publish_bundle",
+	},
+	real_product_failure: {
+		reasonCode: "VERIFY_REAL_PRODUCT_FAILURE",
+		recoverable: false,
+		recoveryAction: "delegate_fix_task",
+	},
+	fatal_runtime_failure: {
+		reasonCode: "VERIFY_FATAL_RUNTIME_FAILURE",
+		recoverable: false,
+		recoveryAction: "block",
+	},
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
+}
+
+export function classifyImplementationVerificationFailure(output: string): VerificationFailureCategory {
+	const normalized = normalizeImplementationWhitespace(output).toLowerCase();
+	if (!normalized) return "fatal_runtime_failure";
+	if (/command not found|no such file or directory|network|timeout|temporar|eai_again|etimedout|tool registry unavailable/.test(normalized)) {
+		return "transient_tool_failure";
+	}
+	if (/cleanup|artifact|temporary progress cleanup|\.progress-task-|stale temp/.test(normalized)) {
+		return "cleanup_artifact_failure";
+	}
+	if (/shared contract|acceptance-checklist|contract drift|native task map|parity/.test(normalized)) {
+		return "shared_contract_drift";
+	}
+	if (/stale state|\.ralph-state\.json|validation error|blockedat|lastsubagentoutput|currenttask/.test(normalized)) {
+		return "stale_state_failure";
+	}
+	if (/publish bundle|verify:pack|verify:index|prepack|missingpathtype|dependency_entrypoint|originalroot/.test(normalized)) {
+		return "publish_bundle_failure";
+	}
+	if (/assertionerror|failed|error:|real product|product failure|task .*failed/.test(normalized)) {
+		return "real_product_failure";
+	}
+	return "fatal_runtime_failure";
+}
+
+export function createImplementationVerificationRecoveryPolicy(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationRecoveryPolicy {
+	const category = classifyImplementationVerificationFailure(output);
+	const contract = IMPLEMENTATION_VERIFICATION_POLICY_MATRIX[category];
+	const nextStep = contract.recoverable
+		? `Retry verification with ${contract.recoveryAction} (attempt ${attemptCount + 1}).`
+		: contract.recoveryAction === "delegate_fix_task"
+			? "Delegate a focused fix task before rerunning verification."
+			: "Block implementation and surface the verifier failure evidence. ";
+	return {
+		category,
+		reasonCode: contract.reasonCode,
+		recoverable: contract.recoverable,
+		recoveryAction: contract.recoveryAction,
+		attemptCount,
+		nextStep: nextStep.trim(),
+	};
 }
 
 export function hasImplementationCompletionSignal(output: string, signal: ImplementationCompletionSignal): boolean {

@@ -81,6 +81,7 @@ import {
 	applyImplementationTaskModification,
 	createImplementationCompletionBridgeInput,
 	createImplementationExecutionBatch,
+	createImplementationVerificationRecoveryPolicy,
 	createImplementationFinalizerEpicUpdatedPatch,
 	createImplementationFinalizerIndexFailurePatch,
 	createImplementationFinalizerStartedPatch,
@@ -4728,6 +4729,7 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 				unsubscribeFailed();
 				clearInterval(timer);
 			},
+			invalidate() {},
 			render() {
 				const now = Date.now();
 				const lingering = readLingeringSubagentRecords(now);
@@ -7665,7 +7667,12 @@ async function runImplementCommand(
 					}
 
 					setTaskCheckboxStatus(spec, task.index, false);
-					const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
+					const verificationPolicy = definition.completionSignal === "VERIFICATION_PASS"
+						? createImplementationVerificationRecoveryPolicy(completionOutput || validation.output || validation.error || "")
+						: null;
+					const reason = verificationPolicy
+						? `${verificationPolicy.reasonCode}: recoverable=${verificationPolicy.recoverable}; recoveryAction=${verificationPolicy.recoveryAction}; attemptCount=${verificationPolicy.attemptCount}; nextStep=${verificationPolicy.nextStep}`
+						: validation.error ?? "Subagent completion did not pass coordinator validation.";
 					const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
 					if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
 						const recoveryStop = createImplementationRecoveryStopPlan(state, task, completionOutput || validation.output || reason);
@@ -7734,7 +7741,7 @@ async function runImplementCommand(
 						state = ensureNativeTaskCardsForImplementation(pi, ctx, spec, options, state, refreshedTasks);
 						continue implementationLoop;
 					}
-					if (exhausted) {
+					if (exhausted || verificationPolicy || definition.completionSignal === "VERIFICATION_PASS") {
 						const blockerPatch = {
 							taskIndex: task.index,
 							totalTasks: tasks.length,

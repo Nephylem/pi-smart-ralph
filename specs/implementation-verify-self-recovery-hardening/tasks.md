@@ -26,7 +26,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-1, FR-2, AC-1.1, AC-1.2_
   - _Design: Verification recovery classifier; Failure envelope_
 
-- [ ] 1.2 [GREEN] Pass test: classify verification failures and choose bounded recovery actions
+- [x] 1.2 [GREEN] Pass test: classify verification failures and choose bounded recovery actions
   - **Do**:
     1. Add failure-classification helpers in `extensions/ralph-specum/implementation-loop.ts`.
     2. Normalize verifier failures into stable buckets with `reasonCode`, `recoverable`, `recoveryAction`, `attemptCount`, and `nextStep`.
