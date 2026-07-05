@@ -452,10 +452,21 @@ async function verifyParallelBatch() {
   const batchSelectionPatterns = [
     /kind:\s*["']batch["']|parallel-sequential/,
     /taskIndices:\s*\[/,
-    /selectImplementationExecutionBatch|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
+    /selectImplementationExecutionBatchTaskIndices|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
   ];
   if (batchSelectionPatterns.some((pattern) => !pattern.test(nextTaskSection[0]))) {
     expectedFail('contiguous [P] groups still run as individual tasks: no isolated ExecutionBatch selection describes one sequential batch in listed task order.');
+  }
+
+  const helperIsolationPatterns = [
+    /export function selectImplementationExecutionBatchTaskIndices\(/,
+    /export function resolveImplementationExecutionBatch\([\s\S]*?selectImplementationExecutionBatchTaskIndices\(/,
+    /export function createImplementationExecutionBatch\([\s\S]*?resolveImplementationExecutionBatch\(/,
+    /export function applyImplementationBatchTaskEvidence\(/,
+    /export function mergeImplementationBatchTaskEvidence\([\s\S]*?applyImplementationBatchTaskEvidence\(/,
+  ];
+  if (helperIsolationPatterns.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('batch planning and evidence recording are not yet isolated behind dedicated helper exports.');
   }
 
   const loopSection = indexSource.match(/while \(true\) \{[\s\S]*?const next = nextImplementationTask\(tasks, numberField\(state, ["']taskIndex["']\)\);[\s\S]*?validation = validateSubagentCompletion\(completion, definition, task, workspaceReport\);/);
@@ -470,7 +481,7 @@ async function verifyParallelBatch() {
   ];
   const helperBatchPatterns = [
     /ExecutionBatch/,
-    /selectImplementationExecutionBatch|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
+    /selectImplementationExecutionBatchTaskIndices|createImplementationExecutionBatch|resolveImplementationExecutionBatch/,
     /recordImplementationBatchTaskEvidence|applyImplementationBatchTaskEvidence|mergeImplementationBatchTaskEvidence/,
     /parallel-sequential|sequential batch/i,
   ];

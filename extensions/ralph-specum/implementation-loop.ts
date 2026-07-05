@@ -782,23 +782,28 @@ export function recordImplementationBatchTaskEvidence(
 	return createImplementationTaskEvidence(existing, taskKey, entry);
 }
 
+export function applyImplementationBatchTaskEvidence(
+	existing: unknown,
+	entry: ImplementationBatchTaskEvidenceEntry,
+): Record<string, unknown> {
+	return recordImplementationBatchTaskEvidence(existing, entry.taskKey, entry.entry);
+}
+
 export function mergeImplementationBatchTaskEvidence(
 	existing: unknown,
 	entries: readonly ImplementationBatchTaskEvidenceEntry[],
 ): Record<string, unknown> {
 	return entries.reduce<Record<string, unknown>>(
-		(current, { taskKey, entry }) => recordImplementationBatchTaskEvidence(current, taskKey, entry),
+		(current, entry) => applyImplementationBatchTaskEvidence(current, entry),
 		createImplementationEvidenceScaffold(existing),
 	);
 }
 
-export function createImplementationExecutionBatch(
+export function selectImplementationExecutionBatchTaskIndices(
 	tasks: readonly ImplementationExecutionBatchTaskLike[],
 	task: ImplementationExecutionBatchTaskLike,
-): ExecutionBatch {
-	if (!task.isParallel) {
-		return { kind: "single", mode: "single", taskIndices: [task.index] };
-	}
+): number[] {
+	if (!task.isParallel) return [task.index];
 
 	const taskIndices: number[] = [];
 	for (let index = task.index; index < tasks.length; index += 1) {
@@ -808,11 +813,27 @@ export function createImplementationExecutionBatch(
 		taskIndices.push(candidate.index);
 	}
 
+	return taskIndices.length > 0 ? taskIndices : [task.index];
+}
+
+export function resolveImplementationExecutionBatch(
+	tasks: readonly ImplementationExecutionBatchTaskLike[],
+	task: ImplementationExecutionBatchTaskLike,
+): ExecutionBatch {
+	const taskIndices = selectImplementationExecutionBatchTaskIndices(tasks, task);
+	const isBatch = taskIndices.length > 1;
 	return {
-		kind: taskIndices.length > 1 ? "batch" : "single",
-		mode: taskIndices.length > 1 ? "parallel-sequential" : "single",
-		taskIndices: taskIndices.length > 0 ? taskIndices : [task.index],
+		kind: isBatch ? "batch" : "single",
+		mode: isBatch ? "parallel-sequential" : "single",
+		taskIndices,
 	};
+}
+
+export function createImplementationExecutionBatch(
+	tasks: readonly ImplementationExecutionBatchTaskLike[],
+	task: ImplementationExecutionBatchTaskLike,
+): ExecutionBatch {
+	return resolveImplementationExecutionBatch(tasks, task);
 }
 
 export function validateImplementationExecutionState(state: RalphState | null, specOrStatePath: string | { absolutePath: string }): void {

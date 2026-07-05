@@ -301,7 +301,7 @@
   - _Requirements: FR-10, AC-3.4_
   - _Design: `ExecutionBatch`; Implementation loop core_
 
-- [ ] 2.9 [YELLOW] Refactor: separate batch planning from evidence recording
+- [x] 2.9 [YELLOW] Refactor: separate batch planning from evidence recording
   - **Do**:
     1. Extract contiguous-group selection and downstream-barrier rules into helpers.
     2. Keep evidence recording reusable for single and batch execution modes.
