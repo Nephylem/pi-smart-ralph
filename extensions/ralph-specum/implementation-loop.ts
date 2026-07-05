@@ -126,6 +126,35 @@ export type ImplementationBatchTaskEvidenceEntry = {
 	entry: ImplementationTaskEvidenceEntry;
 };
 
+export type ImplementationReviewStatus = "REVIEW_PASS" | "REVIEW_FAIL";
+
+export type ImplementationReviewTaskLike = {
+	index: number;
+	taskNumber?: string;
+	phase?: string;
+	rawTitle?: string;
+	subject?: string;
+};
+
+export type ImplementationReviewCheckpoint = {
+	required: boolean;
+	checkpoint: "phaseBoundary" | "every5" | "finalTask" | "none";
+	phaseBoundary: boolean;
+	phaseChanged: boolean;
+	everyFifth: boolean;
+	finalTask: boolean;
+	reason: string;
+};
+
+export type ImplementationReviewEvidenceEntry = {
+	taskIndex: number;
+	status: ImplementationReviewStatus;
+	iteration: number;
+	checkpoint: ImplementationReviewCheckpoint["checkpoint"];
+	summary: string;
+	reviewedAt: string;
+};
+
 export type ImplementationTaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
 
 export type ImplementationTaskModificationRequest = {
@@ -732,6 +761,109 @@ export function createImplementationRecoveryStopEvidence(
 	};
 }
 
+function implementationReviewPhaseKey(task?: ImplementationReviewTaskLike | null): string {
+	if (!task) return "";
+	const taskNumber = typeof task.taskNumber === "string" ? task.taskNumber.trim() : "";
+	const phaseNumber = taskNumber.match(/^(\d+)/)?.[1];
+	if (phaseNumber) return phaseNumber;
+	return normalizeImplementationWhitespace(`${task.phase ?? ""} ${task.rawTitle ?? ""} ${task.subject ?? ""}`);
+}
+
+export function hasImplementationPhaseBoundary(
+	currentTask: ImplementationReviewTaskLike,
+	previousTask?: ImplementationReviewTaskLike | null,
+): boolean {
+	if (!previousTask) return true;
+	const currentKey = implementationReviewPhaseKey(currentTask);
+	const previousKey = implementationReviewPhaseKey(previousTask);
+	if (!currentKey || !previousKey) return false;
+	return currentKey !== previousKey;
+}
+
+export function createImplementationReviewCheckpoint(
+	taskIndex: number,
+	totalTasks: number,
+	currentTask: ImplementationReviewTaskLike,
+	previousTask?: ImplementationReviewTaskLike | null,
+): ImplementationReviewCheckpoint {
+	const phaseBoundary = hasImplementationPhaseBoundary(currentTask, previousTask);
+	const phaseChanged = phaseBoundary;
+	const everyFifth = taskIndex > 0 && taskIndex % 5 === 0;
+	const finalTask = taskIndex === totalTasks - 1;
+	if (phaseBoundary) {
+		return {
+			required: true,
+			checkpoint: "phaseBoundary",
+			phaseBoundary,
+			phaseChanged,
+			everyFifth,
+			finalTask,
+			reason: "Layer 3 review checkpoint: first task of a new phase boundary.",
+		};
+	}
+	if (everyFifth) {
+		return {
+			required: true,
+			checkpoint: "every5",
+			phaseBoundary,
+			phaseChanged,
+			everyFifth,
+			finalTask,
+			reason: "Layer 3 review checkpoint: every 5th completed task.",
+		};
+	}
+	if (finalTask) {
+		return {
+			required: true,
+			checkpoint: "finalTask",
+			phaseBoundary,
+			phaseChanged,
+			everyFifth,
+			finalTask,
+			reason: "Layer 3 review checkpoint: final task before completion.",
+		};
+	}
+	return {
+		required: false,
+		checkpoint: "none",
+		phaseBoundary,
+		phaseChanged,
+		everyFifth,
+		finalTask,
+		reason: "Layer 3 review not required for this task.",
+	};
+}
+
+export function recordImplementationReviewEvidence(
+	existing: unknown,
+	entry: ImplementationReviewEvidenceEntry,
+): Record<string, unknown> {
+	const evidence = createImplementationEvidenceScaffold(existing);
+	const reviews = Array.isArray(evidence.reviews) ? [...evidence.reviews] : [];
+	return {
+		...evidence,
+		reviews: [...reviews, entry],
+	};
+}
+
+export function nextImplementationReviewIteration(existing: unknown): number {
+	const evidence = createImplementationEvidenceScaffold(existing);
+	const reviews = Array.isArray(evidence.reviews) ? evidence.reviews : [];
+	return reviews.length + 1;
+}
+
+export function latestImplementationReviewStatus(existing: unknown): ImplementationReviewStatus | null {
+	const evidence = createImplementationEvidenceScaffold(existing);
+	const reviews = Array.isArray(evidence.reviews) ? [...evidence.reviews].reverse() : [];
+	for (const review of reviews) {
+		if (isRecord(review) && (review.status === "REVIEW_PASS" || review.status === "REVIEW_FAIL")) {
+			return review.status;
+		}
+	}
+	return null;
+}
+
+// Final completion must only happen after runArtifactReview(...) checkpoints record REVIEW_PASS/REVIEW_FAIL under evidence.reviews.
 export function createImplementationStatePatch(
 	state: RalphState | null,
 	patch: Record<string, unknown>,

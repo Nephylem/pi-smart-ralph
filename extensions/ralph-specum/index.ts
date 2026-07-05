@@ -83,6 +83,7 @@ import {
 	createImplementationExecutionBatch,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
+	createImplementationReviewCheckpoint,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
 	formatImplementationSubagentCompletionOutput,
@@ -92,13 +93,17 @@ import {
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 	implementationNativeTaskMapFromState,
+	latestImplementationReviewStatus,
 	mergeImplementationBatchTaskEvidence,
+	nextImplementationReviewIteration,
 	parseImplementationTaskModification,
+	recordImplementationReviewEvidence,
 	recordImplementationTaskEvidence,
 	validateImplementationExecutionState,
 	validateImplementationTaskCompletion,
 	type ImplementationCompletionSignal,
 	type ImplementationCompletionValidation,
+	type ImplementationReviewStatus,
 } from "./implementation-loop.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
@@ -4491,10 +4496,12 @@ function getSubagentUsageText(record?: {
 	}
 
 	const sessionTokens = getSubagentSessionTokens(record);
-	if (sessionTokens !== null) return `${formatTokenCount(sessionTokens)} tokens`;
+	if (sessionTokens !== null) {
+		return `${formatTokenCount(sessionTokens)} tok${contextUsage.percent !== null ? ` (${Math.round(contextUsage.percent)}% ctx)` : ""}`;
+	}
 
 	const lifetime = getSubagentLifetimeUsageTokens(record);
-	return `${formatTokenCount(lifetime)} tokens`;
+	return `${formatTokenCount(lifetime)} tok${contextUsage.percent !== null ? ` (${Math.round(contextUsage.percent)}% ctx)` : ""}`;
 }
 
 function formatSubagentWidgetName(type?: string): string {
@@ -4521,12 +4528,14 @@ function getSubagentWidgetProgress(record: RalphSubagentRecord): { current: numb
 function formatSubagentWidgetProgress(record: RalphSubagentRecord): string {
 	const { current, max, percent, source } = getSubagentWidgetProgress(record);
 	if (source === "context" && max !== null) {
-		return `🪟 ${formatFooterProgress(current, max, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)}`;
+		const ctxPercent = percent ?? Math.max(0, Math.min(100, (current / Math.max(1, max)) * 100));
+		return `🪟 ${Math.round(ctxPercent)}% ${formatFooterBar(current, max, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)} ${formatTokenCount(current)}/${formatTokenCount(max)} ctx`;
 	}
 	if (percent !== null) {
-		return `${percent.toFixed(1)}% ${formatFooterBar(percent, 100, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)} ${formatTokenCount(current)} tokens`;
+		const tokenText = current > 0 ? ` · ${formatTokenCount(current)} tok` : "";
+		return `🪟 ${Math.round(percent)}% ${formatFooterBar(percent, 100, RALPH_SUBAGENT_WIDGET_BAR_WIDTH)}${tokenText}`;
 	}
-	return `${formatTokenCount(current)} tokens`;
+	return `${formatTokenCount(current)} tok`;
 }
 
 function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
@@ -4647,6 +4656,10 @@ function formatSubagentWidgetFinishedState(
 	}
 }
 
+function formatSubagentToolCount(toolUses: number): string {
+	return `${toolUses} tool${toolUses === 1 ? "" : "s"}`;
+}
+
 function formatSubagentWidgetLine(
 	record: RalphSubagentRecord,
 	frame: string,
@@ -4659,17 +4672,15 @@ function formatSubagentWidgetLine(
 	if (record.status !== "running") {
 		const finished = formatSubagentWidgetFinishedState(record, theme);
 		const progress = formatSubagentWidgetProgress(record);
-		const toolUses = record.toolUses ?? 0;
-		const tools = `${toolUses} tool${toolUses === 1 ? "" : "s"}`;
+		const tools = formatSubagentToolCount(record.toolUses ?? 0);
 		const elapsed = formatFooterElapsed(record.startedAt, record.completedAt);
-		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "·")} ${theme.fg("dim", tools)} ${theme.fg("dim", "·")} ${theme.fg("dim", elapsed)} ${theme.fg("dim", "]")}`;
+		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "]")}`;
 	}
 	const icon = theme.fg("accent", frame);
 	const progress = formatSubagentWidgetProgress(record);
-	const toolUses = record.toolUses ?? 0;
-	const tools = `${toolUses} tool${toolUses === 1 ? "" : "s"}`;
+	const tools = formatSubagentToolCount(record.toolUses ?? 0);
 	const elapsed = formatFooterElapsed(record.startedAt);
-	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 ")}${theme.fg("text", progress)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("accent", "]")}`;
+	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 ")}${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("text", progress)} ${theme.fg("accent", "]")}`;
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
@@ -7023,6 +7034,29 @@ function appendImplementationProgress(
 	);
 }
 
+function appendImplementationReviewProgress(
+	spec: SpecEntry,
+	task: ParsedNativeTask,
+	status: ImplementationReviewStatus,
+	checkpointReason: string,
+	output: string,
+	options: RalphPathOptions,
+): void {
+	appendProgress(
+		spec,
+		[
+			"",
+			`### Implementation Layer 3 review (${new Date().toISOString()})`,
+			`- Task: ${task.index + 1} ${task.subject}`,
+			`- Result: ${status}`,
+			`- Checkpoint: ${checkpointReason}`,
+			...(output.trim() ? ["- Reviewer output:", "~~~text", truncateForPrompt(output, 4000), "~~~"] : []),
+			"",
+		].join("\n"),
+		options,
+	);
+}
+
 function appendImplementationBlocker(
 	spec: SpecEntry,
 	task: ParsedNativeTask | null,
@@ -7387,6 +7421,23 @@ async function runImplementCommand(
 
 			const next = nextImplementationTask(tasks, numberField(state, "taskIndex"));
 			if (next.kind === "complete") {
+				// runArtifactReview(...) checkpoint evidence must end in REVIEW_PASS before ALL_TASKS_COMPLETE.
+				const latestReview = latestImplementationReviewStatus(state?.evidence);
+				if (latestReview !== "REVIEW_PASS") {
+					await blockImplementation(
+						ctx,
+						spec,
+						null,
+						`Layer 3 review evidence is incomplete before final success: latest status was ${latestReview ?? "REVIEW_FAIL"}.`,
+						options,
+						{
+							taskIndex: tasks.length - 1,
+							totalTasks: tasks.length,
+							evidence: stateRecordField(state, "evidence"),
+						},
+					);
+					return;
+				}
 				const finalState = mergeRalphState(
 					spec,
 					{
@@ -7643,6 +7694,54 @@ async function runImplementCommand(
 					agent: definition.agentName,
 					completedAt,
 				};
+				let implementationEvidence = executionBatch.length > 1
+					? applyImplementationBatchTaskEvidence(state?.evidence, [{ taskKey: task.checkboxKey, entry: evidenceEntry }])
+					: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, evidenceEntry);
+				const priorCompletedTaskIndex = numberField(state, "lastCompletedTaskIndex");
+				const priorCompletedTask = typeof priorCompletedTaskIndex === "number" ? refreshedTasks[priorCompletedTaskIndex] : undefined;
+				const reviewCheckpoint = createImplementationReviewCheckpoint(task.index, refreshedTasks.length, task, priorCompletedTask);
+				if (reviewCheckpoint.required) {
+					const reviewIteration = nextImplementationReviewIteration(implementationEvidence);
+					const review = await runArtifactReview(pi, ctx, PHASE_DEFINITIONS.tasks, spec, state, reviewIteration, [], options);
+					appendArtifactReviewProgress(spec, PHASE_DEFINITIONS.tasks, reviewIteration, review, options);
+					appendImplementationReviewProgress(
+						spec,
+						task,
+						review.passed ? "REVIEW_PASS" : "REVIEW_FAIL",
+						reviewCheckpoint.reason,
+						review.output,
+						options,
+					);
+					implementationEvidence = recordImplementationReviewEvidence(implementationEvidence, {
+						taskIndex: task.index,
+						status: review.passed ? "REVIEW_PASS" : "REVIEW_FAIL",
+						iteration: reviewIteration,
+						checkpoint: reviewCheckpoint.checkpoint,
+						summary: reviewCheckpoint.reason,
+						reviewedAt: new Date().toISOString(),
+					});
+					if (!review.passed) {
+						await blockImplementation(
+							ctx,
+							spec,
+							task,
+							`Layer 3 review failed at ${reviewCheckpoint.checkpoint}: ${review.error ?? "Reviewer reported REVIEW_FAIL."}`,
+							options,
+							{
+								phase: "execution",
+								taskIndex: task.index,
+								totalTasks: refreshedTasks.length,
+								taskIteration: 1,
+								globalIteration: globalIteration + 1,
+								lastCompletedTaskIndex: task.index,
+								lastCompletedTaskSignal: definition.completionSignal,
+								lastCompletedTaskEvidence: validation.evidence,
+								evidence: implementationEvidence,
+							},
+						);
+						return;
+					}
+				}
 				state = mergeRalphState(
 					spec,
 					{
@@ -7659,9 +7758,7 @@ async function runImplementCommand(
 							fixTaskMap: stateRecordField(state, "fixTaskMap"),
 							modificationMap: stateRecordField(state, "modificationMap"),
 							nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
-							evidence: executionBatch.length > 1
-								? applyImplementationBatchTaskEvidence(state?.evidence, [{ taskKey: task.checkboxKey, entry: evidenceEntry }])
-								: recordImplementationTaskEvidence(state?.evidence, task.checkboxKey, evidenceEntry),
+							evidence: implementationEvidence,
 							maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 							maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 						}),

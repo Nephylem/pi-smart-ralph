@@ -333,7 +333,7 @@
   - _Requirements: FR-11, AC-3.5_
   - _Design: Layer 3 review path; `Layer3ReviewInput`; Data Flow_
 
-- [ ] 2.11 [GREEN] Pass test: integrate reviewer checkpoints and persist review evidence
+- [x] 2.11 [GREEN] Pass test: integrate reviewer checkpoints and persist review evidence
   - **Do**:
     1. Reuse the existing reviewer flow only at the approved checkpoint cadence.
     2. Record review pass/fail status into progress or canonical evidence.
