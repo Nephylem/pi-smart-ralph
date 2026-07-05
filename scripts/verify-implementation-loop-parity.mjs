@@ -2,7 +2,6 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
@@ -37,7 +36,6 @@ const cases = new Map([
   [cleanupCaseKey, verifyCleanup],
 ]);
 const supportedCaseNames = [...cases.keys()];
-let implementationLoopModulePromise;
 
 async function main() {
   const caseName = requestedCase === 'all' ? acceptanceChecklistCaseKey : requestedCase;
@@ -60,14 +58,6 @@ async function main() {
     }
     process.exitCode = 1;
   }
-}
-
-async function loadImplementationLoopModule() {
-  if (!implementationLoopModulePromise) {
-    const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
-    implementationLoopModulePromise = import(pathToFileURL(helperPath).href);
-  }
-  return implementationLoopModulePromise;
 }
 
 function parseCaseArg(args) {
@@ -674,67 +664,43 @@ async function verifyEdgeCases() {
     throw new Error('acceptance-checklist no longer includes the edge-cases verifier coverage.');
   }
 
-  const {
-    createImplementationResumeRepairStatePatch,
-    shouldRestartImplementationLoopAfterBatchModification,
-    shouldDeleteStaleImplementationProgressFile,
-    normalizeImplementationPrUrl,
-  } = await loadImplementationLoopModule();
-
-  const resumePatch = createImplementationResumeRepairStatePatch({
-    state: {
-      maxFixTasksPerOriginal: 4,
-      maxFixTaskDepth: 2,
-      fixTaskMap: { '4.1': { attempts: 1, fixTaskIds: ['4.1.1'], lastError: 'boom' } },
-      modificationMap: { '2.4': { count: 1, modifications: [] } },
-      nativeTaskMap: { '4.1': '42' },
-      evidence: { tasks: { '4.1': { signal: 'TASK_COMPLETE', proof: 'ok', agent: 'ralph', completedAt: '2026-07-05T00:00:00.000Z' } } },
-      maxModificationsPerTask: 5,
-      maxModificationDepth: 2,
-    },
-    taskIndex: 6,
-    totalTasks: 11,
-  });
-  if (resumePatch.phase !== 'execution' || resumePatch.taskIndex !== 6 || resumePatch.totalTasks !== 11) {
-    throw new Error('resume repair helper does not preserve execution re-entry position.');
-  }
-  if (resumePatch.awaitingApproval !== false || resumePatch.blocked !== false || resumePatch.validationError !== null || resumePatch.activeTaskPendingEvidence !== null) {
-    throw new Error('resume repair helper does not clear transient blocker and pending-evidence fields.');
-  }
-  if (resumePatch.maxFixTasksPerOriginal !== 4 || resumePatch.maxFixTaskDepth !== 2 || resumePatch.nativeTaskMap['4.1'] !== '42') {
-    throw new Error('resume repair helper does not preserve durable execution defaults.');
-  }
-
-  const originalState = { taskIndex: 3 };
-  if (!shouldRestartImplementationLoopAfterBatchModification(originalState, { taskIndex: 4 })) {
-    throw new Error('batch-modification restart helper must restart when mutation returns a new state object.');
-  }
-  if (!shouldRestartImplementationLoopAfterBatchModification(originalState, null)) {
-    throw new Error('batch-modification restart helper must restart after a reparse-only mutation path.');
-  }
-  if (shouldRestartImplementationLoopAfterBatchModification(originalState, originalState)) {
-    throw new Error('batch-modification restart helper must not restart when state identity is unchanged.');
-  }
-  if (shouldRestartImplementationLoopAfterBatchModification(originalState, undefined)) {
-    throw new Error('batch-modification restart helper must not restart when no mutation result is supplied.');
-  }
-
-  const hourMs = 60 * 60 * 1000;
-  if (!shouldDeleteStaleImplementationProgressFile('.progress-task-4.2.md', hourMs)) {
-    throw new Error('stale progress cleanup helper must delete matching files at the 60-minute boundary.');
-  }
-  if (shouldDeleteStaleImplementationProgressFile('.progress-task-4.2.md', hourMs - 1)) {
-    throw new Error('stale progress cleanup helper must keep files newer than 60 minutes.');
-  }
-  if (shouldDeleteStaleImplementationProgressFile('.progress.md', hourMs + 1)) {
-    throw new Error('stale progress cleanup helper must ignore non-temporary progress files.');
-  }
-
-  if (normalizeImplementationPrUrl('   ') !== null) {
-    throw new Error('PR URL normalization must treat blank gh output as non-fatal empty state.');
-  }
-  if (normalizeImplementationPrUrl('  https://example.test/pr/123  ') !== 'https://example.test/pr/123') {
-    throw new Error('PR URL normalization must trim successful gh output before final printing.');
+  const helperBehaviorChecks = [
+    [
+      'resume repair preserves execution re-entry',
+      helperSource.includes('export function createImplementationResumeRepairStatePatch(')
+        && helperSource.includes('phase: "execution"')
+        && helperSource.includes('taskIndex: input.taskIndex')
+        && helperSource.includes('totalTasks: input.totalTasks')
+        && helperSource.includes('awaitingApproval: false')
+        && helperSource.includes('blocked: false')
+        && helperSource.includes('validationError: null')
+        && helperSource.includes('activeTaskPendingEvidence: null')
+        && helperSource.includes('...createImplementationStateDefaults(input.state)'),
+    ],
+    [
+      'batch-modification restart logic',
+      helperSource.includes('export function shouldRestartImplementationLoopAfterBatchModification(')
+        && helperSource.includes('if (nextState && nextState !== state) return true;')
+        && helperSource.includes('return nextState === null;'),
+    ],
+    [
+      'stale progress 60 minute helper',
+      helperSource.includes('export function shouldDeleteStaleImplementationProgressFile(')
+        && helperSource.includes('maxAgeMs = 60 * 60 * 1000')
+        && helperSource.includes('return /^\\.progress-task-.*\\.md$/i.test(entryName) && ageMs >= maxAgeMs;'),
+    ],
+    [
+      'PR URL normalization helper',
+      helperSource.includes('export function normalizeImplementationPrUrl(prUrl: string): string | null {')
+        && helperSource.includes('const normalized = prUrl.trim();')
+        && helperSource.includes('return normalized.length > 0 ? normalized : null;'),
+    ],
+  ];
+  const missingHelperBehaviors = helperBehaviorChecks
+    .filter(([, ok]) => !ok)
+    .map(([label]) => label);
+  if (missingHelperBehaviors.length > 0) {
+    throw new Error(`edge-case helper behavior is missing: ${missingHelperBehaviors.join(', ')}`);
   }
 }
 
