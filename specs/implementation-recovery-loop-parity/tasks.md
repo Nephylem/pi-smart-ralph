@@ -368,7 +368,7 @@
 
 ## Phase 3: Completion and contract alignment
 
-- [ ] 3.1 [RED] Failing test: successful completion finalizes index once, cleans temp files, deletes state, and optionally prints PR URL
+- [x] 3.1 [RED] Failing test: successful completion finalizes index once, cleans temp files, deletes state, and optionally prints PR URL
   - **Do**:
     1. Add a `completion-finalizer` case covering all-tasks-complete success, epic update, single index finalization, stale `.progress-task-*.md` cleanup, `.ralph-state.json` deletion, and optional PR URL output.
     2. Add a failing-index subcase asserting no `ALL_TASKS_COMPLETE` is emitted when index finalization fails.

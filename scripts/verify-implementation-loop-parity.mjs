@@ -14,6 +14,7 @@ const cases = new Map([
   ['completion-gates', verifyCompletionGates],
   ['parallel-batch', verifyParallelBatch],
   ['layer3-review', verifyLayer3Review],
+  ['completion-finalizer', verifyCompletionFinalizer],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -560,6 +561,50 @@ async function verifyParallelBatch() {
   ];
   if (recoveryPatterns.some((pattern) => !pattern.test(helperSource))) {
     expectedFail('batch verification still lacks explicit recovery-stop coverage for aborting a contiguous [P] group before any downstream barrier task can run.');
+  }
+}
+
+async function verifyCompletionFinalizer() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const finalSection = indexSource.match(/if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",[\s\S]*?return;/);
+  if (!finalSection) {
+    expectedFail('could not locate implementation completion finalization path.');
+  }
+
+  const successBehaviorPatterns = [
+    ['epic completion update', /completeEpicChildAfterImplementation\(/],
+    ['index finalization', /runRalphIndex\(/],
+    ['temporary progress cleanup', /\.progress-task-/],
+    ['state-file deletion', /unlinkIfExists\(getRalphStatePath\(spec, options\)\)|unlinkSync\(getRalphStatePath\(spec, options\)\)/],
+    ['optional PR URL lookup', /gh pr view|prUrl|PR URL/],
+  ];
+  const missingSuccessBehavior = successBehaviorPatterns
+    .filter(([, pattern]) => !pattern.test(finalSection[0] + helperSource))
+    .map(([label]) => label);
+  if (missingSuccessBehavior.length > 0) {
+    expectedFail(`completion finalizer is still missing successful terminal behavior (${missingSuccessBehavior.join(', ')}).`);
+  }
+
+  if (/phase:\s*["']completed["']/.test(finalSection[0])
+    && !/unlinkIfExists\(getRalphStatePath\(spec, options\)\)|unlinkSync\(getRalphStatePath\(spec, options\)\)/.test(finalSection[0])) {
+    expectedFail('successful completion still leaves .ralph-state.json in place instead of deleting execution state after finalization succeeds.');
+  }
+
+  const indexFailurePatterns = [
+    /runRalphIndex\(/,
+    /if\s*\([^\n]*index[^\n]*!={0,2}\s*true|if\s*\(![^\n]*index|index finalization failed|Failed to finalize.*index/i,
+    /validationError|evidence[\s\S]{0,120}final|indexFinalized/i,
+  ];
+  if (indexFailurePatterns.some((pattern) => !pattern.test(finalSection[0] + helperSource))) {
+    expectedFail('completion finalizer does not yet prove a failing-index path suppresses ALL_TASKS_COMPLETE and preserves resume-safe error evidence.');
   }
 }
 
