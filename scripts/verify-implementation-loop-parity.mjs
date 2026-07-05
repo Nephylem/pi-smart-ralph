@@ -32,6 +32,7 @@ const cases = new Map([
   ['completion-finalizer', verifyCompletionFinalizer],
   ['contract-wiring', verifyContractWiring],
   ['edge-cases', verifyEdgeCases],
+  ['verification-recovery-policy', verifyVerificationRecoveryPolicy],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -704,6 +705,97 @@ async function verifyEdgeCases() {
   }
 }
 
+async function verifyVerificationRecoveryPolicy() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('verification recovery classifier helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const classifierExports = [
+    /export type VerificationFailureCategory\s*=\s*[\s\S]*?transient_tool_failure[\s\S]*?fatal_runtime_failure/,
+    /export type VerificationRecoveryAction\s*=\s*[\s\S]*?retry_verifier[\s\S]*?block/,
+    /export function (?:classifyImplementationVerificationFailure|classifyVerificationFailure)\(/,
+    /export function (?:createImplementationVerificationRecoveryPolicy|createVerificationRecoveryPolicy)\(/,
+  ];
+  if (classifierExports.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('implementation-loop.ts does not yet export stable verification failure category/action types plus classification and recovery-policy helpers.');
+  }
+
+  const policyContracts = [
+    {
+      label: 'transient tool failure',
+      category: 'transient_tool_failure',
+      reasonCode: 'VERIFY_TRANSIENT_TOOL_FAILURE',
+      recoverable: true,
+      recoveryAction: 'retry_verifier',
+    },
+    {
+      label: 'cleanup artifact failure',
+      category: 'cleanup_artifact_failure',
+      reasonCode: 'VERIFY_CLEANUP_ARTIFACT_FAILURE',
+      recoverable: true,
+      recoveryAction: 'cleanup_artifacts',
+    },
+    {
+      label: 'shared-contract drift',
+      category: 'shared_contract_drift',
+      reasonCode: 'VERIFY_SHARED_CONTRACT_DRIFT',
+      recoverable: true,
+      recoveryAction: 'repair_shared_contract',
+    },
+    {
+      label: 'stale-state failure',
+      category: 'stale_state_failure',
+      reasonCode: 'VERIFY_STALE_STATE_FAILURE',
+      recoverable: true,
+      recoveryAction: 'repair_state',
+    },
+    {
+      label: 'publish-bundle failure',
+      category: 'publish_bundle_failure',
+      reasonCode: 'VERIFY_PUBLISH_BUNDLE_FAILURE',
+      recoverable: true,
+      recoveryAction: 'repair_publish_bundle',
+    },
+    {
+      label: 'real product failure',
+      category: 'real_product_failure',
+      reasonCode: 'VERIFY_REAL_PRODUCT_FAILURE',
+      recoverable: false,
+      recoveryAction: 'delegate_fix_task',
+    },
+    {
+      label: 'fatal runtime failure',
+      category: 'fatal_runtime_failure',
+      reasonCode: 'VERIFY_FATAL_RUNTIME_FAILURE',
+      recoverable: false,
+      recoveryAction: 'block',
+    },
+  ];
+
+  const missingPolicyContracts = policyContracts.filter((contract) => {
+    const pattern = new RegExp(
+      `${escapeRegExp(contract.category)}[\\s\\S]{0,500}${escapeRegExp(contract.reasonCode)}[\\s\\S]{0,200}recoverable\\s*:\\s*${contract.recoverable}[\\s\\S]{0,200}${escapeRegExp(contract.recoveryAction)}`,
+    );
+    return !pattern.test(helperSource);
+  });
+  if (missingPolicyContracts.length > 0) {
+    expectedFail(`verification recovery policy is missing stable reasonCode/recoverable/recoveryAction contracts for: ${missingPolicyContracts.map((contract) => contract.label).join(', ')}.`);
+  }
+
+  const indexRoutingPatterns = [
+    /from\s+["']\.\/implementation-loop(?:\.ts)?["'][\s\S]*?(classifyImplementationVerificationFailure|classifyVerificationFailure|createImplementationVerificationRecoveryPolicy|createVerificationRecoveryPolicy)/,
+    /if\s*\(!validation\.ok\)\s*\{[\s\S]{0,2000}(classifyImplementationVerificationFailure|classifyVerificationFailure|createImplementationVerificationRecoveryPolicy|createVerificationRecoveryPolicy)[\s\S]{0,800}(reasonCode|recoverable|recoveryAction)/,
+  ];
+  if (indexRoutingPatterns.some((pattern) => !pattern.test(indexSource))) {
+    expectedFail('runImplementCommand does not yet route verification failures through the implementation-loop recovery-policy helper before blocking.');
+  }
+}
+
 async function verifyAcceptanceChecklist() {
   for (const caseName of acceptanceChecklistCases) {
     const verifyCase = cases.get(caseName);
@@ -836,6 +928,10 @@ async function verifyContractWiring() {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function expectedFail(message) {
