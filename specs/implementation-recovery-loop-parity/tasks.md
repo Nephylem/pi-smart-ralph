@@ -181,7 +181,7 @@
 
 ## Phase 2: Mutation and execution guards
 
-- [ ] 2.1 [RED] Failing test: task modification requests reject unsafe payloads and remap safely
+- [x] 2.1 [RED] Failing test: task modification requests reject unsafe payloads and remap safely
   - **Do**:
     1. Add a `task-modification` case covering invalid payload shape, mismatched task IDs, duplicate IDs, and valid task mutation requests.
     2. Assert invalid requests stop before mutating files and valid requests update `modificationMap` plus native task ordering.

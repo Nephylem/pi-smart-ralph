@@ -10,6 +10,7 @@ const cases = new Map([
   ['state-integrity', verifyStateIntegrity],
   ['recovery-fix', verifyRecoveryFix],
   ['recovery-bounds', verifyRecoveryBounds],
+  ['task-modification', verifyTaskModification],
 ]);
 const supportedCaseNames = [...cases.keys()];
 
@@ -280,6 +281,86 @@ async function verifyRecoveryBounds() {
 
   if (/ALL_TASKS_COMPLETE/.test(stopBranch[0])) {
     throw new Error('recovery over-limit stop branch must not emit ALL_TASKS_COMPLETE.');
+  }
+}
+
+async function verifyTaskModification() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('execution loop helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+
+  const parseSection = indexSource.match(/function parseTaskModificationRequest\([\s\S]*?return \{[\s\S]*?proposedTasks,\n\t\};\n\}/);
+  if (!parseSection) {
+    expectedFail('could not locate TASK_MODIFICATION_REQUEST payload parser.');
+  }
+
+  const invalidPayloadPatterns = [
+    /payload must be a JSON object/,
+    /Unsupported TASK_MODIFICATION_REQUEST type/,
+    /must include originalTaskId/,
+    /must include reasoning/,
+    /must include at least one proposed task block/,
+  ];
+  const missingInvalidPayloadChecks = invalidPayloadPatterns.filter((pattern) => !pattern.test(parseSection[0]));
+  if (missingInvalidPayloadChecks.length > 0) {
+    expectedFail('TASK_MODIFICATION_REQUEST parser does not yet reject invalid payload shape before any mutation attempt.');
+  }
+
+  const handlerSection = indexSource.match(/function handleTaskModificationRequest\([\s\S]*?\n\}/);
+  if (!handlerSection) {
+    expectedFail('could not locate TASK_MODIFICATION_REQUEST application handler.');
+  }
+
+  const handlerSource = handlerSection[0];
+  if (!/targeted .* active task/.test(handlerSource)) {
+    expectedFail('task modification handling does not yet reject mismatched originalTaskId values.');
+  }
+  if (!/proposed duplicate task ids/.test(handlerSource)) {
+    expectedFail('task modification handling does not yet reject duplicate proposed task ids.');
+  }
+
+  const firstMutationIndex = [handlerSource.indexOf('setTaskCheckboxStatus('), handlerSource.indexOf('insertTaskBlocks(')]
+    .filter((value) => value >= 0)
+    .sort((left, right) => left - right)[0] ?? -1;
+  const validationIndices = [
+    handlerSource.indexOf('request.originalTaskId !== currentTaskId'),
+    handlerSource.indexOf('proposed duplicate task ids'),
+    handlerSource.indexOf('must be a single checkbox task block'),
+    handlerSource.indexOf('already exists in tasks.md'),
+  ].filter((value) => value >= 0);
+  if (firstMutationIndex < 0 || validationIndices.length < 4) {
+    expectedFail('task modification verifier could not prove validation happens before file mutation.');
+  }
+  if (validationIndices.some((value) => value > firstMutationIndex)) {
+    throw new Error('unsafe task modification validation appears after task-file mutation.');
+  }
+
+  const validMutationPatterns = [
+    /modificationMap:\s*modificationStatePatch/,
+    /nativeTaskMirrorStatePatch\(mirror\)/,
+    /totalTasks:\s*updatedTasks\.length/,
+  ];
+  const missingValidMutationBehavior = validMutationPatterns.filter((pattern) => !pattern.test(handlerSource));
+  if (missingValidMutationBehavior.length > 0) {
+    expectedFail('valid task modification requests do not yet persist modificationMap history and remap native task ordering.');
+  }
+
+  const extractedHelperPatterns = [
+    /export function (?:validate|parse)ImplementationTaskModification/,
+    /export function applyImplementationTaskModification/,
+    /export function createImplementationTaskModificationStatePatch/,
+  ];
+  if (!extractedHelperPatterns.every((pattern) => pattern.test(helperSource))) {
+    expectedFail('task modification validation/mutation logic is not yet isolated in implementation-loop.ts for safe parity coverage.');
+  }
+
+  if (!/from\s+["']\.\/implementation-loop(?:\.ts)?["'][\s\S]*ImplementationTaskModification/.test(indexSource)) {
+    expectedFail('runImplementCommand does not yet delegate task modification request handling through implementation-loop.ts helpers.');
   }
 }
 
