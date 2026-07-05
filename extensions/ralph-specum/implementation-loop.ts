@@ -27,6 +27,41 @@ export type ImplementationCompletionValidation = {
 	output: string;
 };
 
+export type ImplementationSubagentCompletionLike = {
+	result?: string | null;
+	description?: string | null;
+	error?: string | null;
+	status?: string | null;
+};
+
+export type ImplementationCompletionValidationInput = {
+	output: string;
+	signal: ImplementationCompletionSignal;
+	requiresExpectedFailureProof?: boolean;
+	hasExpectedFailureProof?: (output: string, proofToken?: string) => boolean;
+	assessCompletionOutput?: (output: string) => { ok: boolean; blocker?: string };
+	detectFailureReason?: () => string | null;
+};
+
+export type CreateImplementationCompletionValidationInput = Omit<ImplementationCompletionValidationInput, "output" | "detectFailureReason"> & {
+	completion: ImplementationSubagentCompletionLike;
+	detectFailureReason?: (output: string) => string | null;
+};
+
+export type ImplementationCompletionTaskLike = {
+	rawTitle?: string;
+	subject?: string;
+};
+
+export type ValidateImplementationCompletionBridgeInput = {
+	output: string;
+	signal: ImplementationCompletionSignal;
+	task?: ImplementationCompletionTaskLike;
+	hasExpectedFailureProof?: (output: string, proofToken?: string) => boolean;
+	assessCompletionOutput?: (output: string) => { ok: boolean; blocker?: string };
+	detectFailureReason?: () => string | null;
+};
+
 export type ImplementationRecoveryTaskLike = {
 	taskNumber?: string;
 	stableKey: string;
@@ -211,14 +246,29 @@ export function extractImplementationCompletionEvidence(
 	return null;
 }
 
-export function validateImplementationTaskCompletion(input: {
-	output: string;
-	signal: ImplementationCompletionSignal;
-	requiresExpectedFailureProof?: boolean;
-	hasExpectedFailureProof?: (output: string, proofToken?: string) => boolean;
-	assessCompletionOutput?: (output: string) => { ok: boolean; blocker?: string };
-	detectFailureReason?: () => string | null;
-}): ImplementationCompletionValidation {
+export function formatImplementationSubagentCompletionOutput(completion: ImplementationSubagentCompletionLike): string {
+	return [completion.result, completion.description, completion.error, completion.status]
+		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+		.join("\n");
+}
+
+export function createImplementationCompletionValidationInput(
+	input: CreateImplementationCompletionValidationInput,
+): ImplementationCompletionValidationInput {
+	const output = formatImplementationSubagentCompletionOutput(input.completion);
+	return {
+		output,
+		signal: input.signal,
+		requiresExpectedFailureProof: input.requiresExpectedFailureProof,
+		hasExpectedFailureProof: input.hasExpectedFailureProof,
+		assessCompletionOutput: input.assessCompletionOutput,
+		detectFailureReason: input.detectFailureReason
+			? () => input.detectFailureReason?.(output) ?? null
+			: undefined,
+	};
+}
+
+export function validateImplementationTaskCompletion(input: ImplementationCompletionValidationInput): ImplementationCompletionValidation {
 	if (!hasImplementationCompletionSignal(input.output, input.signal)) {
 		return {
 			ok: false,
@@ -283,6 +333,30 @@ export function validateImplementationTaskCompletion(input: {
 	}
 
 	return { ok: true, signal: input.signal, evidence, output: input.output };
+}
+
+export function createImplementationCompletionBridgeInput(
+	input: ValidateImplementationCompletionBridgeInput,
+): ImplementationCompletionValidationInput {
+	return {
+		output: input.output,
+		signal: input.signal,
+		requiresExpectedFailureProof: input.signal === "TASK_COMPLETE" && isImplementationRedTask(input.task),
+		hasExpectedFailureProof: input.hasExpectedFailureProof,
+		assessCompletionOutput: input.assessCompletionOutput,
+		detectFailureReason: input.detectFailureReason,
+	};
+}
+
+export function validateImplementationCompletionBridge(
+	input: ValidateImplementationCompletionBridgeInput,
+): ImplementationCompletionValidation {
+	return validateImplementationTaskCompletion(createImplementationCompletionBridgeInput(input));
+}
+
+export function isImplementationRedTask(task?: ImplementationCompletionTaskLike | null): boolean {
+	if (!task) return false;
+	return /\[RED\]/i.test(`${task.rawTitle ?? ""}\n${task.subject ?? ""}`);
 }
 
 export function validateImplementationTaskModificationRequestPayload(parsed: unknown): ImplementationTaskModificationRequest {

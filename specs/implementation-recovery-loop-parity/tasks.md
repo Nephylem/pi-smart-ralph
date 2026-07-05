@@ -215,7 +215,7 @@
   - _Requirements: FR-6, AC-2.4_
   - _Design: Task mutation path; Existing Patterns to Follow_
 
-- [ ] Q5 [VERIFY] Quality check: task modification verifier
+- [x] Q5 [VERIFY] Quality check: task modification verifier
   - **Do**:
     1. Run the focused mutation case for safe reject/apply behavior.
   - **Files**: None
@@ -225,7 +225,7 @@
   - _Requirements: FR-6, FR-17, AC-2.4_
   - _Design: Parity verifier_
 
-- [ ] 2.4 [RED] Failing test: normal and `[VERIFY]` tasks require explicit success signals and evidence
+- [x] 2.4 [RED] Failing test: normal and `[VERIFY]` tasks require explicit success signals and evidence
   - **Do**:
     1. Add a `completion-gates` case covering normal-task success, contradiction rejection, `[VERIFY]` pass, and `[VERIFY]` fail behavior.
     2. Assert normal tasks require the coordinator's completion signal plus keyed evidence and `[VERIFY]` tasks require `VERIFICATION_PASS`.
@@ -248,7 +248,7 @@
   - _Requirements: FR-7, FR-8, AC-3.1, AC-3.2_
   - _Design: Completion validation; `task-completion.ts` integration_
 
-- [ ] 2.6 [YELLOW] Refactor: isolate completion-result parsing and gate enforcement
+- [x] 2.6 [YELLOW] Refactor: isolate completion-result parsing and gate enforcement
   - **Do**:
     1. Extract a narrow bridge between loop execution and task-completion validation.
     2. Keep signal names and evidence parsing stable for verifier fixtures.

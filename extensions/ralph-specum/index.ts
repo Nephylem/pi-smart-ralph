@@ -79,14 +79,13 @@ import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBA
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	applyImplementationTaskModification,
+	createImplementationCompletionBridgeInput,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
-	detectImplementationCompletionContradiction,
-	extractImplementationCompletionEvidence,
+	formatImplementationSubagentCompletionOutput,
 	getImplementationNativeTaskRepairReason,
-	hasImplementationCompletionSignal,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
 	IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
@@ -6762,17 +6761,7 @@ function buildImplementationPrompt(
 }
 
 function subagentCompletionOutput(completion: SubagentCompletion): string {
-	return [completion.result, completion.description, completion.error, completion.status]
-		.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-		.join("\n");
-}
-
-function hasCompletionSignal(output: string, signal: CompletionSignal): boolean {
-	return hasImplementationCompletionSignal(output, signal);
-}
-
-function hasContradiction(output: string): string | null {
-	return detectImplementationCompletionContradiction(output);
+	return formatImplementationSubagentCompletionOutput(completion);
 }
 
 function truncateFailureReason(reason: string, maxLength = 280): string {
@@ -6868,10 +6857,6 @@ function detectExplicitFailureReason(
 	});
 }
 
-function extractCompletionEvidence(output: string, signal: CompletionSignal, requireRedPass = false): string | null {
-	return extractImplementationCompletionEvidence(output, signal, requireRedPass, hasExpectedFailureProof);
-}
-
 function validateSubagentCompletion(
 	completion: SubagentCompletion,
 	definition: ImplementationSubagentDefinition,
@@ -6879,16 +6864,15 @@ function validateSubagentCompletion(
 	workspaceReport?: ReturnType<typeof analyzeTaskWorkspace>,
 ): CompletionValidation {
 	const output = subagentCompletionOutput(completion);
-	const requiresExpectedFailureProof = definition.completionSignal === "TASK_COMPLETE" && Boolean(task) && /\[RED\]/i.test(`${task.rawTitle}\n${task.subject}`);
-	return validateImplementationTaskCompletion({
+	return validateImplementationTaskCompletion(createImplementationCompletionBridgeInput({
 		output,
 		signal: definition.completionSignal,
-		requiresExpectedFailureProof,
+		task,
 		hasExpectedFailureProof,
 		assessCompletionOutput: (candidateOutput) => assessTaskCompletionOutput(candidateOutput, workspaceReport),
 		detectFailureReason: () => detectExplicitFailureReason(output, definition, workspaceReport)
 			?? `Workspace completion output is invalid for ${workspaceReport?.commitMode ?? "unknown"}.`,
-	});
+	}));
 }
 
 function runGitCommand(cwd: string, args: string[]): GitCommandResult {
