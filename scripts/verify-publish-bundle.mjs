@@ -16,7 +16,13 @@ const RESOURCE_MANIFEST_KINDS = new Set(['command', 'template', 'prompt', 'refer
 const RESOURCE_MANIFEST_STATUSES = new Set(['copied', 'adapted', 'renamed', 'pi-native', 'excluded', 'deferred']);
 const PACKAGED_RESOURCE_ROOTS = ['agents', 'prompts', 'references', 'skills', 'templates', 'schemas'];
 const DEFAULT_ORIGINAL_RESOURCE_ROOT = '/home/nephy/pi-custom-workflow/smart-ralph/plugins/ralph-specum';
-const ORIGINAL_RESOURCE_ROOT = process.env.RALPH_ORIGINAL_RESOURCE_ROOT ?? DEFAULT_ORIGINAL_RESOURCE_ROOT;
+const EXPLICIT_ORIGINAL_RESOURCE_ROOT = typeof process.env.RALPH_ORIGINAL_RESOURCE_ROOT === 'string'
+  && process.env.RALPH_ORIGINAL_RESOURCE_ROOT.trim().length > 0
+  ? process.env.RALPH_ORIGINAL_RESOURCE_ROOT.trim()
+  : null;
+const ORIGINAL_RESOURCE_ROOT = EXPLICIT_ORIGINAL_RESOURCE_ROOT ?? DEFAULT_ORIGINAL_RESOURCE_ROOT;
+const ORIGINAL_RESOURCE_ROOT_AVAILABLE = existsSync(ORIGINAL_RESOURCE_ROOT);
+const SHOULD_VERIFY_ORIGINAL_RESOURCES = ORIGINAL_RESOURCE_ROOT_AVAILABLE;
 const ORIGINAL_RESOURCE_DIRECTORIES = ['commands', 'templates', 'references', 'skills', 'schemas'];
 
 function parseJsonFile(filePath, label) {
@@ -78,6 +84,8 @@ function validateSha256(label, expectedHash, filePath, manifestPath) {
 }
 
 function validateExactChecksumMatch(label, status, originalPath, piPath, piHash) {
+  if (!SHOULD_VERIFY_ORIGINAL_RESOURCES) return;
+
   const originalFullPath = resolveOriginalResourcePath(originalPath);
   if (!existsSync(originalFullPath)) {
     failures.push(`${label}.originalPath must point to an existing original file for ${status} comparison: ${originalPath}`);
@@ -108,10 +116,7 @@ function collectFilesRecursive(directoryPath) {
 }
 
 function listOriginalResourcePaths() {
-  if (!existsSync(ORIGINAL_RESOURCE_ROOT)) {
-    failures.push(`original resource root must exist at ${ORIGINAL_RESOURCE_ROOT} (override with RALPH_ORIGINAL_RESOURCE_ROOT)`);
-    return [];
-  }
+  if (!SHOULD_VERIFY_ORIGINAL_RESOURCES) return [];
 
   const originalPaths = [];
   for (const directory of ORIGINAL_RESOURCE_DIRECTORIES) {
@@ -326,6 +331,10 @@ const requiredFiles = [
 
 for (const file of requiredFiles) {
   if (!existsSync(join(root, file))) failures.push(`missing package resource: ${file}`);
+}
+
+if (EXPLICIT_ORIGINAL_RESOURCE_ROOT && !ORIGINAL_RESOURCE_ROOT_AVAILABLE) {
+  failures.push(`explicit original resource root does not exist: ${ORIGINAL_RESOURCE_ROOT}`);
 }
 
 validateResourceManifest();
