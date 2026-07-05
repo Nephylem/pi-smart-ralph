@@ -31,13 +31,18 @@ export type ImplementationFixTaskEntry = {
 	lastError?: string;
 };
 
-export type ImplementationFixTaskPlan = {
+export type ImplementationFixTaskLineage = {
 	originalTaskId: string;
+	insertionAnchorId: string;
 	attempts: number;
 	fixTaskId: string;
-	fixTaskBlock: string;
-	fixTaskMap: Record<string, unknown>;
+	fixTaskIds: string[];
 	lastError: string;
+	fixTaskMap: Record<string, unknown>;
+};
+
+export type ImplementationFixTaskPlan = ImplementationFixTaskLineage & {
+	fixTaskBlock: string;
 };
 
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
@@ -54,25 +59,34 @@ export function resolveImplementationRetryTarget(task: ImplementationRecoveryTas
 	return task.taskNumber?.trim() || task.stableKey;
 }
 
-export function createImplementationFixTaskPlan(
+export function resolveImplementationInsertionAnchor(task: ImplementationRecoveryTaskLike): string {
+	return normalizeImplementationField(task.taskNumber) || normalizeImplementationField(task.stableKey) || resolveImplementationRetryTarget(task);
+}
+
+export function createImplementationFixTaskId(originalTaskId: string, attempts: number): string {
+	return `${originalTaskId}.${attempts}`;
+}
+
+export function createImplementationFixTaskLineage(
 	state: RalphState | null,
 	task: ImplementationRecoveryTaskLike,
 	lastError: string,
-): ImplementationFixTaskPlan {
+): ImplementationFixTaskLineage {
 	const originalTaskId = resolveImplementationRetryTarget(task);
+	const insertionAnchorId = resolveImplementationInsertionAnchor(task);
 	const fixTaskMap = implementationStateRecord(state?.fixTaskMap);
 	const priorEntry = implementationFixTaskEntryFromUnknown(fixTaskMap[originalTaskId]);
 	const attempts = priorEntry.attempts + 1;
-	const fixTaskId = `${originalTaskId}.${attempts}`;
-	const fixTaskIds = priorEntry.fixTaskIds.includes(fixTaskId)
-		? [...priorEntry.fixTaskIds]
-		: [...priorEntry.fixTaskIds, fixTaskId];
+	const fixTaskId = createImplementationFixTaskId(originalTaskId, attempts);
+	const fixTaskIds = mergeImplementationFixTaskIds(priorEntry.fixTaskIds, fixTaskId);
 	const normalizedError = normalizeImplementationField(lastError) || "Task execution failed without reported evidence.";
 
 	return {
 		originalTaskId,
+		insertionAnchorId,
 		attempts,
 		fixTaskId,
+		fixTaskIds,
 		lastError: normalizedError,
 		fixTaskMap: {
 			...fixTaskMap,
@@ -82,7 +96,19 @@ export function createImplementationFixTaskPlan(
 				lastError: normalizedError,
 			},
 		},
-		fixTaskBlock: buildImplementationFixTaskBlock(task, originalTaskId, fixTaskId, normalizedError),
+	};
+}
+
+export function createImplementationFixTaskPlan(
+	state: RalphState | null,
+	task: ImplementationRecoveryTaskLike,
+	lastError: string,
+): ImplementationFixTaskPlan {
+	const lineage = createImplementationFixTaskLineage(state, task, lastError);
+
+	return {
+		...lineage,
+		fixTaskBlock: buildImplementationFixTaskBlock(task, lineage.originalTaskId, lineage.fixTaskId, lineage.lastError),
 	};
 }
 
@@ -297,6 +323,28 @@ function buildImplementationFixTaskBlock(
 	if (design) lines.push(`  - _Design: ${design}_`);
 
 	return lines.join("\n");
+}
+
+function mergeImplementationFixTaskIds(existing: readonly string[], nextFixTaskId: string): string[] {
+	const ids = new Set(existing.filter((entry) => typeof entry === "string" && entry.trim().length > 0));
+	ids.add(nextFixTaskId);
+	return [...ids].sort(compareImplementationFixTaskIds);
+}
+
+function compareImplementationFixTaskIds(left: string, right: string): number {
+	const leftSegments = left.split(".");
+	const rightSegments = right.split(".");
+	const maxLength = Math.max(leftSegments.length, rightSegments.length);
+	for (let index = 0; index < maxLength; index += 1) {
+		const leftSegment = leftSegments[index] ?? "";
+		const rightSegment = rightSegments[index] ?? "";
+		const leftNumber = Number(leftSegment);
+		const rightNumber = Number(rightSegment);
+		const bothNumeric = Number.isInteger(leftNumber) && Number.isInteger(rightNumber);
+		if (bothNumeric && leftNumber !== rightNumber) return leftNumber - rightNumber;
+		if (leftSegment !== rightSegment) return leftSegment.localeCompare(rightSegment);
+	}
+	return 0;
 }
 
 function normalizeImplementationField(value: unknown): string {

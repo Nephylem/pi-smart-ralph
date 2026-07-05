@@ -179,6 +179,18 @@ async function verifyRecoveryFix() {
     expectedFail('recoverable task failures do not branch through recovery-mode fix-task handling yet.');
   }
 
+  const isolatedHelperPatterns = [
+    /export function createImplementationFixTaskId\(/,
+    /export function resolveImplementationInsertionAnchor\(/,
+    /export function createImplementationFixTaskLineage\(/,
+    /createImplementationFixTaskPlan\([\s\S]*?createImplementationFixTaskLineage\(/,
+    /mergeImplementationFixTaskIds\([\s\S]*?sort\(compareImplementationFixTaskIds\)/,
+  ];
+  const missingIsolatedHelpers = isolatedHelperPatterns.filter((pattern) => !pattern.test(helperSource));
+  if (missingIsolatedHelpers.length > 0) {
+    expectedFail('recovery helpers are not yet isolated behind dedicated fix-task id, anchor, lineage, and deterministic ordering helpers.');
+  }
+
   const fixTrackingPatterns = [
     /attempts\s*:\s*\d+/,
     /fixTaskIds/,

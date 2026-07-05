@@ -114,7 +114,7 @@
   - _Requirements: FR-4, AC-2.1, AC-2.2_
   - _Design: Fix-task planning; Implementation loop core_
 
-- [ ] 1.9 [YELLOW] Refactor: extract fix-task id, anchor, and lineage helpers
+- [x] 1.9 [YELLOW] Refactor: extract fix-task id, anchor, and lineage helpers
   - **Do**:
     1. Centralize fix-task ID generation, insertion-anchor lookup, and lineage updates.
     2. Keep file writes deterministic for fixture assertions.
