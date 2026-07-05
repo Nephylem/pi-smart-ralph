@@ -460,7 +460,7 @@
   - _Requirements: FR-2, FR-6, FR-10, FR-14, FR-16, FR-17, AC-1.1, AC-2.4, AC-3.4, AC-4.3, AC-4.5_
   - _Design: Edge Cases; Completion finalizer; Task mutation path_
 
-- [ ] 4.2 [GREEN] Pass test: extend acceptance coverage for remaining loop edge cases
+- [x] 4.2 [GREEN] Pass test: extend acceptance coverage for remaining loop edge cases
   - **Do**:
     1. Add fixture coverage for the edge paths to `scripts/verify-implementation-loop-parity.mjs` and fold them into `acceptance-checklist`.
     2. Patch runtime only where a new edge-case fixture proves a remaining gap.

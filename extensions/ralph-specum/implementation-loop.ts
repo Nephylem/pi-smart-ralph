@@ -282,6 +282,12 @@ export type CreateImplementationTaskMutationRemapPatchInput = {
 	appliedAt?: string;
 };
 
+export type CreateImplementationResumeRepairStatePatchInput = {
+	state: RalphState | null;
+	taskIndex: number;
+	totalTasks: number;
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
 }
@@ -556,6 +562,42 @@ export function createImplementationTaskModificationStatePatch(
 			modifications: [...existingModifications, modificationRecord],
 		},
 	};
+}
+
+export function createImplementationResumeRepairStatePatch(
+	input: CreateImplementationResumeRepairStatePatchInput,
+): Record<string, unknown> {
+	return {
+		phase: "execution",
+		taskIndex: input.taskIndex,
+		totalTasks: input.totalTasks,
+		awaitingApproval: false,
+		blocked: false,
+		validationError: null,
+		activeTaskPendingEvidence: null,
+		...createImplementationStateDefaults(input.state),
+	};
+}
+
+export function shouldRestartImplementationLoopAfterBatchModification(
+	state: RalphState | null,
+	nextState?: RalphState | null,
+): boolean {
+	if (nextState && nextState !== state) return true;
+	return nextState === null;
+}
+
+export function shouldDeleteStaleImplementationProgressFile(
+	entryName: string,
+	ageMs: number,
+	maxAgeMs = 60 * 60 * 1000,
+): boolean {
+	return /^\.progress-task-.*\.md$/i.test(entryName) && ageMs >= maxAgeMs;
+}
+
+export function normalizeImplementationPrUrl(prUrl: string): string | null {
+	const normalized = prUrl.trim();
+	return normalized.length > 0 ? normalized : null;
 }
 
 export function createImplementationTaskMutationRemapPatch(
