@@ -125,7 +125,7 @@
   - _Requirements: FR-4, AC-2.1, AC-2.2_
   - _Design: Fix-task planning; Existing Patterns to Follow_
 
-- [ ] Q3 [VERIFY] Quality check: recovery insertion verifier
+- [x] Q3 [VERIFY] Quality check: recovery insertion verifier
   - **Do**:
     1. Run the focused recovery-insertion fixture case.
   - **Files**: None
@@ -146,7 +146,7 @@
   - _Requirements: FR-5, AC-2.3_
   - _Design: Error Handling; Edge Cases; Fix-task planning_
 
-- [ ] 1.11 [GREEN] Pass test: enforce recovery limits and preserve actionable stop evidence
+- [x] 1.11 [GREEN] Pass test: enforce recovery limits and preserve actionable stop evidence
   - **Do**:
     1. Enforce per-original and depth bounds before creating the next fix task.
     2. Stop the loop without terminal success when bounds are exceeded.

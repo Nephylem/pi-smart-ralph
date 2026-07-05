@@ -79,6 +79,7 @@ import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBA
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	createImplementationFixTaskPlan,
+	createImplementationRecoveryStopPlan,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
 	getImplementationNativeTaskRepairReason,
@@ -7597,13 +7598,37 @@ async function runImplementCommand(
 					}
 					state = modificationResult.state ?? state;
 					if (modificationResult.summary) completedSummaries.push(modificationResult.summary);
-					continue;
+					continue; // modification handled; restart task scan with updated tasks.md/state
 				}
 
 				setTaskCheckboxStatus(spec, task.index, false);
 				const reason = validation.error ?? "Subagent completion did not pass coordinator validation.";
 				const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
 				if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
+					const recoveryStop = createImplementationRecoveryStopPlan(state, task, completionOutput || validation.output || reason);
+					const maxFixTasksPerOriginal = recoveryStop.maxFixTasksPerOriginal;
+					const maxFixTaskDepth = recoveryStop.maxFixTaskDepth;
+					if (recoveryStop.attempts >= maxFixTasksPerOriginal || recoveryStop.lineageDepth >= maxFixTaskDepth) {
+						const stopReason = `${recoveryStop.reason} originalTaskId=${recoveryStop.originalTaskId}; fixTaskIds=${recoveryStop.fixTaskIds.join(",") || "none"}; lineage=${recoveryStop.failedTaskId};`;
+						await blockImplementation(ctx, spec, task, stopReason, options, {
+							taskIndex: task.index,
+							totalTasks: tasks.length,
+							taskIteration,
+							globalIteration: globalIteration + 1,
+							lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
+							...createImplementationStateDefaults(state, {
+								fixTaskMap: stateRecordField(state, "fixTaskMap"),
+								maxFixTasksPerOriginal,
+								maxFixTaskDepth,
+								modificationMap: stateRecordField(state, "modificationMap"),
+								nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+								evidence: recoveryStop.evidence,
+								maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+								maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+							}),
+						});
+						return;
+					}
 					const recoveryPlan = createImplementationFixTaskPlan(state, task, completionOutput || validation.output || reason);
 					insertTaskBlocks(spec, task, [recoveryPlan.fixTaskBlock], "after");
 					const refreshedTasks = readImplementationTasks(spec).tasks;

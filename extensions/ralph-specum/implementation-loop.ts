@@ -45,6 +45,20 @@ export type ImplementationFixTaskPlan = ImplementationFixTaskLineage & {
 	fixTaskBlock: string;
 };
 
+export type ImplementationRecoveryStopPlan = {
+	originalTaskId: string;
+	failedTaskId: string;
+	insertionAnchorId: string;
+	attempts: number;
+	lineageDepth: number;
+	maxFixTasksPerOriginal: number;
+	maxFixTaskDepth: number;
+	fixTaskIds: string[];
+	lastError: string;
+	reason: string;
+	evidence: Record<string, unknown>;
+};
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
 }
@@ -112,6 +126,54 @@ export function createImplementationFixTaskPlan(
 	};
 }
 
+export function createImplementationRecoveryStopPlan(
+	state: RalphState | null,
+	task: ImplementationRecoveryTaskLike,
+	lastError: string,
+): ImplementationRecoveryStopPlan {
+	const originalTaskId = resolveImplementationRetryTarget(task);
+	const failedTaskId = resolveImplementationInsertionAnchor(task);
+	const insertionAnchorId = failedTaskId;
+	const fixTaskMap = implementationStateRecord(state?.fixTaskMap);
+	const priorEntry = implementationFixTaskEntryFromUnknown(fixTaskMap[originalTaskId]);
+	const attempts = priorEntry.attempts;
+	const lineageDepth = getImplementationFixTaskDepth(task, originalTaskId);
+	const maxFixTasksPerOriginal = positiveInteger(state?.maxFixTasksPerOriginal)
+		?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL;
+	const maxFixTaskDepth = positiveInteger(state?.maxFixTaskDepth)
+		?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH;
+	const normalizedError = normalizeImplementationField(lastError) || "Task execution failed without reported evidence.";
+	const reason = attempts >= maxFixTasksPerOriginal
+		? `Recovery limit reached for ${originalTaskId}: fix history ${formatImplementationFixTaskIds(priorEntry.fixTaskIds)} already used ${attempts}/${maxFixTasksPerOriginal} attempts.`
+		: `Recovery depth reached for ${originalTaskId}: lineage ${failedTaskId} is already at depth ${lineageDepth}/${maxFixTaskDepth}.`;
+	const evidence = createImplementationRecoveryStopEvidence(state?.evidence, {
+		originalTaskId,
+		failedTaskId,
+		insertionAnchorId,
+		attempts,
+		lineageDepth,
+		maxFixTasksPerOriginal,
+		maxFixTaskDepth,
+		fixTaskIds: priorEntry.fixTaskIds,
+		lastError: normalizedError,
+		reason,
+	});
+
+	return {
+		originalTaskId,
+		failedTaskId,
+		insertionAnchorId,
+		attempts,
+		lineageDepth,
+		maxFixTasksPerOriginal,
+		maxFixTaskDepth,
+		fixTaskIds: priorEntry.fixTaskIds,
+		lastError: normalizedError,
+		reason,
+		evidence,
+	};
+}
+
 export function createImplementationEvidenceScaffold(existing: unknown): Record<string, unknown> {
 	const record = implementationStateRecord(existing);
 	const tasks = implementationStateRecord(record.tasks);
@@ -142,6 +204,24 @@ export function createImplementationTaskEvidence(
 			...tasks,
 			[taskKey]: entry,
 		},
+	};
+}
+
+export function createImplementationRecoveryStopEvidence(
+	existing: unknown,
+	entry: Omit<ImplementationRecoveryStopPlan, "evidence">,
+): Record<string, unknown> {
+	const evidence = createImplementationEvidenceScaffold(existing);
+	const recoveryStops = Array.isArray(evidence.recoveryStops) ? [...evidence.recoveryStops] : [];
+	return {
+		...evidence,
+		recoveryStops: [
+			...recoveryStops,
+			{
+				...entry,
+				stoppedAt: new Date().toISOString(),
+			},
+		],
 	};
 }
 
@@ -329,6 +409,18 @@ function mergeImplementationFixTaskIds(existing: readonly string[], nextFixTaskI
 	const ids = new Set(existing.filter((entry) => typeof entry === "string" && entry.trim().length > 0));
 	ids.add(nextFixTaskId);
 	return [...ids].sort(compareImplementationFixTaskIds);
+}
+
+function getImplementationFixTaskDepth(task: ImplementationRecoveryTaskLike, originalTaskId: string): number {
+	const currentTaskId = normalizeImplementationField(task.taskNumber) || normalizeImplementationField(task.stableKey);
+	if (!currentTaskId) return 0;
+	const originalSegments = originalTaskId.split(".").filter(Boolean).length;
+	const currentSegments = currentTaskId.split(".").filter(Boolean).length;
+	return Math.max(0, currentSegments - originalSegments);
+}
+
+function formatImplementationFixTaskIds(fixTaskIds: readonly string[]): string {
+	return fixTaskIds.length > 0 ? fixTaskIds.join(", ") : "none";
 }
 
 function compareImplementationFixTaskIds(left: string, right: string): number {
