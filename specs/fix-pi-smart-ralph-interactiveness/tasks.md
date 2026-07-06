@@ -251,7 +251,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 2.7 [RED] Failing test: no-UI and partial-UI contexts do not throw
+- [x] 2.7 [RED] Failing test: no-UI and partial-UI contexts do not throw
   - **Do**:
     1. Add no-UI test for notify, status, footer, and widget paths.
     2. Add partial-UI test missing `setWidget`, `setFooter`, and `setStatus`.

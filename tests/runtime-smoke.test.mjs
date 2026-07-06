@@ -143,6 +143,75 @@ test('UI contexts route Ralph notifications through ctx.ui.notify with message a
   }
 });
 
+test('no-UI context no-ops status, footer, and widget paths while notifications fall back to console', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  const consoleWarnings = [];
+  const originalWarn = console.warn;
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const throwIfCalled = () => {
+      throw new Error('no-UI test should not call Pi UI methods');
+    };
+    const ctx = {
+      cwd: projectRoot,
+      hasUI: false,
+      async waitForIdle() {},
+      ui: {
+        notify: throwIfCalled,
+        setFooter: throwIfCalled,
+        setWidget: throwIfCalled,
+        setStatus: throwIfCalled,
+      },
+    };
+    console.warn = (...args) => {
+      consoleWarnings.push(args.join(' '));
+    };
+
+    await assert.doesNotReject(() => pi.events.get('session_start')[0]({}, ctx));
+    await assert.doesNotReject(() => pi.commands.get('ralph-research').handler('no-ui-status-widget-paths', ctx));
+    await waitImmediate();
+    await assert.doesNotReject(() => pi.events.get('session_shutdown')[0]({}, ctx));
+    await assert.doesNotReject(() => pi.commands.get('ralph-index').handler('--bad-option', ctx));
+
+    assert.equal(consoleWarnings.length, 1, 'expected no-UI warning notifications to fall back to console.warn');
+    assert.match(consoleWarnings[0], /Unsupported \/ralph-index option/);
+  } finally {
+    console.warn = originalWarn;
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('partial UI context without surface methods does not throw for status, footer, or widget paths', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const notifications = [];
+    const ctx = {
+      cwd: projectRoot,
+      hasUI: true,
+      async waitForIdle() {},
+      ui: {
+        async notify(message, type = 'info') {
+          notifications.push({ message, type });
+        },
+      },
+    };
+
+    await assert.doesNotReject(() => pi.events.get('session_start')[0]({}, ctx));
+    await assert.doesNotReject(() => pi.commands.get('ralph-research').handler('partial-ui-status-widget-paths', ctx));
+    await waitImmediate();
+    await assert.doesNotReject(() => pi.events.get('session_shutdown')[0]({}, ctx));
+    await assert.doesNotReject(() => pi.commands.get('ralph-index').handler('--bad-option', ctx));
+
+    assert.equal(notifications.at(-1).type, 'warning');
+    assert.match(notifications.at(-1).message, /Unsupported \/ralph-index option/);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('session_start installs Ralph footer and ralph-subagents widget surfaces', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   try {
