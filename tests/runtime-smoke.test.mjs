@@ -140,6 +140,30 @@ test('phase command handler returns after startup before delegated coordinator w
   }
 });
 
+test('concurrent Ralph phase command is rejected while one coordinator job is active', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+    let delegatedStartCount = 0;
+    ctx.waitForIdle = () => {
+      delegatedStartCount += 1;
+      return new Promise(() => {});
+    };
+
+    await pi.commands.get('ralph-research').handler('pending-first-job', ctx);
+    await pi.commands.get('ralph-design').handler('overlapping-second-job', ctx);
+    await waitImmediate();
+
+    assert.equal(delegatedStartCount, 1, 'expected only the first delegated coordinator promise to start');
+    assert.equal(ctx.notifications.at(-1).type, 'warning');
+    assert.match(ctx.notifications.at(-1).message, /already running/i);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('resources_discover is registered and safe before bundled runtime bootstrap', async () => {
   const pi = createMockPi();
   ralphSpecumExtension(pi);

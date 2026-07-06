@@ -63,7 +63,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-1, FR-9_
   - _Design: Coordinator job guard; Existing patterns to follow_
 
-- [ ] Q1.1 [VERIFY] Quality check: non-blocking startup slice
+- [x] Q1.1 [VERIFY] Quality check: non-blocking startup slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -73,7 +73,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 1.4 [RED] Failing test: concurrent Ralph job is rejected
+- [x] 1.4 [RED] Failing test: concurrent Ralph job is rejected
   - **Do**:
     1. Add a smoke test that starts one pending Ralph job.
     2. Invoke a second `/ralph-*` command while the first is active.
