@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - package.json
 
 permissions:
   contents: read
@@ -14,7 +16,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  detect-version-change:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.pkg.outputs.changed }}
+      name: ${{ steps.pkg.outputs.name }}
+      version: ${{ steps.pkg.outputs.version }}
+      previous_version: ${{ steps.pkg.outputs.previous_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect package version change
+        id: pkg
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          node - <<'NODE' >> "$GITHUB_OUTPUT"
+          const { execFileSync } = require('node:child_process');
+          const { readFileSync } = require('node:fs');
+
+          const current = JSON.parse(readFileSync('package.json', 'utf8'));
+          const before = process.env.BEFORE_SHA || '';
+          const zeroSha = /^0+$/.test(before);
+          let previousVersion = '';
+
+          if (before && !zeroSha) {
+            try {
+              const previousPackage = execFileSync('git', ['show', `${before}:package.json`], { encoding: 'utf8' });
+              previousVersion = JSON.parse(previousPackage).version || '';
+            } catch (error) {
+              previousVersion = '';
+            }
+          }
+
+          const changed = previousVersion !== current.version;
+          console.log(`name=${current.name}`);
+          console.log(`version=${current.version}`);
+          console.log(`previous_version=${previousVersion}`);
+          console.log(`changed=${changed}`);
+          NODE
+
+      - name: Report unchanged package version
+        if: steps.pkg.outputs.changed != 'true'
+        run: |
+          echo "package.json changed, but package version did not change (${{ steps.pkg.outputs.version }}); skipping npm publish CD."
+
   publish:
+    needs: detect-version-change
+    if: needs.detect-version-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
     env:
       NPM_PUBLISH_AUTH_MODE: ${{ vars.NPM_PUBLISH_AUTH_MODE || 'trusted' }}
@@ -43,20 +95,11 @@ jobs:
       - name: Test
         run: npm test --if-present
 
-      - name: Read package metadata
-        id: pkg
-        run: |
-          node - <<'NODE' >> "$GITHUB_OUTPUT"
-          const pkg = require('./package.json');
-          console.log(`name=${pkg.name}`);
-          console.log(`version=${pkg.version}`);
-          NODE
-
       # Skip gracefully when the exact version was already published.
       - name: Check npm for existing version
         id: npmcheck
         run: |
-          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
+          if npm view "${{ needs.detect-version-change.outputs.name }}@${{ needs.detect-version-change.outputs.version }}" version >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Version already exists on npm; skipping publish."
           else
