@@ -113,9 +113,9 @@ test('core command handlers work with a minimal Pi context', async () => {
   }
 });
 
-test('phase command handler returns before delegated coordinator work resolves', async () => {
+test('phase command handler returns after startup before delegated coordinator work resolves', async () => {
   // BEFORE failure mode: there was no regression proof that /ralph-* command handlers
-  // return while coordinator/delegated work remains pending in the background.
+  // return after startup while coordinator/delegated work remains pending in the background.
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   try {
     const pi = createMockPi();

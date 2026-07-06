@@ -52,7 +52,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-1, AC-1.1, AC-1.3_
   - _Design: Coordinator job guard; Safe Ralph UI helpers_
 
-- [ ] 1.3 [YELLOW] Refactor: clarify coordinator startup sequence
+- [x] 1.3 [YELLOW] Refactor: clarify coordinator startup sequence
   - **Do**:
     1. Reorder helper calls only if readability improves.
     2. Keep UI setup, notify, detach, and cleanup order explicit.

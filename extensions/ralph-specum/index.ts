@@ -10323,6 +10323,41 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	let activeRalphCoordinatorJob: RalphCoordinatorJob | null = null;
 
+	function installRalphCoordinatorStartupUi(ctx: ExtensionCommandContext, label: string): void {
+		ensureRalphInteractiveSurfaces(pi, ctx);
+		maybeShowNativeTaskStartupWidget(ctx, label);
+		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
+	}
+
+	function finishRalphCoordinatorJob(ctx: ExtensionCommandContext, job: RalphCoordinatorJob): void {
+		if (activeRalphCoordinatorJob !== job) return;
+		activeRalphCoordinatorJob = null;
+		stopRalphStatusAnimation(ctx);
+	}
+
+	function detachRalphCoordinatorWorkflow(
+		ctx: ExtensionCommandContext,
+		label: string,
+		job: RalphCoordinatorJob,
+		run: () => Promise<void>,
+	): void {
+		const detachedWorkflowImmediate = setImmediate(() => {
+			const detachedWorkflowTimer = setTimeout(() => {
+				void (async () => {
+					try {
+						await run();
+					} catch (error) {
+						await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
+					} finally {
+						finishRalphCoordinatorJob(ctx, job);
+					}
+				})();
+			}, 0);
+			(detachedWorkflowTimer as { unref?: () => void }).unref?.();
+		});
+		(detachedWorkflowImmediate as { unref?: () => void }).unref?.();
+	}
+
 	async function startRalphCoordinatorJob(
 		ctx: ExtensionCommandContext,
 		label: string,
@@ -10340,29 +10375,10 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 		const job: RalphCoordinatorJob = { label, startedAt: Date.now() };
 		activeRalphCoordinatorJob = job;
-		ensureRalphInteractiveSurfaces(pi, ctx);
-		maybeShowNativeTaskStartupWidget(ctx, label);
-		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
-		await notify(ctx, `Started Ralph ${label}. The coordinator will continue in the background; you can keep using Pi while its subagent runs.`);
 
-		const detachedWorkflowImmediate = setImmediate(() => {
-			const detachedWorkflowTimer = setTimeout(() => {
-				void (async () => {
-					try {
-						await run();
-					} catch (error) {
-						await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
-					} finally {
-						if (activeRalphCoordinatorJob === job) {
-							activeRalphCoordinatorJob = null;
-							stopRalphStatusAnimation(ctx);
-						}
-					}
-				})();
-			}, 0);
-			(detachedWorkflowTimer as { unref?: () => void }).unref?.();
-		});
-		(detachedWorkflowImmediate as { unref?: () => void }).unref?.();
+		installRalphCoordinatorStartupUi(ctx, label);
+		await notify(ctx, `Started Ralph ${label}. The coordinator will continue in the background; you can keep using Pi while its subagent runs.`);
+		detachRalphCoordinatorWorkflow(ctx, label, job, run);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
