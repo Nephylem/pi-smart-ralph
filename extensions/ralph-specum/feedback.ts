@@ -376,8 +376,9 @@ async function runFeedbackGithubCommand(runtime: FeedbackCommandRuntime, args: s
 }
 
 function normalizeFeedbackCommandResult(raw: GithubCommandResult | { stdout?: string; stderr?: string; exitCode?: number; status?: number; error?: string }): GithubCommandResult {
+	const exitCode = "exitCode" in raw && typeof raw.exitCode === "number" ? raw.exitCode : undefined;
 	return {
-		status: typeof raw.status === "number" ? raw.status : raw.exitCode ?? 1,
+		status: typeof raw.status === "number" ? raw.status : exitCode ?? 1,
 		stdout: typeof raw.stdout === "string" ? raw.stdout : "",
 		stderr: typeof raw.stderr === "string" ? raw.stderr : "",
 		error: typeof raw.error === "string" && raw.error ? raw.error : undefined,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -133,21 +133,23 @@ function parseCaseArg(args) {
 
 async function verifyCommandRegistration() {
   const commandSourcePath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const coreCommandSourcePath = join(root, 'extensions', 'ralph-specum', 'commands', 'core.ts');
   const source = readFileSync(commandSourcePath, 'utf8');
+  const commandSource = [source, existsSync(coreCommandSourcePath) ? readFileSync(coreCommandSourcePath, 'utf8') : ''].join('\n');
   const failures = [];
 
-  if (!/\.registerCommand\(\s*["']ralph-feedback["']\s*,/m.test(source)) {
-    failures.push('pi.registerCommand("ralph-feedback", ...) is absent');
+  if (!/\.registerCommand\(\s*["']ralph-feedback["']\s*,/m.test(commandSource)) {
+    failures.push('pi.registerCommand("ralph-feedback", ...) is absent from index.ts or commands/core.ts');
   }
 
   const requiredHelpTokens = ['/ralph-feedback', 'feedback', 'safe'];
-  const missingHelpTokens = requiredHelpTokens.filter((token) => !source.includes(token));
+  const missingHelpTokens = requiredHelpTokens.filter((token) => !commandSource.includes(token));
   if (missingHelpTokens.length > 0) {
     failures.push(`help/status documentation is missing ${missingHelpTokens.join(', ')}`);
   }
 
   const safeFeedbackHelpPattern = /\/ralph-feedback[\s\S]{0,200}(safe|safely|prepare|submission|submit)/i;
-  if (!safeFeedbackHelpPattern.test(source)) {
+  if (!safeFeedbackHelpPattern.test(commandSource)) {
     failures.push('help text does not describe safe feedback submission/preparation behavior');
   }
 

@@ -8,7 +8,10 @@ const extensionPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
 const startBranchPath = join(root, 'extensions', 'ralph-specum', 'start-branch.ts');
 const gitignorePath = join(root, 'extensions', 'ralph-specum', 'gitignore.ts');
 const startDiscoveryPath = join(root, 'extensions', 'ralph-specum', 'start-discovery.ts');
+const specCommandPath = join(root, 'extensions', 'ralph-specum', 'commands', 'spec.ts');
 const source = readFileSync(extensionPath, 'utf8');
+const specCommandSource = existsSync(specCommandPath) ? readFileSync(specCommandPath, 'utf8') : '';
+const startCommandRegistrationSource = `${source}\n${specCommandSource}`;
 const startBranchSource = readFileSync(startBranchPath, 'utf8');
 const gitignoreSource = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
 const startDiscoverySource = existsSync(startDiscoveryPath) ? readFileSync(startDiscoveryPath, 'utf8') : '';
@@ -71,22 +74,22 @@ assert(
 );
 
 assert(
-  /pi\.registerCommand\(\s*["']ralph-start["']/.test(source),
+  /pi\.registerCommand\(\s*["']ralph-start["']/.test(startCommandRegistrationSource),
   'ralph-start must be registered as a Pi command.',
 );
 
 assert(
-  /pi\.registerCommand\(\s*["']ralph-new["']/.test(source),
+  /pi\.registerCommand\(\s*["']ralph-new["']/.test(startCommandRegistrationSource),
   'ralph-new must be registered as a Pi command.',
 );
 
 assert(
-  /ralph-start[\s\S]*?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*RALPH_START_INVOCATION\s*\)/.test(source),
+  /ralph-start[\s\S]*?(?:deps\.)?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*(?:deps\.)?RALPH_START_INVOCATION\s*\)/.test(startCommandRegistrationSource),
   'ralph-start must call the shared start runner with normalized invocation metadata.',
 );
 
 assert(
-  /ralph-new[\s\S]*?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*RALPH_NEW_INVOCATION\s*\)/.test(source),
+  /ralph-new[\s\S]*?(?:deps\.)?runStartCommand\(\s*pi\s*,\s*args\s*,\s*ctx\s*,\s*(?:deps\.)?RALPH_NEW_INVOCATION\s*\)/.test(startCommandRegistrationSource),
   'ralph-new must call the same shared start runner with alias invocation metadata.',
 );
 

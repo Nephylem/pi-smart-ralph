@@ -175,7 +175,7 @@ export function formatRefactorResolutionError(error) {
 	return error instanceof Error ? error.message : String(error ?? "Unknown /ralph-refactor resolution error");
 }
 
-export function resolveRefactorSpecPlan(options = {}) {
+export function resolveRefactorSpecPlan(options: ResolveRefactorSpecPlanOptions = {}) {
 	const spec = options.reference ? findSpec(options.reference, options) : requireCurrentSpec(options);
 	const inventory = inventoryRefactorArtifacts(spec.absolutePath);
 	if (inventory.availableFiles.length === 0) {

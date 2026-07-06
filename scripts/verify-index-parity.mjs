@@ -1132,19 +1132,21 @@ function assertRecoverableExternalError(errors, sourceType, sourceId, messageFra
 
 async function verifyCommandRegistration() {
   const commandSourcePath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const coreCommandSourcePath = join(root, 'extensions', 'ralph-specum', 'commands', 'core.ts');
   const source = readFileSync(commandSourcePath, 'utf8');
+  const commandSource = [source, existsSync(coreCommandSourcePath) ? readFileSync(coreCommandSourcePath, 'utf8') : ''].join('\n');
   const helper = await loadIndexingHelper();
   const failures = [];
 
-  if (!/\.registerCommand\(\s*["']ralph-index["']\s*,/m.test(source)) {
-    failures.push('pi.registerCommand("ralph-index", ...) is absent');
+  if (!/\.registerCommand\(\s*["']ralph-index["']\s*,/m.test(commandSource)) {
+    failures.push('pi.registerCommand("ralph-index", ...) is absent from index.ts or commands/core.ts');
   }
 
-  if (!/import \{[^}]*formatRalphIndexCommandResult[^}]*runRalphIndex[^}]*\} from ["']\.\/indexing\.ts["'];/m.test(source)) {
+  if (!/import \{[^}]*formatRalphIndexCommandResult[^}]*runRalphIndex[^}]*\} from ["'](?:\.\/|\.\.\/)indexing\.ts["'];/m.test(commandSource)) {
     failures.push('command handler must import formatter and runner from indexing.ts');
   }
 
-  if (/function\s+formatRalphIndexCommandResult\s*\(/m.test(source)) {
+  if (/function\s+formatRalphIndexCommandResult\s*\(/m.test(commandSource)) {
     failures.push('command result formatting must live in indexing.ts, not index.ts');
   }
 
@@ -1176,7 +1178,7 @@ async function verifyCommandRegistration() {
     '--changed',
     '--quick',
   ];
-  const missingDocumentationTokens = requiredDocumentationTokens.filter((token) => !source.includes(token));
+  const missingDocumentationTokens = requiredDocumentationTokens.filter((token) => !commandSource.includes(token));
   if (missingDocumentationTokens.length > 0) {
     failures.push(`help/status documentation is missing ${missingDocumentationTokens.join(', ')}`);
   }

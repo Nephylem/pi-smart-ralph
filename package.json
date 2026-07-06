@@ -1,7 +1,8 @@
 {
   "name": "pi-smart-ralph",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Pi-native Smart Ralph package for spec-driven development workflows.",
+  "type": "module",
   "license": "MIT",
   "author": {
     "name": "nephyyy"
@@ -14,6 +15,9 @@
     "url": "https://github.com/Nephylem/pi-smart-ralph/issues"
   },
   "homepage": "https://github.com/Nephylem/pi-smart-ralph#readme",
+  "engines": {
+    "node": ">=22"
+  },
   "keywords": [
     "pi-package",
     "pi",
@@ -31,6 +35,8 @@
     "schemas",
     "skills",
     "templates",
+    "docs",
+    "CONTRIBUTING.md",
     "README.md"
   ],
   "publishConfig": {
@@ -40,8 +46,12 @@
   "dependencies": {
     "@tintinweb/pi-subagents": "0.13.0",
     "@tintinweb/pi-tasks": "0.7.1",
-    "pi-mcp-adapter": "2.10.0",
-    "pi-web-access": "0.13.0"
+    "pi-agent-browser-native": "0.2.64",
+    "pi-mcp-adapter": "2.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
@@ -49,8 +59,8 @@
   "bundledDependencies": [
     "@tintinweb/pi-subagents",
     "@tintinweb/pi-tasks",
-    "pi-mcp-adapter",
-    "pi-web-access"
+    "pi-agent-browser-native",
+    "pi-mcp-adapter"
   ],
   "pi": {
     "extensions": [
@@ -64,6 +74,8 @@
     ]
   },
   "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs",
     "prepack": "node scripts/verify-start-flow-parity.mjs && node scripts/verify-implementation-loop-parity.mjs && npm run verify:index && npm run verify:pack && node scripts/verify-publish-bundle.mjs",
     "verify:index": "node scripts/verify-index-parity.mjs && node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist && node scripts/verify-refactor-parity.mjs --case acceptance-checklist && node scripts/verify-feedback-parity.mjs --case acceptance-checklist && node scripts/verify-triage-github-sync-parity.mjs --case acceptance-checklist && node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist",
     "verify:pack": "node scripts/verify-task-blockers-parity.mjs --case cleanup && node scripts/verify-refactor-parity.mjs --case cleanup && node scripts/verify-feedback-parity.mjs --case cleanup && node scripts/verify-triage-github-sync-parity.mjs --case cleanup && node scripts/verify-implementation-loop-parity.mjs --case cleanup && node scripts/verify-pack-dry-run.mjs"

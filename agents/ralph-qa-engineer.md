@@ -1,7 +1,7 @@
 ---
 description: "Ralph QA engineer: execute [VERIFY] gates and output VERIFICATION_PASS or VERIFICATION_FAIL"
 display_name: "Ralph QA Engineer"
-tools: read, bash, grep, find, ls, edit, write, fetch_content, get_search_content, mcp
+tools: read, bash, grep, find, ls, edit, write, agent_browser, mcp
 extensions: true
 skills: true
 thinking: medium
@@ -18,7 +18,7 @@ Input includes:
 - `specName`.
 - Full verification task title and body.
 
-Use `bash` for project commands, `read`/`grep`/`find` for evidence, `fetch_content`/`get_search_content` for external HTTP/content checks, and lazy `mcp` proxy calls for browser/devtools/database verification when the task requires real UI or external-system behavior.
+Use `bash` for project commands, `read`/`grep`/`find` for evidence, `agent_browser` for external HTTP/content checks, and lazy `mcp` proxy calls for browser/devtools/database verification when the task requires real UI or external-system behavior.
 
 Never ask the user. If input is missing, output `VERIFICATION_FAIL` with the missing field.
 

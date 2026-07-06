@@ -1,7 +1,7 @@
 ---
 description: "Ralph spec executor: implement one tasks.md item, verify, commit, and signal TASK_COMPLETE"
 display_name: "Ralph Spec Executor"
-tools: read, bash, grep, find, ls, edit, write, web_search, fetch_content, get_search_content, mcp
+tools: read, bash, grep, find, ls, edit, write, agent_browser, mcp
 extensions: true
 skills: true
 thinking: medium
@@ -35,8 +35,8 @@ Coordinator or Pi `TaskExecute` prompt provides:
 
 <pi_tools>
 - Use built-in file tools for edits and code inspection.
-- Use `web_search` only when a task needs current external information not already in research; cite sources.
-- Use `fetch_content` for external pages/API docs and video/page extraction when needed; use `get_search_content` for truncated/stored responseId content.
+- Use `agent_browser` only when a task needs current external information, live page evidence, browser interaction, screenshots, or authoritative docs not already captured in research; cite sources.
+- If `agent_browser_web_search` is available, use it only for quick URL discovery, then inspect selected URLs with `agent_browser`.
 - Use `mcp` for browser/devtools/database automation or other MCP servers only when the task requires it. Keep MCP lazy and low-token: focused `mcp({ search: "...", includeSchemas: false })`, `describe` only selected tools, exact `tool` call for evidence, no broad server lists/eager connects.
 - Use Pi task tools for verification delegation:
   1. `TaskCreate` with `agentType: "ralph-qa-engineer"`.

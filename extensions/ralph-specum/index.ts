@@ -75,7 +75,11 @@ import { ensureRalphGitignore } from "./gitignore.ts";
 import { applyStartBranchApplication, decideStartBranchBeforeWrites, type BranchDecision } from "./start-branch.ts";
 import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, mergeRelatedSpecsByName } from "./start-discovery.ts";
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
-import { createFeedbackCommandHandler, FEEDBACK_SAFE_COMMAND_DESCRIPTION, FEEDBACK_SAFE_HELP_LINE } from "./feedback.ts";
+import { createFeedbackCommandHandler } from "./feedback.ts";
+import { registerCoreRalphCommands } from "./commands/core.ts";
+import { registerSpecLifecycleCommands } from "./commands/spec.ts";
+import { validatePhaseArtifactContent } from "./phase-runner.ts";
+import { createBootstrapStatusDiagnostics, runRalphInitCommand } from "./services/bootstrap-diagnostics.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	applyImplementationTaskModification,
@@ -149,6 +153,7 @@ import {
 	formatRefactorHeadlessDecisionError,
 	formatRefactorLocalCommitWarning,
 	REFACTOR_COMMAND_DESCRIPTION,
+	REFACTOR_ALLOWED_FILES,
 	formatPendingRefactorMessage,
 	formatRefactorParseError,
 	formatRefactorResolutionError,
@@ -192,11 +197,10 @@ const REQUIRED_RUNTIME_PACKAGES = [
 		tools: ["mcp"],
 	},
 	{
-		name: "pi-web-access",
-		version: "0.13.0",
-		resourcePath: join(PACKAGE_ROOT, "node_modules", "pi-web-access", "index.ts"),
-		tools: ["web_search", "fetch_content", "get_search_content"],
-		optionalSkillResourcePath: join(PACKAGE_ROOT, "node_modules", "pi-web-access", "skills"),
+		name: "pi-agent-browser-native",
+		version: "0.2.64",
+		resourcePath: join(PACKAGE_ROOT, "node_modules", "pi-agent-browser-native", "dist", "extensions", "agent-browser", "index.js"),
+		tools: ["agent_browser"],
 	},
 ] as const;
 
@@ -846,12 +850,8 @@ async function bootstrapBundledRuntimes(pi: ExtensionAPI): Promise<void> {
 	}
 }
 
-function bundledWebAccessSkillsPath(): string | null {
-	const dependency = REQUIRED_RUNTIME_PACKAGES.find((candidate) => candidate.name === "pi-web-access");
-	if (!dependency || !loadedBundledRuntimePackages.has(dependency.name)) return null;
-	const skillPath = "optionalSkillResourcePath" in dependency ? dependency.optionalSkillResourcePath : undefined;
-	if (!skillPath || !pathCheck(skillPath, "directory")) return null;
-	return skillPath;
+function bundledRuntimeSkillsPath(): string | null {
+	return null;
 }
 
 function validatePackageResources(packageJson: PackageJson | null): CheckSection {
@@ -955,15 +955,16 @@ function validateRuntimePackages(packageJson: PackageJson | null, registry: Tool
 		}
 
 		if ("optionalSkillResourcePath" in dependency) {
+			const optionalSkillResourcePath = String(dependency.optionalSkillResourcePath);
 			const shouldExposeSkills = loadedBundledRuntimePackages.has(dependency.name);
-			const skillResourcePresent = pathCheck(dependency.optionalSkillResourcePath, "directory");
+			const skillResourcePresent = pathCheck(optionalSkillResourcePath, "directory");
 			checks.push({
 				label: `${dependency.name} bundled skills directory`,
 				ok: !shouldExposeSkills || skillResourcePresent,
 				detail: shouldExposeSkills
 					? skillResourcePresent
-						? `${formatPath(dependency.optionalSkillResourcePath)} exposed via resources_discover`
-						: `${formatPath(dependency.optionalSkillResourcePath)} missing while bundled web access is loaded`
+						? `${formatPath(optionalSkillResourcePath)} exposed via resources_discover`
+						: `${formatPath(optionalSkillResourcePath)} missing while bundled web access is loaded`
 					: "not required unless bundled web access is loaded",
 				action: `Install package resources: ${installCommand}`,
 			});
@@ -1739,8 +1740,8 @@ type TaskCounts = {
 };
 
 const NATIVE_TASK_TOOLS = ["TaskCreate", "TaskUpdate", "TaskExecute"] as const;
-const WEB_RESEARCH_TOOLS = ["web_search", "fetch_content", "get_search_content"] as const;
-const WEB_FETCH_TOOLS = ["fetch_content", "get_search_content"] as const;
+const WEB_RESEARCH_TOOLS = ["agent_browser"] as const;
+const WEB_FETCH_TOOLS = ["agent_browser"] as const;
 const MCP_PROXY_TOOL = "mcp";
 const NATIVE_TASK_LOCK_RETRY_MS = 50;
 const NATIVE_TASK_LOCK_MAX_RETRIES = 100;
@@ -2032,7 +2033,7 @@ function directoryPathCompletionItems(pathPrefix: string): RalphCompletionItem[]
 			? resolve(dirPrefix || "/")
 			: resolve(process.cwd(), dirPrefix || ".");
 
-	let entries: ReturnType<typeof readdirSync>;
+	let entries: any[];
 	try {
 		entries = readdirSync(basePath, { withFileTypes: true });
 	} catch {
@@ -4524,15 +4525,7 @@ function getSubagentContextUsage(record?: {
 	return { current, max, percent };
 }
 
-function getSubagentUsageText(record?: {
-	lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
-	session?: {
-		getSessionStats?: () => {
-			tokens?: { input?: number; output?: number; cacheWrite?: number };
-			contextUsage?: { tokens?: number | null; contextWindow?: number; percent?: number | null };
-		};
-	};
-}): string {
+function getSubagentUsageText(record?: any): string {
 	if (!record) return "";
 
 	const contextUsage = getSubagentContextUsage(record);
@@ -4803,18 +4796,7 @@ function ralphSubagentStatusMessage(
 	phase: string,
 	agentId: string,
 	agentName: string,
-	record?: {
-		startedAt: number;
-		status?: string;
-		toolUses?: number;
-		lifetimeUsage?: { input?: number; output?: number; cacheWrite?: number };
-		session?: {
-			getSessionStats?: () => {
-				tokens?: { total?: number };
-				contextUsage?: { contextWindow?: number; percent?: number | null };
-			};
-		};
-	},
+	record?: any,
 ): string {
 	const statusBits: string[] = [];
 	const status = record?.status ? `(${record.status})` : "(running)";
@@ -5008,9 +4990,9 @@ function phaseDependencyError(pi: ExtensionAPI, definition: PhaseDefinition, cwd
 			? ["Agent", ...NATIVE_TASK_TOOLS, ...WEB_FETCH_TOOLS, MCP_PROXY_TOOL]
 			: ["Agent"];
 	const packageHint = definition.phase === "research"
-		? "@tintinweb/pi-subagents, pi-web-access, and pi-mcp-adapter"
+		? "@tintinweb/pi-subagents, pi-agent-browser-native, and pi-mcp-adapter"
 		: definition.phase === "tasks"
-			? "@tintinweb/pi-subagents, @tintinweb/pi-tasks, pi-web-access, and pi-mcp-adapter"
+			? "@tintinweb/pi-subagents, @tintinweb/pi-tasks, pi-agent-browser-native, and pi-mcp-adapter"
 			: "@tintinweb/pi-subagents";
 	const toolError = activeToolDependencyError(pi, requiredTools, definition.commandName, packageHint);
 	if (toolError) return toolError;
@@ -5071,9 +5053,9 @@ function phaseSpecificInstructions(definition: PhaseDefinition, state: RalphStat
 	if (definition.phase === "research") {
 		return [
 			"Research-specific requirements:",
-			"- You MUST use pi-web-access tools: call web_search with 2-4 varied queries for current external research before writing conclusions.",
-			"- Use fetch_content for official docs, authoritative pages, and GitHub repositories; use get_search_content when returned content is truncated or stored by responseId.",
-			"- Use the bundled librarian skill for open-source library internals/history and cite GitHub permalinks with commit SHAs for code claims.",
+			"- You MUST use pi-agent-browser-native tools: use agent_browser for live web/documentation access, page extraction, screenshots, and browser-grounded evidence before writing external conclusions.",
+			"- Prefer direct authoritative URLs when known. If configured, use agent_browser_web_search for one high-signal discovery query, then inspect target pages with agent_browser.",
+			"- For open-source library internals/history, use agent_browser to inspect authoritative GitHub/source pages and cite permalinks with commit SHAs when possible.",
 			"- Every nontrivial external claim must include a source URL; every codebase claim must include a file path. Do not fabricate findings.",
 			"- Use the mcp proxy lazily for MCP-backed services only when needed: focused mcp({ search: \"...\", includeSchemas: false }), describe only selected tools, call only chosen tools, and avoid broad server lists/eager connects.",
 			"- Produce the exact research.md structure from your Ralph Research Analyst instructions.",
@@ -5440,58 +5422,12 @@ async function runArtifactReview(
 	}
 }
 
-function containsMarkdownHeading(content: string, heading: string): boolean {
-	return new RegExp(`^#{1,3}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "im").test(content);
-}
-
 function validatePhaseOutput(definition: PhaseDefinition, spec: SpecEntry): string[] {
 	const outputPath = artifactPath(spec, definition.phase);
 	if (!existsSync(outputPath)) return [`Expected artifact was not created: ${outputPath}`];
 
 	const content = readFileSync(outputPath, "utf8");
-	const errors: string[] = [];
-	if (!content.trim()) errors.push(`${definition.phase}.md is empty.`);
-	if (!containsMarkdownHeading(content, phaseTitle(definition.phase))) {
-		errors.push(`${definition.phase}.md must contain a '${phaseTitle(definition.phase)}' heading.`);
-	}
-
-	if (definition.phase === "research") {
-		for (const section of ["External Research", "Codebase Analysis", "Sources"]) {
-			if (!containsMarkdownHeading(content, section)) errors.push(`research.md missing required section: ${section}.`);
-		}
-	}
-	if (definition.phase === "requirements") {
-		for (const section of ["User Stories", "Functional Requirements"]) {
-			if (!containsMarkdownHeading(content, section)) errors.push(`requirements.md missing required section: ${section}.`);
-		}
-	}
-	if (definition.phase === "design") {
-		for (const section of ["Overview", "File Structure", "Test Strategy"]) {
-			if (!containsMarkdownHeading(content, section)) errors.push(`design.md missing required section: ${section}.`);
-		}
-	}
-	if (definition.phase === "tasks") {
-		errors.push(...validateCanonicalTasks(content));
-	}
-
-	return errors;
-}
-
-function validateCanonicalTasks(content: string): string[] {
-	const errors: string[] = [];
-	const taskLines = content.match(/^\s*-\s*\[[ xX]\]\s+\S+/gm) ?? [];
-	if (taskLines.length === 0) errors.push("tasks.md must contain at least one '- [ ]' task.");
-
-	for (const field of ["**Do**", "**Files**", "**Done when**", "**Verify**", "**Commit**"]) {
-		if (!content.toLowerCase().includes(field.toLowerCase())) errors.push(`tasks.md missing canonical field: ${field}.`);
-	}
-
-	const verifyLines = content.split(/\r?\n/).filter((line) => /\*\*Verify\*\*/i.test(line));
-	if (verifyLines.length === 0) errors.push("tasks.md must include automated Verify commands.");
-	const manualLine = verifyLines.find((line) => /manual|manually|visually|ask user/i.test(line));
-	if (manualLine) errors.push(`tasks.md Verify line must be automated, found manual wording: ${manualLine.trim()}`);
-
-	return errors;
+	return validatePhaseArtifactContent(definition.phase, phaseTitle(definition.phase), content);
 }
 
 function extractSection(content: string, heading: string): string {
@@ -6216,7 +6152,7 @@ function implementationDependencyError(pi: ExtensionAPI, cwd: string, bootstrapR
 		pi,
 		["Agent", ...NATIVE_TASK_TOOLS, ...WEB_RESEARCH_TOOLS, MCP_PROXY_TOOL],
 		"ralph-implement",
-		"@tintinweb/pi-subagents, @tintinweb/pi-tasks, pi-web-access, and pi-mcp-adapter",
+		"@tintinweb/pi-subagents, @tintinweb/pi-tasks, pi-agent-browser-native, and pi-mcp-adapter",
 	);
 	if (toolError) return toolError;
 
@@ -6518,7 +6454,7 @@ function handleTaskModificationRequest(
 			priorCount,
 			maxModificationsPerTask,
 			maxModificationDepth,
-			proposedTasks: proposedParsed,
+			proposedTasks: proposedParsed as any,
 			requiredFields: requiredFields,
 			existingTaskIds: existingTaskIds,
 		});
@@ -7726,12 +7662,13 @@ async function runImplementCommand(
 				});
 				const sharedSurfacePreflight = await runSharedSurfacePreflightIfNeeded(ctx, spec, task, tasks, state, options);
 				if (!sharedSurfacePreflight.ok) {
-					await blockImplementation(ctx, spec, task, sharedSurfacePreflight.reason, options, {
+					const sharedSurfaceReason = (sharedSurfacePreflight as any).reason as string;
+					await blockImplementation(ctx, spec, task, sharedSurfaceReason, options, {
 						taskIndex: task.index,
 						totalTasks: tasks.length,
 						taskIteration,
 						globalIteration: globalIteration + 1,
-						lastSubagentOutput: truncateForPrompt(sharedSurfacePreflight.reason, 6000),
+						lastSubagentOutput: truncateForPrompt(sharedSurfaceReason, 6000),
 					});
 					return;
 				}
@@ -9983,11 +9920,12 @@ async function syncTriageGithubIssues(ctx: ExtensionCommandContext, state: EpicS
 	setRalphStatus(ctx, `Ralph triage: awaiting GitHub issue confirmation`);
 	const confirmation = await confirmTriageGithubWrites(ctx, parsed, repository, dryRuns);
 	if (!confirmation.confirmed) {
+		const skippedConfirmation = confirmation as any;
 		return persistSkippedGithubSync(state, repository, detection, now, {
-			githubStatus: confirmation.githubStatus,
-			confirmedBy: confirmation.confirmedBy,
-			skippedReason: confirmation.reason,
-			warnings: aggregateGithubWarnings(detectionWarnings, [confirmation.reason]),
+			githubStatus: skippedConfirmation.githubStatus,
+			confirmedBy: skippedConfirmation.confirmedBy,
+			skippedReason: skippedConfirmation.reason,
+			warnings: aggregateGithubWarnings(detectionWarnings, [skippedConfirmation.reason]),
 			children: skippedChildGithubSyncs(state, dryRuns, repository),
 		});
 	}
@@ -10423,7 +10361,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		await bootstrapBundledRuntimes(pi);
-		ensureRalphInteractiveSurfaces(pi, ctx);
+		ensureRalphInteractiveSurfaces(pi, ctx as ExtensionCommandContext);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -10441,56 +10379,57 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("resources_discover", async () => {
-		const skillPath = bundledWebAccessSkillsPath();
+		const skillPath = bundledRuntimeSkillsPath();
 		return skillPath ? { skillPaths: [skillPath] } : {};
 	});
 
 	const ralphFeedbackCommandHandler = createFeedbackCommandHandler(notify);
-	// /ralph-feedback safe help text, runtime adapters, authorization helpers, and command metadata are centralized in feedback.ts.
-
-	pi.registerCommand("ralph-help", {
-		description: "Show Smart Ralph Pi shell help",
-		handler: async (_args, ctx) => {
-			await notify(
-				ctx,
-				[
-					"Smart Ralph Pi shell",
-					"",
-					"Commands:",
-					"/ralph-help     Show this help.",
-					FEEDBACK_SAFE_HELP_LINE,
-					"/ralph-triage       Create or resume an epic; --output spec-files|github-issues|both; --yes confirms GitHub writes.",
-					"/ralph-epic-status  Show active epic readiness; --json prints machine state, --repair fills missing stubs.",
-					"/ralph-epic-switch  Switch the active epic marker.",
-					"/ralph-epic-next    Preview/select the next unblocked child spec; --peek previews, --switch updates the marker, --start begins it.",
-					"/ralph-epic-cancel  Cancel active epic execution state safely; --delete-child-specs also removes child spec dirs after confirmation.",
-					"/ralph-start        Create or resume a spec; supports --fresh, --quick, --autonomous, --skip-research, --tasks-size fine|coarse, --next-epic-spec, and `--` before markdown goals.",
-					"/ralph-research     Generate research.md with ralph-research-analyst.",
-					"/ralph-requirements Generate requirements.md with ralph-product-manager.",
-					"/ralph-design       Generate design.md with ralph-architect-reviewer.",
-					"/ralph-tasks        Generate canonical tasks.md with ralph-task-planner; supports --quick, --autonomous, --tasks-size fine|coarse.",
-					"/ralph-implement    Execute tasks.md through Ralph subagents; supports --recovery-mode, --max-task-iterations N, --max-global-iterations N.",
-					"/ralph-refactor     Update one existing spec artifact; supports [spec] [--file requirements|design|tasks].",
-					"/ralph-index        Generate searchable index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, --quick.",
-					"/ralph-status       Show specs across configured roots.",
-					"/ralph-switch       Switch the active spec marker.",
-					"/ralph-cancel       Clear execution state for a spec.",
-					"/ralph-model        Show/switch Ralph's inherited Pi model profile; supports auto, anthropic, openai-codex, github-copilot, inherit, provider/model.",
-					"/ralph-init         Bootstrap/check Pi tools, runtime defaults, and project Ralph subagents; supports --refresh-agents and --no-runtime-config.",
-				].join("\n"),
-			);
-		},
+	// Low-risk core command registration lives in commands/core.ts; workflow-heavy commands remain here until their runners are extracted.
+	registerCoreRalphCommands(pi, {
+		notify,
+		feedbackHandler: ralphFeedbackCommandHandler,
+		switchRalphModel: async (args, ctx) => switchRalphModel(pi, args, ctx),
+		modelArgumentCompletions,
+		indexArgumentCompletions,
+		tokenizeCommandArgs,
+		statusArgumentCompletions,
+		bootstrapStatusDiagnostics: (ctx) => createBootstrapStatusDiagnostics(ctx, { pi, bootstrapRalphAgents, formatDiagnostics }),
+		formatRalphSpecStatus: (ctx) => formatRalphSpecStatus(pi, ctx),
+		initArgumentCompletions,
+		runInit: async (args, ctx) => runRalphInitCommand(args, ctx, {
+			pi,
+			notify,
+			parseInitArgs,
+			bootstrapRalphRuntimeConfig,
+			bootstrapRalphAgents,
+			formatDiagnostics,
+		}),
 	});
 
-	pi.registerCommand("ralph-feedback", {
-		description: FEEDBACK_SAFE_COMMAND_DESCRIPTION,
-		handler: ralphFeedbackCommandHandler,
-	});
-
-	pi.registerCommand("ralph-model", {
-		description: "Show or switch Ralph's inherited Pi model profile across anthropic, openai-codex, and github-copilot",
-		getArgumentCompletions: modelArgumentCompletions,
-		handler: async (args, ctx) => switchRalphModel(pi, args, ctx),
+	registerSpecLifecycleCommands(pi, {
+		notify,
+		startRalphCoordinatorJob,
+		startArgumentCompletions,
+		phaseArgumentCompletions,
+		specArgumentCompletions,
+		cancelArgumentCompletions,
+		pathOptions,
+		runStartCommand,
+		RALPH_START_INVOCATION,
+		RALPH_NEW_INVOCATION,
+		selectSpec,
+		currentSpecPath,
+		formatAvailableSpecs,
+		resolveExistingSpec,
+		formatSwitchSummary,
+		parseCancelArgs,
+		resolveCancelTarget,
+		safeReadSpecState,
+		formatCancelConfirmation,
+		unlinkIfExists,
+		clearCurrentSpecIfMatches,
+		maybeDeleteSpecDirectory,
+		formatStateBeforeCancel,
 	});
 
 	pi.registerCommand("ralph-triage", {
@@ -10739,17 +10678,6 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("ralph-start", {
-		description: "Create/resume a Ralph spec; --quick reviews artifacts and implements",
-		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "start", () => runStartCommand(pi, args, ctx, RALPH_START_INVOCATION)),
-	});
-
-	pi.registerCommand("ralph-new", {
-		description: "Compatibility alias for /ralph-start",
-		getArgumentCompletions: startArgumentCompletions,
-		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "start", () => runStartCommand(pi, args, ctx, RALPH_NEW_INVOCATION)),
-	});
 
 	pi.registerCommand("ralph-research", {
 		description: "Generate research.md for the active Ralph spec",
@@ -10795,7 +10723,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 			const parsed = parseRefactorArgs(tokenized.tokens);
 			if (!parsed.ok) {
-				await notify(ctx, formatRefactorParseError(parsed.error), "warning");
+				await notify(ctx, formatRefactorParseError((parsed as any).error), "warning");
 				return;
 			}
 
@@ -10896,11 +10824,11 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 			};
 			const enqueueCascadeSteps = (sourceFile: "requirements" | "design" | "tasks", cascadeNeeded: string | undefined, reason: string, pendingCascades: Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }>) => {
 				const resolution = resolveRefactorCascadeSteps(sourceFile, cascadeNeeded, plan.availableFiles, reason);
-				for (const skipped of resolution.skipped) {
+				for (const skipped of resolution.skipped as Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }>) {
 					appendCascadeProgress(skipped.sourceFile, skipped.targetFile, "skipped", skipped.reason);
 					void notify(ctx, formatRefactorCascadeOutcome(skipped.sourceFile, skipped.targetFile, "skipped", skipped.reason), "warning");
 				}
-				pendingCascades.push(...resolution.pending);
+				pendingCascades.push(...resolution.pending as Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }>);
 			};
 			const request = buildRefactorRequest(plan, selectedFilePlan, selectedSectionPlan, { cwd: ctx.cwd });
 			const pendingCascades: Array<{ sourceFile: "requirements" | "design" | "tasks"; targetFile: "requirements" | "design" | "tasks"; reason: string }> = [];
@@ -10908,10 +10836,10 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 			const updateEvidence: string[] = [];
 			const primaryCompletion = await runRefactorStep(request);
 			if (!primaryCompletion) return;
-			updatedFiles.push(selectedFilePlan.selectedFile);
+			updatedFiles.push(selectedFilePlan.selectedFile as "requirements" | "design" | "tasks");
 			if (primaryCompletion.evidence) updateEvidence.push(primaryCompletion.evidence);
 			enqueueCascadeSteps(
-				selectedFilePlan.selectedFile,
+				selectedFilePlan.selectedFile as "requirements" | "design" | "tasks",
 				primaryCompletion.cascadeNeeded,
 				primaryCompletion.cascadeReason ?? "Downstream refactor requested.",
 				pendingCascades,
@@ -10937,10 +10865,10 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				const cascadeRequest = buildApprovedRefactorCascadeRequest(plan, cascade.targetFile, { cwd: ctx.cwd });
 				const cascadeCompletion = await runRefactorStep(cascadeRequest);
 				if (!cascadeCompletion) return;
-				updatedFiles.push(cascade.targetFile);
+				updatedFiles.push(cascade.targetFile as "requirements" | "design" | "tasks");
 				if (cascadeCompletion.evidence) updateEvidence.push(cascadeCompletion.evidence);
 				enqueueCascadeSteps(
-					cascade.targetFile,
+					cascade.targetFile as "requirements" | "design" | "tasks",
 					cascadeCompletion.cascadeNeeded,
 					cascadeCompletion.cascadeReason ?? "Downstream refactor requested.",
 					pendingCascades,
@@ -10967,7 +10895,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				}
 			}
 
-			const commitResult = commitRefactorSpecIfDirty(plan.spec, state.commitSpec);
+			const commitResult = commitRefactorSpecIfDirty(plan.spec, Boolean(state.commitSpec));
 			if (commitResult.error) {
 				await notify(ctx, formatRefactorLocalCommitWarning(plan.spec.name, commitResult.error), "warning");
 			}
@@ -10976,154 +10904,6 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("ralph-index", {
-		description: "Generate searchable component and external index artifacts; supports --path, --type, --exclude, --dry-run, --force, --changed, and --quick",
-		getArgumentCompletions: indexArgumentCompletions,
-		handler: async (args, ctx) => {
-			await ctx.waitForIdle();
-			const tokenized = tokenizeCommandArgs(args);
-			if (tokenized.error) {
-				await notify(ctx, tokenized.error, "warning");
-				return;
-			}
-			const result = await runRalphIndex({ cwd: ctx.cwd, args: tokenized.tokens });
-			await notify(ctx, formatRalphIndexCommandResult(result), result.ok ? "info" : "warning");
-		},
-	});
 
-	pi.registerCommand("ralph-status", {
-		description: "Show Ralph specs across configured roots",
-		getArgumentCompletions: statusArgumentCompletions,
-		handler: async (args, ctx) => {
-			const trimmedArgs = args.trim();
-			if (trimmedArgs === "--bootstrap" || trimmedArgs === "--diagnostics") {
-				const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
-				const diagnostics = formatDiagnostics("Smart Ralph Pi status", pi, ctx.cwd, agentBootstrap);
-				await notify(ctx, diagnostics, diagnostics.includes("Overall: PASS") ? "info" : "warning");
-				return;
-			}
 
-			const status = formatRalphSpecStatus(pi, ctx);
-			await notify(ctx, status.message, status.type);
-		},
-	});
-
-	pi.registerCommand("ralph-switch", {
-		description: "Switch the active Ralph spec",
-		getArgumentCompletions: specArgumentCompletions,
-		handler: async (args, ctx) => {
-			await ctx.waitForIdle();
-			const options = pathOptions(ctx);
-			const reference = args.trim();
-			let spec: SpecEntry | undefined;
-
-			if (!reference) {
-				const specs = listSpecs({ ...options, allowMissingConfiguredRoots: true });
-				if (specs.length === 0) {
-					await notify(ctx, `${formatAvailableSpecs(specs, options, null)}\n\nNo specs found to switch to.`, "warning");
-					return;
-				}
-
-				const selected = await selectSpec(ctx, specs, currentSpecPath(options));
-				if (!selected) {
-					await notify(ctx, `${formatAvailableSpecs(specs, options, currentSpecPath(options))}\n\nRun /ralph-switch <name> to select one.`);
-					return;
-				}
-				spec = selected;
-			} else {
-				const resolved = resolveExistingSpec(reference, options);
-				if (!resolved.spec) {
-					await notify(ctx, resolved.error ?? `Unable to resolve spec '${reference}'.`, "warning");
-					return;
-				}
-				spec = resolved.spec;
-			}
-
-			const pointer = writeCurrentSpec(spec, options);
-			await notify(ctx, formatSwitchSummary(pointer.spec, pointer.value, options));
-		},
-	});
-
-	pi.registerCommand("ralph-cancel", {
-		description: "Clear Ralph execution state for a spec",
-		getArgumentCompletions: cancelArgumentCompletions,
-		handler: async (args, ctx) => {
-			await ctx.waitForIdle();
-			const options = pathOptions(ctx);
-			const parsed = parseCancelArgs(args);
-			if (parsed.error) {
-				await notify(ctx, parsed.error, "warning");
-				return;
-			}
-
-			const target = resolveCancelTarget(parsed.reference, options);
-			if (!target.spec) {
-				await notify(ctx, target.error ?? "No spec selected for cancellation.", "warning");
-				return;
-			}
-
-			const spec = target.spec;
-			const stateRead = safeReadSpecState(spec, options);
-			if (ctx.hasUI) {
-				const confirmed = await ctx.ui.confirm(
-					"Cancel Ralph execution?",
-					formatCancelConfirmation(spec, stateRead, parsed.deleteSpec, options),
-				);
-				if (!confirmed) {
-					await notify(ctx, "Ralph cancel aborted.");
-					return;
-				}
-			}
-
-			let removedState = false;
-			let clearedCurrent = false;
-			try {
-				removedState = unlinkIfExists(stateRead.path);
-				clearedCurrent = clearCurrentSpecIfMatches(spec, options);
-			} catch (error) {
-				await notify(ctx, `Failed to clear Ralph execution state: ${formatError(error)}`, "warning");
-				return;
-			}
-
-			const cleanupLines = [
-				`- [${removedState ? "x" : " "}] Removed .ralph-state.json`,
-				`- [${clearedCurrent ? "x" : " "}] Cleared current spec marker`,
-			];
-			if (parsed.deleteSpec) {
-				cleanupLines.push(`- ${await maybeDeleteSpecDirectory(ctx, spec, options)}`);
-			} else {
-				cleanupLines.push("- [x] Kept spec files");
-			}
-
-			await notify(
-				ctx,
-				[
-					`Canceled Ralph execution for spec: ${spec.name}`,
-					"",
-					`Location: ${spec.path}`,
-					...formatStateBeforeCancel(stateRead),
-					"",
-					"Cleanup:",
-					...cleanupLines,
-				].join("\n"),
-			);
-		},
-	});
-
-	pi.registerCommand("ralph-init", {
-		description: "Bootstrap and validate Smart Ralph dependencies, runtime defaults, and project Ralph subagents; use --refresh-agents to overwrite conflicting ralph-*.md files",
-		getArgumentCompletions: initArgumentCompletions,
-		handler: async (args, ctx) => {
-			await ctx.waitForIdle();
-			const parsed = parseInitArgs(args);
-			if (parsed.error) {
-				await notify(ctx, parsed.error, "warning");
-				return;
-			}
-			const runtimeConfig = parsed.runtimeConfig ? bootstrapRalphRuntimeConfig(ctx.cwd) : undefined;
-			const agentBootstrap = bootstrapRalphAgents(ctx.cwd, parsed.refreshAgents);
-			const diagnostics = formatDiagnostics("Smart Ralph bootstrap diagnostics", pi, ctx.cwd, agentBootstrap, runtimeConfig);
-			await notify(ctx, diagnostics, diagnostics.includes("Overall: PASS") ? "info" : "warning");
-		},
-	});
 }

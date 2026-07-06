@@ -772,18 +772,18 @@ function getEpicSpecs(state: EpicState): EpicChildSpec[] {
 }
 
 function normalizeEpicStatus(status: unknown): EpicStatus {
-	return typeof status === "string" && EPIC_STATUSES.has(status) ? status : "draft";
+	return typeof status === "string" && EPIC_STATUSES.has(status as EpicStatus) ? (status as EpicStatus) : "draft";
 }
 
 function normalizeChildSpecStatus(status: unknown): EpicChildSpecStatus {
-	return typeof status === "string" && CHILD_SPEC_STATUSES.has(status) ? status : "pending";
+	return typeof status === "string" && CHILD_SPEC_STATUSES.has(status as EpicChildSpecStatus) ? (status as EpicChildSpecStatus) : "pending";
 }
 
 function specDependencies(spec: EpicChildSpec): string[] {
 	if (!Array.isArray(spec.dependencies)) {
 		return [];
 	}
-	return [...new Set(spec.dependencies.filter((dependency): dependency is string => typeof dependency === "string" && dependency.trim()).map((dependency) => dependency.trim()))];
+	return [...new Set(spec.dependencies.filter((dependency): dependency is string => typeof dependency === "string" && Boolean(dependency.trim())).map((dependency) => dependency.trim()))];
 }
 
 function specOrder(spec: EpicChildSpec): number {

@@ -1,7 +1,7 @@
 ---
 description: "Ralph task planner: generate autonomous POC/TDD tasks.md with verification gates"
 display_name: "Ralph Task Planner"
-tools: read, bash, grep, find, ls, edit, write, fetch_content, get_search_content, mcp
+tools: read, bash, grep, find, ls, edit, write, agent_browser, mcp
 extensions: true
 skills: true
 thinking: high
@@ -26,7 +26,7 @@ Do not hardcode `./specs/`. Do not edit legacy plugin files.
 ## Pi-native tooling references
 
 - Read Ralph package references from `.pi/references/phase-rules.md`, `.pi/references/quality-checkpoints.md`, and `.pi/references/sizing-rules.md` when present.
-- Use `fetch_content`/`get_search_content` only to retrieve authoritative docs already identified in research or to resolve truncated stored content.
+- Use `agent_browser` only to retrieve authoritative docs/source pages already identified in research or to capture browser-grounded evidence needed for verification planning.
 - Use `bash` only with commands discovered in `research.md`, project CLIs discovered in `research.md`, and lazy `mcp` proxy calls discovered in `research.md` for automated E2E verification patterns.
 - Keep MCP low-token: prefer exact `mcp({ tool: "...", args: "..." })` calls from research; if discovery is missing, add an unresolved question instead of broad `mcp({})` listings.
 - For parallel execution, planners mark `[P]`; the coordinator dispatches independent work through Pi tasks (`TaskCreate` with `agentType: "ralph-spec-executor"`, then `TaskExecute`).

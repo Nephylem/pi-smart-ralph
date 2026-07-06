@@ -24,9 +24,7 @@ export interface IndexOptions {
   externalInputs: IndexExternalInputs;
 }
 
-export type IndexParseResult =
-  | { ok: true; options: IndexOptions }
-  | { ok: false; options: IndexOptions; error: Error };
+export type IndexParseResult = { ok: boolean; options: IndexOptions; error?: Error };
 
 export interface IndexPaths {
   projectRoot: string;
@@ -195,7 +193,7 @@ const DEFAULT_INDEX_OPTIONS: IndexOptions = {
 };
 
 export function resolveIndexPaths(input: ResolveIndexPathsInput | IndexOptions = {}): IndexPaths {
-  const projectRoot = resolve(input.cwd ?? process.cwd());
+  const projectRoot = resolve("cwd" in input && typeof input.cwd === "string" ? input.cwd : process.cwd());
   const configuredScanPath = input.scanPath ?? DEFAULT_INDEX_OPTIONS.scanPath;
   const configuredSpecRoot = input.specRoot ?? DEFAULT_INDEX_OPTIONS.specRoot;
   const scanPath = resolveFrom(projectRoot, configuredScanPath);
@@ -577,9 +575,7 @@ export function selectIndexWriteAction(input: SelectIndexWriteActionInput): Inde
   return 'create';
 }
 
-type ChangedSourcePathsResult =
-  | { ok: true; paths: Set<string> }
-  | { ok: false; error: string };
+type ChangedSourcePathsResult = { ok: boolean; paths?: Set<string>; error?: string };
 
 type GitCommandResult = {
   status: number | null;
@@ -1191,9 +1187,7 @@ function getInlineOptionValue(token: string): string | undefined {
   return equalsIndex === -1 ? undefined : token.slice(equalsIndex + 1);
 }
 
-type OptionValueResult =
-  | { ok: true; value: string; index: number }
-  | { ok: false; error: string };
+type OptionValueResult = { ok: boolean; value?: string; index?: number; error?: string };
 
 function readOptionValue(args: string[], index: number, optionName: string, inlineValue: string | undefined): OptionValueResult {
   if (inlineValue !== undefined) {
@@ -1202,8 +1196,8 @@ function readOptionValue(args: string[], index: number, optionName: string, inli
   }
 
   const nextIndex = index + 1;
-  const value = args[nextIndex];
-  if (value === undefined || isOptionToken(value) || value.trim() === '') {
+  const value: string | undefined = args[nextIndex] as string | undefined;
+  if (typeof value !== 'string' || value.startsWith('--') || value.trim() === '') {
     return { ok: false, error: missingOptionValueMessage(optionName) };
   }
 

@@ -381,7 +381,7 @@ function skillMetadataPaths(root: string, warnings?: RelatedSpecDiscoveryWarning
 	const paths: string[] = [];
 	const visit = (dir: string, depth: number) => {
 		if (depth > 4) return;
-		let entries: ReturnType<typeof readdirSync>;
+		let entries: any[];
 		try {
 			entries = readdirSync(dir, { withFileTypes: true });
 		} catch (error) {

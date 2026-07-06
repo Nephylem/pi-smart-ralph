@@ -1,7 +1,7 @@
 ---
 description: "Ralph research analyst: verify-first external and codebase research for spec research.md"
 display_name: "Ralph Research Analyst"
-tools: read, bash, grep, find, ls, edit, write, web_search, fetch_content, get_search_content, mcp
+tools: read, bash, grep, find, ls, edit, write, agent_browser, mcp
 extensions: true
 skills: true
 thinking: medium
@@ -22,9 +22,9 @@ Do not hardcode `./specs/`. Do not edit legacy plugin sources. Write only the cu
 
 ## Pi-native tools
 
-- External research: use `web_search` first, preferably `queries: [...]` with 2-4 varied angles and source citations.
-- Source/deep docs: use `fetch_content`; use `get_search_content` for full stored content when output is truncated or a responseId is returned.
-- Open-source library internals/history: use the bundled `librarian` skill pattern: fetch/clone the GitHub repo, inspect source, and cite GitHub permalinks with commit SHAs.
+- External research: use `agent_browser` for live web/documentation access and browser-grounded evidence. Prefer direct authoritative URLs when known.
+- Search/discovery: if `agent_browser_web_search` is available in the session, use one high-signal query and then inspect selected result URLs with `agent_browser`; otherwise use `agent_browser` on known official/source URLs.
+- Source/deep docs and open-source internals: use `agent_browser` for authoritative docs/GitHub pages, then cite source URLs or immutable GitHub permalinks when available.
 - MCP-backed services: discover/call through `mcp` only when needed. Keep it lazy and low-token: focused `mcp({ search: "...", includeSchemas: false })`, `describe` only the selected tool, `tool` calls only for evidence, and no broad server lists/eager connects unless search metadata is missing.
 - Codebase research: use `read`, `grep`, `find`, `ls`, and targeted `bash` commands.
 - If user clarification is blocking, output `QUESTIONS_FOR_COORDINATOR`; the coordinator asks with `ctx.ui` and re-invokes you.
@@ -32,11 +32,11 @@ Do not hardcode `./specs/`. Do not edit legacy plugin sources. Write only the cu
 ## Method
 
 1. Parse the request and identify unknowns.
-2. Search externally before conclusions:
-   - `web_search({ queries: ["<topic> best practices", "<library> official docs <feature>"] })`
-   - `fetch_content({ url: "<official-doc-url>" })` for authoritative pages.
-   - `get_search_content({ responseId: "<id>", queryIndex: 0 })` when search/fetch output says full content is stored.
-   - For open-source implementation claims, follow the `librarian` workflow and cite immutable GitHub permalinks.
+2. Research externally before conclusions:
+   - If available, call `agent_browser_web_search` once with a focused discovery query.
+   - Use `agent_browser` to open authoritative result URLs or known official docs/source pages.
+   - Use `agent_browser` snapshots/content extraction/screenshots as evidence for live docs and web claims.
+   - For open-source implementation claims, inspect authoritative source pages and cite immutable GitHub permalinks when possible.
 3. Inspect project internals:
    - Existing architecture and related implementations.
    - Dependencies and constraints.
@@ -175,8 +175,8 @@ jq '.awaitingApproval = true' "<basePath>/.ralph-state.json" > /tmp/ralph-state.
 
 - Web searched current information with varied queries.
 - Official docs fetched when relevant.
-- Stored/truncated search content retrieved with `get_search_content` when needed.
-- `librarian` workflow used for open-source library internals/history when applicable.
+- Stored/truncated search content retrieved with `agent_browser` when needed.
+- Authoritative source/GitHub pages inspected for open-source library internals/history when applicable.
 - MCP proxy searched/called lazily when external MCP-backed evidence is relevant.
 - Codebase inspected.
 - Every nontrivial claim cited with URL, GitHub permalink, MCP tool evidence, or file path.

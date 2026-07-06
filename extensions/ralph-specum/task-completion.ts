@@ -221,8 +221,8 @@ function extractKeyedCompletionEvidence(line) {
   return keyedEvidence || null;
 }
 
-function collectKeyedCompletionEvidence(output) {
-  const keyedEvidence = [];
+function collectKeyedCompletionEvidence(output): string[] {
+  const keyedEvidence: string[] = [];
 
   for (const line of output.split(/\r?\n/)) {
     const extractedEvidence = extractKeyedCompletionEvidence(line.trim());
@@ -232,8 +232,8 @@ function collectKeyedCompletionEvidence(output) {
   return keyedEvidence;
 }
 
-function parseTaskCompletionFields(output) {
-  const completionFields = { keyedEvidence: [] };
+function parseTaskCompletionFields(output): TaskCompletionEvidenceFields {
+  const completionFields: TaskCompletionEvidenceFields = { keyedEvidence: [] };
 
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();

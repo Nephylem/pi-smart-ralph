@@ -456,8 +456,8 @@ export type ValidateImplementationTaskMutationInput = {
 	maxModificationsPerTask: number;
 	maxModificationDepth: number;
 	existingTaskIds: ReadonlySet<string>;
-	requiredFields: readonly Array<{ key: string; label: string }>;
-	proposedTasks: readonly ImplementationParsedTaskMutationCandidate[];
+	requiredFields: ReadonlyArray<{ key: string; label: string }>;
+	proposedTasks: ReadonlyArray<ImplementationParsedTaskMutationCandidate>;
 };
 
 export type ValidateImplementationTaskMutationResult = {
@@ -534,7 +534,7 @@ const IMPLEMENTATION_VERIFICATION_REASON_CODE_CATEGORY_MAP: Record<string, Verif
 	Object.entries(IMPLEMENTATION_VERIFICATION_POLICY_MATRIX).map(([category, contract]) => [contract.reasonCode, category as VerificationFailureCategory]),
 );
 
-export const IMPLEMENTATION_VERIFICATION_RESULT_FIXTURES: readonly Array<{
+export const IMPLEMENTATION_VERIFICATION_RESULT_FIXTURES: ReadonlyArray<{
 	label: string;
 	sourceType: ImplementationVerificationResultSource;
 	source: string;
@@ -926,7 +926,7 @@ export function getImplementationVerificationRecoveryBudget(
 }
 
 export function resolveImplementationVerificationRecoveryLimits(
-	state: Pick<RalphState, "maxVerificationRecoveryAttempts" | "maxCleanupRetries"> | null,
+	state: any,
 ): Pick<ImplementationVerificationRecoveryBudget, "maxVerificationRecoveryAttempts" | "maxCleanupRetries"> {
 	return {
 		maxVerificationRecoveryAttempts: positiveInteger(state?.maxVerificationRecoveryAttempts)
@@ -1509,7 +1509,7 @@ export function isImplementationRedTask(task?: ImplementationCompletionTaskLike 
 	return /\[RED\]/i.test(`${task.rawTitle ?? ""}\n${task.subject ?? ""}`);
 }
 
-const IMPLEMENTATION_TASK_MODIFICATION_REQUIRED_FIELDS: readonly Array<{
+const IMPLEMENTATION_TASK_MODIFICATION_REQUIRED_FIELDS: ReadonlyArray<{
 	key: ImplementationTaskModificationFieldKey;
 	label: string;
 }> = [
@@ -2749,7 +2749,7 @@ export function getImplementationExecutionStateValidationError(
 
 	const statePath = typeof specOrStatePath === "string"
 		? specOrStatePath
-		: getRalphStatePath(specOrStatePath);
+		: `${specOrStatePath.absolutePath}/.ralph-state.json`;
 
 	for (const [field, predicate, expectation] of executionStateFieldChecks) {
 		const error = implementationExecutionFieldError(state, field, predicate, statePath, expectation);
@@ -2791,11 +2791,11 @@ const executionStateFieldChecks: Array<[
 ]> = [
 	["taskIndex", isNonNegativeInteger, "invalid non-negative integer"],
 	["totalTasks", isNonNegativeInteger, "invalid non-negative integer"],
-	["taskIteration", positiveInteger, "invalid positive integer"],
-	["globalIteration", positiveInteger, "invalid positive integer"],
+	["taskIteration", isPositiveInteger, "invalid positive integer"],
+	["globalIteration", isPositiveInteger, "invalid positive integer"],
 	["recoveryMode", isBoolean, "invalid boolean"],
-	["maxFixTasksPerOriginal", positiveInteger, "invalid positive integer"],
-	["maxFixTaskDepth", positiveInteger, "invalid positive integer"],
+	["maxFixTasksPerOriginal", isPositiveInteger, "invalid positive integer"],
+	["maxFixTaskDepth", isPositiveInteger, "invalid positive integer"],
 	["fixTaskMap", isRecord, "invalid required top-level record"],
 	["modificationMap", isRecord, "invalid required top-level record"],
 	["nativeTaskMap", isRecord, "invalid required top-level record"],
@@ -2905,8 +2905,9 @@ function isVerificationFailureCategory(value: unknown): value is VerificationFai
 function verificationRecoveryAttemptFromUnknown(value: unknown): VerificationRecoveryAttempt | null {
 	if (!isRecord(value)) return null;
 	const taskId = normalizeImplementationField(value.taskId);
-	const attempt = isNonNegativeInteger(value.attempt) ? value.attempt : null;
-	if (!taskId || attempt === null || !isVerificationFailureCategory(value.category)) return null;
+	const attempt = isNonNegativeInteger(value.attempt) ? Number(value.attempt) : null;
+	const category = value.category;
+	if (!taskId || attempt === null || !isVerificationFailureCategory(category)) return null;
 	const action = value.action;
 	const outcome = value.outcome;
 	if (
@@ -2922,7 +2923,7 @@ function verificationRecoveryAttemptFromUnknown(value: unknown): VerificationRec
 	return {
 		taskId,
 		attempt,
-		category: value.category,
+		category,
 		action,
 		command: normalizeImplementationField(value.command) || undefined,
 		outcome,
@@ -2936,7 +2937,7 @@ function implementationVerificationRecoveryEntryFromUnknown(value: unknown): Imp
 		? record.history.map(verificationRecoveryAttemptFromUnknown).filter((entry): entry is VerificationRecoveryAttempt => Boolean(entry))
 		: [];
 	return {
-		attempts: isNonNegativeInteger(record.attempts) ? record.attempts : history.length,
+		attempts: isNonNegativeInteger(record.attempts) ? Number(record.attempts) : history.length,
 		lastReasonCode: normalizeImplementationField(record.lastReasonCode) || undefined,
 		lastCategory: isVerificationFailureCategory(record.lastCategory) ? record.lastCategory : undefined,
 		history,
@@ -3037,6 +3038,10 @@ function positiveInteger(value: unknown): number | undefined {
 
 function isNonNegativeInteger(value: unknown): boolean {
 	return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isPositiveInteger(value: unknown): boolean {
+	return positiveInteger(value) !== undefined;
 }
 
 function isBoolean(value: unknown): boolean {

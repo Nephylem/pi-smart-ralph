@@ -247,11 +247,11 @@ export const syncEpicIssue = createOrUpdateEpicIssue;
 export const syncChildSpecIssue = createOrUpdateChildSpecIssue;
 
 export function aggregateGithubWarnings(...groups: Array<readonly string[] | undefined>): string[] {
-	return uniqueStrings(groups.flatMap((group) => group ?? []).filter((value): value is string => typeof value === "string" && value.trim()));
+	return uniqueStrings(groups.flatMap((group) => group ?? []).filter((value): value is string => typeof value === "string" && Boolean(value.trim())));
 }
 
 export function aggregateGithubMissingLabels(...groups: Array<readonly string[] | undefined>): string[] {
-	return uniqueStrings(groups.flatMap((group) => group ?? []).filter((value): value is string => typeof value === "string" && value.trim()));
+	return uniqueStrings(groups.flatMap((group) => group ?? []).filter((value): value is string => typeof value === "string" && Boolean(value.trim())));
 }
 
 export function selectGithubLabels(requestedLabels: readonly string[], availableLabels?: readonly string[]): { labels: string[]; missingLabels: string[] } {
@@ -507,7 +507,7 @@ function formatEpicIssueBody(state: EpicState, metadata: RalphGithubIssueMetadat
 function formatChildSpecIssueBody(state: EpicState, child: EpicChildSpec, metadata: RalphGithubIssueMetadata): string {
 	const dependencies = Array.isArray(child.dependencies) ? child.dependencies.filter((dependency): dependency is string => typeof dependency === "string") : [];
 	const acceptanceCriteria = Array.isArray(child.acceptanceCriteria)
-		? child.acceptanceCriteria.filter((criterion): criterion is string => typeof criterion === "string" && criterion.trim())
+		? child.acceptanceCriteria.filter((criterion): criterion is string => typeof criterion === "string" && Boolean(criterion.trim()))
 		: [];
 	const lines = [
 		`# Spec: ${child.name}`,

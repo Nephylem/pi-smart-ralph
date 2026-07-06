@@ -451,8 +451,8 @@ if (existsSync(agentsDir)) {
 const requiredBundledEntrypoints = [
   'node_modules/@tintinweb/pi-subagents/src/index.ts',
   'node_modules/@tintinweb/pi-tasks/src/index.ts',
+  'node_modules/pi-agent-browser-native/dist/extensions/agent-browser/index.js',
   'node_modules/pi-mcp-adapter/index.ts',
-  'node_modules/pi-web-access/index.ts',
 ];
 
 for (const file of requiredBundledEntrypoints) {
@@ -466,7 +466,7 @@ for (const file of requiredBundledEntrypoints) {
 }
 
 const bundled = new Set([...(pkg.bundledDependencies ?? []), ...(pkg.bundleDependencies ?? [])]);
-for (const name of ['@tintinweb/pi-subagents', '@tintinweb/pi-tasks', 'pi-mcp-adapter', 'pi-web-access']) {
+for (const name of ['@tintinweb/pi-subagents', '@tintinweb/pi-tasks', 'pi-agent-browser-native', 'pi-mcp-adapter']) {
   if (!pkg.dependencies?.[name]) failures.push(`missing dependency declaration: ${name}`);
   if (!bundled.has(name)) failures.push(`missing bundledDependencies entry: ${name}`);
 }

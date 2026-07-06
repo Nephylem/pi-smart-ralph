@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveSpecReference, type RalphPathOptions, type SpecEntry } from "./paths.ts";
+import { formatRalphStateValidationIssues, validateRalphStateShape } from "./state-validation.ts";
 
 export type RalphState = Record<string, unknown> & {
 	phase?: string;
@@ -47,6 +48,10 @@ export function readRalphState(spec: SpecStateReference, options: RalphPathOptio
 		const parsed = JSON.parse(content) as unknown;
 		if (!isPlainObject(parsed)) {
 			throw new Error("state JSON must be an object");
+		}
+		const validation = validateRalphStateShape(parsed);
+		if (!validation.ok) {
+			throw new Error(formatRalphStateValidationIssues(validation.issues));
 		}
 		return parsed as RalphState;
 	} catch (error) {

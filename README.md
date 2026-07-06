@@ -45,6 +45,13 @@ In short: it gives Pi a durable coordinator for planning, implementation, verifi
 
 ## Recent patch notes
 
+### 0.1.13
+
+- enabled real semantic TypeScript checking with `tsc -p tsconfig.json` and removed the temporary `--noCheck` guardrail
+- added TypeScript project guardrails, CI quality gates, runtime smoke tests, and stronger package verification checks
+- extracted core and spec lifecycle command registration into focused command modules while keeping the `/ralph-*` command surface stable
+- added state-shape validation, bootstrap diagnostics, architecture docs, contribution guidance, and a production-readiness scorecard
+
 ### 0.1.12
 
 - hardened `/ralph-implement` verification recovery so recoverable `[VERIFY]` failures can rerun inside the same implementation session
@@ -67,8 +74,8 @@ npm package: pi-smart-ralph
    │  ├─ bootstraps bundled runtimes when needed
    │  │  ├─ pi-subagents   -> phase + execution subagents
    │  │  ├─ pi-tasks       -> mirrored task cards
-   │  │  ├─ pi-mcp-adapter -> mcp tool
-   │  │  └─ pi-web-access  -> web_search / fetch_content
+   │  │  ├─ pi-agent-browser-native -> agent_browser tool
+   │  │  └─ pi-mcp-adapter          -> mcp tool
    │  └─ coordinates spec + epic state
    ├─ agents/
    │  └─ Ralph subagent definitions copied into project .pi/agents by /ralph-init
@@ -181,7 +188,7 @@ Pi Smart Ralph bundles and conditionally loads the runtime packages it needs:
 - `@tintinweb/pi-subagents`
 - `@tintinweb/pi-tasks`
 - `pi-mcp-adapter`
-- `pi-web-access`
+- `pi-agent-browser-native`
 
 If those tools are already installed and active in your Pi environment, Smart Ralph uses the existing tools instead of loading duplicate bundled copies.
 
