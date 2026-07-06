@@ -1391,6 +1391,11 @@ async function notify(ctx: ExtensionCommandContext, message: string, type: Ralph
 		return;
 	}
 
+	if (type === "warning") {
+		console.warn(message);
+		return;
+	}
+
 	console.log(message);
 }
 

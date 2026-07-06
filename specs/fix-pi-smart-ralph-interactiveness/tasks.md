@@ -241,7 +241,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-5, FR-9, AC-4.3_
   - _Design: Safe Ralph UI helpers; Interfaces_
 
-- [ ] Q2.2 [VERIFY] Quality check: notification slice
+- [x] Q2.2 [VERIFY] Quality check: notification slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -263,7 +263,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-5, FR-8, AC-2.4, AC-4.1, AC-4.2_
   - _Design: Error Handling no UI context; Edge Cases partial UI context_
 
-- [ ] 2.8 [GREEN] Pass test: guard optional Pi UI methods
+- [x] 2.8 [GREEN] Pass test: guard optional Pi UI methods
   - **Do**:
     1. Guard `setStatus`, `setFooter`, `setWidget`, and `notify` before calling.
     2. Route no-UI notifications to console.
