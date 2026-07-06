@@ -158,10 +158,46 @@ export type ImplementationVerificationRecoveryPolicy = {
 	nextStep: string;
 };
 
-export type ImplementationVerificationFailureEnvelope = {
+export type ImplementationVerificationResultStatus =
+	| "VERIFICATION_PASS"
+	| "VERIFICATION_FAIL"
+	| "TASK_COMPLETE"
+	| "TASK_FAILED";
+
+export type ImplementationVerificationResultSource =
+	| "verification_agent"
+	| "qa_agent"
+	| "package_script"
+	| "nested_parity_script"
+	| "unknown";
+
+export interface ImplementationVerificationResultEnvelope {
+	status: ImplementationVerificationResultStatus;
+	reasonCode?: string;
+	category?: VerificationFailureCategory;
+	failingCommand?: string;
+	recoverable: boolean;
+	suggestedRecovery?: VerificationRecoveryAction;
+	evidence: string[];
+	rawSummary: string;
+	rawOutput?: string;
 	output: string;
 	normalizedOutput: string;
+	sourceType: ImplementationVerificationResultSource;
 	policy: ImplementationVerificationRecoveryPolicy;
+}
+
+export type ImplementationVerificationFailureEnvelope = ImplementationVerificationResultEnvelope;
+
+export type ImplementationVerificationDecision = {
+	status: ImplementationVerificationResultStatus;
+	shouldRecover: boolean;
+	shouldBlock: boolean;
+	reasonCode: string;
+	category?: VerificationFailureCategory;
+	suggestedRecovery?: VerificationRecoveryAction;
+	failingCommand?: string;
+	evidence: string[];
 };
 
 export interface VerificationRecoveryAttempt {
@@ -465,6 +501,38 @@ const IMPLEMENTATION_VERIFICATION_POLICY_MATRIX: Record<VerificationFailureCateg
 	},
 };
 
+
+const IMPLEMENTATION_VERIFICATION_REASON_CODE_CATEGORY_MAP: Record<string, VerificationFailureCategory> = Object.fromEntries(
+	Object.entries(IMPLEMENTATION_VERIFICATION_POLICY_MATRIX).map(([category, contract]) => [contract.reasonCode, category as VerificationFailureCategory]),
+);
+
+export const IMPLEMENTATION_VERIFICATION_RESULT_FIXTURES: readonly Array<{
+	label: string;
+	sourceType: ImplementationVerificationResultSource;
+	source: string;
+}> = [
+	{
+		label: "verification agent pass output",
+		sourceType: "verification_agent",
+		source: "VERIFICATION_PASS\nverify: node scripts/verify-implementation-loop-parity.mjs --case shared-surface-preflight\nEvidence: PASS shared-surface-preflight",
+	},
+	{
+		label: "verification agent fail output",
+		sourceType: "verification_agent",
+		source: "VERIFICATION_FAIL\nreasonCode: VERIFY_SHARED_CONTRACT_DRIFT\nfailingCommand: node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist\nEvidence: acceptance checklist failed",
+	},
+	{
+		label: "package script fail output",
+		sourceType: "package_script",
+		source: "npm run verify:pack\nEXPECTED_FAIL verify-publish-bundle: cleanup artifact remained in package staging root",
+	},
+	{
+		label: "nested parity script fail output",
+		sourceType: "nested_parity_script",
+		source: "FAIL verification-recovery-policy: VERIFY_FATAL_RUNTIME_FAILURE in nested parity verifier; node scripts/verify-implementation-loop-parity.mjs --case verification-recovery-policy",
+	},
+];
+
 export function implementationStateRecord(value: unknown): Record<string, unknown> {
 	return isRecord(value) ? { ...value } : {};
 }
@@ -473,9 +541,100 @@ export function normalizeImplementationVerificationFailureOutput(output: string)
 	return normalizeImplementationWhitespace(output).toLowerCase();
 }
 
+function extractImplementationVerificationStatus(output: string): ImplementationVerificationResultStatus {
+	if (/(^|\n)VERIFICATION_PASS\b/m.test(output)) return "VERIFICATION_PASS";
+	if (/(^|\n)VERIFICATION_FAIL\b/m.test(output) || /\bEXPECTED_FAIL\b/.test(output) || /(^|\n)FAIL\b/m.test(output)) {
+		return "VERIFICATION_FAIL";
+	}
+	if (/(^|\n)TASK_COMPLETE\b/m.test(output)) return "TASK_COMPLETE";
+	if (/(^|\n)TASK_FAILED\b/m.test(output)) return "TASK_FAILED";
+	return /\bPASS\b/.test(output) ? "VERIFICATION_PASS" : "VERIFICATION_FAIL";
+}
+
+function extractImplementationReasonCode(output: string): string | undefined {
+	const explicitMatch = output.match(/reasonCode:\s*([A-Z0-9_]+)/i);
+	if (explicitMatch?.[1]) return explicitMatch[1].trim().toUpperCase();
+	const embeddedMatch = output.match(/\b(VERIFY_[A-Z0-9_]+)\b/);
+	if (embeddedMatch?.[1]) return embeddedMatch[1].trim().toUpperCase();
+	return undefined;
+}
+
+function categoryFromImplementationReasonCode(reasonCode?: string): VerificationFailureCategory | undefined {
+	if (!reasonCode) return undefined;
+	return IMPLEMENTATION_VERIFICATION_REASON_CODE_CATEGORY_MAP[reasonCode];
+}
+
+function normalizeImplementationVerificationEvidenceLines(output: string): string[] {
+	const lines = output.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	const evidence = lines
+		.filter((line) => /^(?:evidence|verify|verification):/i.test(line) || /^PASS\b/i.test(line) || /^EXPECTED_FAIL\b/i.test(line) || /^FAIL\b/i.test(line))
+		.map((line) => line.replace(/^(?:evidence|verify|verification):\s*/i, '').trim())
+		.filter(Boolean);
+	return evidence.length > 0 ? [...new Set(evidence)] : [normalizeImplementationWhitespace(output)].filter(Boolean);
+}
+
+function extractImplementationVerifierCaseName(output: string): string | null {
+	const explicitCase = output.match(/\b(?:PASS|FAIL|EXPECTED_FAIL)\s+([a-z0-9-]+)/i);
+	if (explicitCase?.[1]) return explicitCase[1].trim();
+	return null;
+}
+
+function extractImplementationExplicitVerifierCommand(output: string): string | null {
+	const lineMatch = output.match(/failingCommand:\s*([^\n]+)/i);
+	if (lineMatch?.[1]) return normalizeImplementationWhitespace(lineMatch[1]);
+	const verifyMatch = output.match(/verify:\s*([^\n]+)/i);
+	if (verifyMatch?.[1]) return normalizeImplementationWhitespace(verifyMatch[1]);
+	const commandLineMatch = output.match(/(^|\n)((?:node|npm|pnpm|yarn)\s+[^\n]+)/i);
+	if (commandLineMatch?.[2]) return normalizeImplementationWhitespace(commandLineMatch[2]);
+	return null;
+}
+
+function inferImplementationNestedParityCommand(output: string): string | null {
+	const caseName = extractImplementationVerifierCaseName(output);
+	return caseName ? `node scripts/verify-implementation-loop-parity.mjs --case ${caseName}` : null;
+}
+
+function extractImplementationFailingCommand(
+	output: string,
+	sourceType: ImplementationVerificationResultSource,
+): string | undefined {
+	const explicitCommand = extractImplementationExplicitVerifierCommand(output) || extractImplementationVerifierCommand(output);
+	if (explicitCommand) return explicitCommand;
+	if (sourceType === "nested_parity_script") {
+		return inferImplementationNestedParityCommand(output) ?? undefined;
+	}
+	return undefined;
+}
+
+function resolveImplementationVerificationEnvelopePolicy(
+	reasonCode: string | undefined,
+	output: string,
+	attemptCount: number,
+): ImplementationVerificationRecoveryPolicy {
+	const category = categoryFromImplementationReasonCode(reasonCode) ?? classifyImplementationVerificationFailure(output);
+	const contract = IMPLEMENTATION_VERIFICATION_POLICY_MATRIX[category];
+	const nextStep = contract.recoverable
+		? `Retry verification with ${contract.recoveryAction} (attempt ${attemptCount + 1}).`
+		: contract.recoveryAction === "delegate_fix_task"
+			? "Delegate a focused fix task before rerunning verification."
+			: "Block implementation and surface the verifier failure evidence.";
+	return {
+		category,
+		reasonCode: reasonCode && reasonCode !== "VERIFY_OK" ? reasonCode : contract.reasonCode,
+		recoverable: contract.recoverable,
+		recoveryAction: contract.recoveryAction,
+		attemptCount,
+		nextStep: nextStep.trim(),
+	};
+}
+
 export function classifyImplementationVerificationFailure(output: string): VerificationFailureCategory {
 	const normalized = normalizeImplementationVerificationFailureOutput(output);
 	if (!normalized) return "fatal_runtime_failure";
+	const reasonCodeCategory = categoryFromImplementationReasonCode(extractImplementationReasonCode(output));
+	if (reasonCodeCategory) return reasonCodeCategory;
 	if (/command not found|no such file or directory|network|timeout|temporar|eai_again|etimedout|tool registry unavailable/.test(normalized)) {
 		return "transient_tool_failure";
 	}
@@ -501,20 +660,86 @@ export function createImplementationVerificationRecoveryPolicy(
 	output: string,
 	attemptCount = 0,
 ): ImplementationVerificationRecoveryPolicy {
-	const category = classifyImplementationVerificationFailure(output);
-	const contract = IMPLEMENTATION_VERIFICATION_POLICY_MATRIX[category];
-	const nextStep = contract.recoverable
-		? `Retry verification with ${contract.recoveryAction} (attempt ${attemptCount + 1}).`
-		: contract.recoveryAction === "delegate_fix_task"
-			? "Delegate a focused fix task before rerunning verification."
-			: "Block implementation and surface the verifier failure evidence. ";
-	return {
-		category,
-		reasonCode: contract.reasonCode,
-		recoverable: contract.recoverable,
-		recoveryAction: contract.recoveryAction,
+	return resolveImplementationVerificationEnvelopePolicy(
+		extractImplementationReasonCode(output),
+		output,
 		attemptCount,
-		nextStep: nextStep.trim(),
+	);
+}
+
+export function normalizeImplementationVerificationResultEnvelope(
+	output: string,
+	attemptCount = 0,
+	sourceType: ImplementationVerificationResultSource = "verification_agent",
+): ImplementationVerificationResultEnvelope {
+	const status = extractImplementationVerificationStatus(output);
+	const reasonCode = status === "VERIFICATION_PASS" || status === "TASK_COMPLETE"
+		? "VERIFY_OK"
+		: extractImplementationReasonCode(output);
+	const policy = status === "VERIFICATION_PASS" || status === "TASK_COMPLETE"
+		? {
+			category: classifyImplementationVerificationFailure(output),
+			reasonCode: "VERIFY_OK",
+			recoverable: false,
+			recoveryAction: "block" as VerificationRecoveryAction,
+			attemptCount,
+			nextStep: "No recovery required.",
+		}
+		: resolveImplementationVerificationEnvelopePolicy(reasonCode, output, attemptCount);
+	const failingCommand = extractImplementationFailingCommand(output, sourceType);
+	const evidence = normalizeImplementationVerificationEvidenceLines(output);
+	const rawSummary = evidence[0] ?? normalizeImplementationWhitespace(output);
+	return {
+		status,
+		reasonCode: reasonCode ?? policy.reasonCode,
+		category: status === "VERIFICATION_FAIL" ? policy.category : undefined,
+		failingCommand,
+		recoverable: status === "VERIFICATION_FAIL" ? policy.recoverable : false,
+		suggestedRecovery: status === "VERIFICATION_FAIL" ? policy.recoveryAction : undefined,
+		evidence,
+		rawSummary,
+		rawOutput: output,
+		output,
+		normalizedOutput: normalizeImplementationVerificationFailureOutput(output),
+		sourceType,
+		policy,
+	};
+}
+
+export function normalizeImplementationQaResultEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return normalizeImplementationVerificationResultEnvelope(output, attemptCount, "qa_agent");
+}
+
+export function normalizeImplementationPackageResultEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return normalizeImplementationVerificationResultEnvelope(output, attemptCount, "package_script");
+}
+
+export function normalizeNestedParityVerificationResultEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return normalizeImplementationVerificationResultEnvelope(output, attemptCount, "nested_parity_script");
+}
+
+export function createImplementationVerificationDecision(
+	envelope: ImplementationVerificationResultEnvelope,
+): ImplementationVerificationDecision {
+	const shouldRecover = envelope.status === "VERIFICATION_FAIL" && envelope.recoverable;
+	return {
+		status: envelope.status,
+		shouldRecover,
+		shouldBlock: envelope.status === "VERIFICATION_FAIL" && !envelope.recoverable,
+		reasonCode: envelope.reasonCode ?? envelope.policy.reasonCode,
+		category: envelope.category ?? envelope.policy.category,
+		suggestedRecovery: envelope.suggestedRecovery ?? envelope.policy.recoveryAction,
+		failingCommand: envelope.failingCommand,
+		evidence: [...envelope.evidence],
 	};
 }
 
@@ -522,11 +747,7 @@ export function createImplementationVerificationFailureEnvelope(
 	output: string,
 	attemptCount = 0,
 ): ImplementationVerificationFailureEnvelope {
-	return {
-		output,
-		normalizedOutput: normalizeImplementationVerificationFailureOutput(output),
-		policy: createImplementationVerificationRecoveryPolicy(output, attemptCount),
-	};
+	return normalizeImplementationVerificationResultEnvelope(output, attemptCount);
 }
 
 export function formatImplementationVerificationRecoveryPolicy(
@@ -809,20 +1030,65 @@ export function getImplementationVerifierPassSignal(
 		: null;
 }
 
+export function recordImplementationVerificationEnvelopeEvidence(
+	existing: unknown,
+	taskKey: string,
+	envelope: ImplementationVerificationResultEnvelope,
+): Record<string, unknown> {
+	const evidence = createImplementationEvidenceScaffold(existing);
+	const verificationEnvelopes = implementationStateRecord(evidence.verificationEnvelopes);
+	return {
+		...evidence,
+		verificationEnvelopes: {
+			...verificationEnvelopes,
+			[taskKey]: envelope,
+		},
+	};
+}
+
+export function createImplementationVerificationEnvelopeStatePatch(
+	state: RalphState | null,
+	taskKey: string,
+	envelope: ImplementationVerificationResultEnvelope,
+): Record<string, unknown> {
+	return {
+		evidence: recordImplementationVerificationEnvelopeEvidence(state?.evidence, taskKey, envelope),
+	};
+}
+
 export function createImplementationVerificationRecoveryStatePatch(
 	input: CreateImplementationVerificationRecoveryStatePatchInput,
 ): Record<string, unknown> {
 	const verificationRecovery = implementationStateRecord(input.state?.verificationRecovery);
 	const existingEntry = implementationVerificationRecoveryEntryFromUnknown(verificationRecovery[input.taskId]);
+	const sourceOutput = normalizeImplementationField(input.state?.lastSubagentOutput)
+		|| normalizeImplementationField(input.state?.validationError)
+		|| input.attempt.command
+		|| input.attempt.category;
+	const envelope = normalizeImplementationVerificationResultEnvelope(sourceOutput, input.attempt.attempt, "verification_agent");
 	const nextEntry: ImplementationVerificationRecoveryEntry = {
 		attempts: Math.max(existingEntry.attempts, input.attempt.attempt),
-		lastReasonCode: implementationStateRecord(input.state?.verificationRecovery)[input.taskId] && input.state?.validationError && typeof input.state.validationError === "string"
-			? normalizeImplementationField(input.state.validationError)
-			: existingEntry.lastReasonCode,
+		lastReasonCode: envelope.reasonCode ?? existingEntry.lastReasonCode,
 		lastCategory: input.attempt.category,
 		history: [...existingEntry.history, input.attempt],
 	};
-	const evidence = createImplementationEvidenceScaffold(input.state?.evidence);
+	const evidence = recordImplementationVerificationEnvelopeEvidence(
+		input.state?.evidence,
+		input.taskId,
+		{
+			...envelope,
+			category: input.attempt.category,
+			failingCommand: input.attempt.command ?? envelope.failingCommand,
+			recoverable: input.attempt.outcome !== "blocked",
+			suggestedRecovery: input.attempt.action,
+			policy: {
+				...envelope.policy,
+				category: input.attempt.category,
+				reasonCode: envelope.reasonCode ?? envelope.policy.reasonCode,
+				recoveryAction: input.attempt.action,
+			},
+		},
+	);
 	const verificationEvidence = implementationStateRecord(evidence.verificationRecovery);
 	const limits = resolveImplementationVerificationRecoveryLimits(input.state);
 	return {
@@ -845,22 +1111,54 @@ export function createImplementationVerificationRecoveryStatePatch(
 export function planImplementationVerificationRecovery(
 	input: PlanImplementationVerificationRecoveryInput,
 ): ImplementationVerificationRecoveryPlan {
-	const command = normalizeImplementationField(input.command) || extractImplementationVerifierCommand(input.output);
-	const budget = getImplementationVerificationRecoveryBudget(input.state, input.taskId, input.policy.category);
+	const envelope = normalizeImplementationVerificationResultEnvelope(input.output, input.policy.attemptCount, "verification_agent");
+	const decision = createImplementationVerificationDecision(envelope);
+	const policy: ImplementationVerificationRecoveryPolicy = {
+		category: decision.category ?? input.policy.category,
+		reasonCode: decision.reasonCode,
+		recoverable: decision.shouldRecover,
+		recoveryAction: decision.suggestedRecovery ?? input.policy.recoveryAction,
+		attemptCount: input.policy.attemptCount,
+		nextStep: decision.shouldRecover ? "Recover from structured envelope fields before blocking." : input.policy.nextStep,
+	};
+	const command = normalizeImplementationField(input.command)
+		|| decision.failingCommand
+		|| extractImplementationVerifierCommand(input.output);
+	const budget = getImplementationVerificationRecoveryBudget(input.state, input.taskId, policy.category);
 	const nextAttempt = budget.attempts + 1;
-	const shouldRecover = input.policy.recoverable && !budget.exhausted && Boolean(command);
-	// cleanup_artifact_failure -> cleanup_artifacts -> expect VERIFICATION_PASS after exact verifier rerun.
-	// transient_tool_failure -> retry_verifier -> expect VERIFICATION_PASS from the same failing verifier command.
-	// shared_contract_drift -> repair_shared_contract -> expect VERIFICATION_PASS after rerun of the exact verifier.
+	const shouldRecover = policy.recoverable && !budget.exhausted && Boolean(command);
+	// Structured envelope fields drive recovery/block decisions before any exact verifier rerun.
 	return {
 		taskId: input.taskId,
-		policy: input.policy,
+		policy,
 		command,
 		budget,
 		shouldRecover,
 		exhausted: budget.exhausted,
 		nextAttempt,
 	};
+}
+
+export function planImplementationVerificationRecoveryFromEnvelope(
+	state: RalphState | null,
+	taskId: string,
+	envelope: ImplementationVerificationResultEnvelope,
+): ImplementationVerificationRecoveryPlan {
+	const decision = createImplementationVerificationDecision(envelope);
+	return planImplementationVerificationRecovery({
+		state,
+		taskId,
+		output: envelope.rawOutput ?? envelope.rawSummary,
+		command: decision.failingCommand,
+		policy: {
+			category: decision.category ?? "fatal_runtime_failure",
+			reasonCode: decision.reasonCode,
+			recoverable: decision.shouldRecover,
+			recoveryAction: decision.suggestedRecovery ?? "block",
+			attemptCount: 0,
+			nextStep: decision.shouldRecover ? "Recover from structured envelope fields before blocking." : "Block from structured envelope fields.",
+		},
+	});
 }
 
 export function hasImplementationCompletionSignal(output: string, signal: ImplementationCompletionSignal): boolean {
@@ -1370,10 +1668,12 @@ export function createImplementationEvidenceScaffold(existing: unknown): Record<
 	const record = implementationStateRecord(existing);
 	const tasks = implementationStateRecord(record.tasks);
 	const reviews = Array.isArray(record.reviews) ? [...record.reviews] : [];
+	const verificationEnvelopes = implementationStateRecord(record.verificationEnvelopes);
 	const next: Record<string, unknown> = {
 		...record,
 		tasks,
 		reviews,
+		verificationEnvelopes,
 	};
 
 	if (record.final !== undefined) {

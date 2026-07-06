@@ -296,6 +296,49 @@
                 "required": ["taskIndex", "status", "iteration", "checkpoint", "summary", "reviewedAt"]
               }
             },
+            "verificationEnvelopes": {
+              "type": "object",
+              "default": {},
+              "description": "Structured verification result envelopes persisted by task key for deterministic recovery/block decisions.",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "status": { "type": "string", "enum": ["VERIFICATION_PASS", "VERIFICATION_FAIL", "TASK_COMPLETE", "TASK_FAILED"] },
+                  "reasonCode": { "type": "string" },
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "transient_tool_failure",
+                      "cleanup_artifact_failure",
+                      "shared_contract_drift",
+                      "stale_state_failure",
+                      "publish_bundle_failure",
+                      "real_product_failure",
+                      "fatal_runtime_failure"
+                    ]
+                  },
+                  "failingCommand": { "type": "string" },
+                  "recoverable": { "type": "boolean" },
+                  "suggestedRecovery": {
+                    "type": "string",
+                    "enum": [
+                      "retry_verifier",
+                      "cleanup_artifacts",
+                      "repair_shared_contract",
+                      "repair_state",
+                      "repair_publish_bundle",
+                      "delegate_fix_task",
+                      "block"
+                    ]
+                  },
+                  "evidence": { "type": "array", "items": { "type": "string" } },
+                  "rawSummary": { "type": "string" },
+                  "rawOutput": { "type": "string" },
+                  "sourceType": { "type": "string" }
+                },
+                "required": ["status", "recoverable", "evidence", "rawSummary"]
+              }
+            },
             "recoveryStops": {
               "type": "array",
               "default": [],

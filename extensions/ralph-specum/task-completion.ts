@@ -1,6 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { statSync } from 'node:fs';
+import {
+  normalizeImplementationQaResultEnvelope,
+  type ImplementationVerificationResultEnvelope,
+} from './implementation-loop.ts';
 
 export type TaskTopology = 'single_repo' | 'multi_repo' | 'repo_plus_nonrepo' | 'no_repo';
 
@@ -59,6 +63,13 @@ export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorksp
     commitMode,
     commitReason,
   });
+}
+
+export function normalizeVerificationAgentOutputEnvelope(
+  output: string,
+  attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+  return normalizeImplementationQaResultEnvelope(output, attemptCount);
 }
 
 export function formatTaskWorkspaceReport(report: TaskWorkspaceReport): string {
@@ -352,3 +363,4 @@ function getProbePath(targetPath) {
     return dirname(targetPath);
   }
 }
+

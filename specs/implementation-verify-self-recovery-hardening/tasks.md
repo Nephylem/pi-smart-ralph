@@ -145,7 +145,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-5, AC-3.1_
   - _Design: Shared-surface preflight planner_
 
-- [ ] Q3 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for shared-surface preflight
+- [x] Q3 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for shared-surface preflight
   - **Do**:
     1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the new `shared-surface-preflight` case.
   - **Files**: None
@@ -169,7 +169,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-6, FR-7, AC-4.1, AC-4.2_
   - _Design: Failure envelope; Completion validation bridge_
 
-- [ ] 4.2 [GREEN] Pass test: normalize verification results before coordinator decisions
+- [x] 4.2 [GREEN] Pass test: normalize verification results before coordinator decisions
   - **Do**:
     1. Parse verifier outputs into structured envelopes.
     2. Make coordinator recovery or block decisions from envelope fields, not prose-only parsing.
