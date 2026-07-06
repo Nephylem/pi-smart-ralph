@@ -1376,10 +1376,18 @@ function parseInitArgs(args: string): InitArguments {
 	return { refreshAgents, runtimeConfig };
 }
 
-async function notify(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info") {
-	const ui = getRalphOptionalUi(ctx);
-	if (typeof ui?.notify === "function") {
-		await ui.notify(message, type);
+type RalphUiNotificationType = "info" | "warning";
+type RalphUiNotify = (message: string, type: RalphUiNotificationType) => void | Promise<void>;
+
+function getRalphUiNotify(ctx: RalphOptionalUiContext): RalphUiNotify | undefined {
+	const notify = getRalphOptionalUi(ctx)?.notify;
+	return typeof notify === "function" ? notify : undefined;
+}
+
+async function notify(ctx: ExtensionCommandContext, message: string, type: RalphUiNotificationType = "info") {
+	const uiNotify = getRalphUiNotify(ctx);
+	if (uiNotify) {
+		await uiNotify(message, type);
 		return;
 	}
 
@@ -1743,9 +1751,10 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 	if (installed) ralphFooterState.ctx = ctx;
 }
 
-function printJsonOutput(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info"): void {
+function printJsonOutput(ctx: ExtensionCommandContext, message: string, type: RalphUiNotificationType = "info"): void {
 	console.log(message);
-	if (ctx.hasUI) ctx.ui.notify("Ralph epic status JSON printed to stdout.", type);
+	const uiNotify = getRalphUiNotify(ctx);
+	if (uiNotify) void uiNotify("Ralph epic status JSON printed to stdout.", type);
 }
 
 const SPEC_ARTIFACTS = ["research", "requirements", "design", "tasks"] as const;

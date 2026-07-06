@@ -230,7 +230,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-5, AC-2.3_
   - _Design: Safe Ralph UI helpers_
 
-- [ ] 2.6 [YELLOW] Refactor: type notification helper narrowly
+- [x] 2.6 [YELLOW] Refactor: type notification helper narrowly
   - **Do**:
     1. Keep notification type union narrow.
     2. Avoid broad `any` at UI call sites.
