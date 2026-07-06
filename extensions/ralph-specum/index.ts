@@ -1377,8 +1377,9 @@ function parseInitArgs(args: string): InitArguments {
 }
 
 async function notify(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info") {
-	if (ctx.hasUI) {
-		ctx.ui.notify(message, type);
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.notify === "function") {
+		await ui.notify(message, type);
 		return;
 	}
 

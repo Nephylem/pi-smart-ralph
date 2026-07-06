@@ -219,7 +219,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-5, AC-2.3, NFR-1_
   - _Design: Safe Ralph UI helpers; notify UI/console split_
 
-- [ ] 2.5 [GREEN] Pass test: preserve notify UI path
+- [x] 2.5 [GREEN] Pass test: preserve notify UI path
   - **Do**:
     1. Use `ctx.ui.notify` when `ctx.hasUI === true` and method exists.
     2. Preserve warning/info type mapping.
