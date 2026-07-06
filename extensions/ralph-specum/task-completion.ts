@@ -272,6 +272,13 @@ function hasExpectedFailureProof(output, proofToken = 'RED_PASS') {
   });
 }
 
+export function createTaskCompletionAssessment(
+  output: string,
+  workspaceReport: TaskWorkspaceReport,
+): TaskCompletionAssessment {
+  return assessTaskCompletionOutput(output, workspaceReport);
+}
+
 function assessTaskCompletionOutput(
   output,
   workspaceReport,

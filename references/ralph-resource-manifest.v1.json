@@ -301,7 +301,7 @@
     "kind": "skill",
     "status": "adapted",
     "notes": "Packaged resource is intentionally adapted for Pi-safe wording and package context.",
-    "sha256": "882d05e0952dd1bc3d3d2003a88b3140cc5ce205b8a13a4bee76c1b0d2fcf885"
+    "sha256": "1835bf03003968b7857e121388d2f04a3742722f99eb4a6bfb13abc29d55be0c"
   },
   {
     "originalPath": "skills/spec-workflow/references/phase-transitions.md",

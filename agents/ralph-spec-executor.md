@@ -163,10 +163,23 @@ TASK_MODIFICATION_REQUEST
   "originalTaskId": "X.Y",
   "reasoning": "Why modification is needed",
   "proposedTasks": [
-    "- [ ] X.Y.1 Task name\n  - **Do**:\n    1. Step\n  - **Files**: path\n  - **Done when**: Criteria\n  - **Verify**: command\n  - **Commit**: `type(scope): message`"
+    {
+      "id": "X.Y.1",
+      "title": "Task name",
+      "do": ["Step 1", "Step 2"],
+      "files": ["path/to/file"],
+      "doneWhen": "Criteria",
+      "verify": "command",
+      "commit": "type(scope): message"
+    }
   ]
 }
 ```
+
+Preferred format:
+- Use structured task objects as shown above.
+- The coordinator will render canonical markdown task blocks.
+- Legacy markdown task-block strings are accepted only for backward compatibility.
 
 Rules:
 - `SPLIT_TASK`: current task too large; can still complete original if sub-tasks inserted by coordinator.

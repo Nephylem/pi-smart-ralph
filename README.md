@@ -32,17 +32,26 @@ This repository is maintained separately for the Pi agent ecosystem and is inten
 
 ## What it does
 
-Pi Smart Ralph adds a full `/ralph-*` workflow to Pi:
+Pi Smart Ralph adds a full `/ralph-*` workflow to Pi for spec-driven delivery:
 
-1. Turn a rough goal into a tracked spec.
-2. Generate research, requirements, design, and task artifacts.
-3. Mirror `tasks.md` into Pi task cards.
-4. Execute tasks through focused Pi subagents.
-5. Require real verification evidence before marking work complete.
-6. Decompose larger initiatives into epics and child specs.
-7. Optionally create or update GitHub issues from epic triage.
+- turn a rough goal into a tracked spec
+- generate `research.md`, `requirements.md`, `design.md`, and `tasks.md`
+- mirror `tasks.md` into Pi task cards
+- execute tasks through focused Pi subagents
+- require explicit completion signals and verification evidence
+- support epic decomposition and optional GitHub issue output
 
-The goal is to make AI-assisted development more auditable and less ad hoc: every implementation should have context, acceptance criteria, task boundaries, verification proof, and resumable state.
+In short: it gives Pi a durable coordinator for planning, implementation, verification, recovery, and resumable execution state.
+
+## Recent patch notes
+
+### 0.1.12
+
+- hardened `/ralph-implement` verification recovery so recoverable `[VERIFY]` failures can rerun inside the same implementation session
+- added bounded verification-recovery state, structured verification envelopes, and shared-surface preflight checks
+- hardened task-modification handling so malformed or structured `TASK_MODIFICATION_REQUEST` payloads are normalized into canonical task blocks before blocking
+- fixed finalizer behavior so successful implementation completion explicitly deletes `<spec>/.ralph-state.json`
+- kept package verification green through `verify:index`, `verify:pack`, and `prepack`
 
 ---
 
@@ -110,6 +119,10 @@ npm package: pi-smart-ralph
 - **Spec files**: hold durable project state and artifacts under `specs/`.
 - **Pi task cards**: mirror `tasks.md` so progress is visible in the Pi UI without becoming the source of truth.
 
+### Orchestration-first model
+
+The main Ralph coordinator preserves context by spawning subagents for inspect, research, implement, and verify work. Those subagents return scoped evidence and handoffs, while the Ralph extension retains control-plane responsibilities for state files, UI updates, task mirroring, approval gates, retries, blockers, and phase/task advancement.
+
 ### Source of truth
 
 The canonical execution record is still the spec directory:
@@ -131,6 +144,7 @@ Pi task cards and footer/status UI are synchronized views over that spec state, 
 ## Current status
 
 This package is currently in beta.
+Current release in this repository: `0.1.12`.
 
 Recommended install:
 

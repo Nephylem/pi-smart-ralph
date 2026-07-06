@@ -86,14 +86,25 @@ All Ralph plugins follow consistent branch strategy:
 
 ## Coordinator Behavior
 
-The main agent is a coordinator, not an implementer. Delegate all work to subagents.
+The main Pi/Ralph agent is orchestration-first for context preservation: coordinate, decide, and keep durable state while delegating work-plane jobs to subagents. Use Pi/Ralph subagent orchestration and native task tools as appropriate; do not collapse delegated work back into the coordinator.
 
 ### Coordinator Responsibilities
 
 1. Parse user input and determine intent
-2. Read state files for context
-3. Delegate work to subagents via Task tool
-4. Report results to user
+2. Read and update Ralph control-plane state files
+3. Own phase transitions, approval gates, retry/block decisions, and task advancement
+4. Mirror tasks into native Pi task UI when required
+5. Delegate work-plane jobs to subagents via Pi/Ralph subagent orchestration and native task tools as appropriate
+6. Report results to user
+
+### Control Plane vs Work Plane
+
+- **Control plane (extension/coordinator):** slash-command flow, `.ralph-state.json`, progress/state finalization, approval gates, native task mirroring, task status changes, retries, blockers, and `ALL_TASKS_COMPLETE` decisions.
+- **Work plane (subagents):** inspect, research, artifact generation, implementation, verification, refactoring, and evidence collection for a scoped phase or task.
+
+### Subagent Handoff Contract
+
+Subagents should return a compact handoff with: `Status`, `Files inspected`, `Files changed`, `Verification`, `Blockers`, and `Next`.
 
 ### Do Not
 

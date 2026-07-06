@@ -378,6 +378,31 @@ export type ImplementationReviewCheckpointFlags = {
 
 export type ImplementationTaskModificationType = "SPLIT_TASK" | "ADD_PREREQUISITE" | "ADD_FOLLOWUP";
 
+export type ImplementationTaskModificationFieldKey = "do" | "files" | "done when" | "verify" | "commit";
+
+export type ImplementationTaskModificationDraft = {
+	taskNumber?: string;
+	title?: string;
+	fields: Partial<Record<ImplementationTaskModificationFieldKey, string>>;
+};
+
+export type NormalizeImplementationTaskModificationProposalsInput = {
+	type: ImplementationTaskModificationType;
+	originalTaskId: string;
+	reasoning: string;
+	proposedTasks: readonly unknown[];
+	existingTaskIds?: ReadonlySet<string>;
+	maxModificationDepth?: number;
+	fallbackFiles?: string | null;
+	fallbackVerify?: string | null;
+};
+
+export type CreateImplementationCanonicalTaskBlockInput = {
+	taskNumber: string;
+	title: string;
+	fields: Record<ImplementationTaskModificationFieldKey, string>;
+};
+
 export type ImplementationTaskModificationRequest = {
 	type: ImplementationTaskModificationType;
 	originalTaskId: string;
@@ -1484,6 +1509,252 @@ export function isImplementationRedTask(task?: ImplementationCompletionTaskLike 
 	return /\[RED\]/i.test(`${task.rawTitle ?? ""}\n${task.subject ?? ""}`);
 }
 
+const IMPLEMENTATION_TASK_MODIFICATION_REQUIRED_FIELDS: readonly Array<{
+	key: ImplementationTaskModificationFieldKey;
+	label: string;
+}> = [
+	{ key: "do", label: "Do" },
+	{ key: "files", label: "Files" },
+	{ key: "done when", label: "Done when" },
+	{ key: "verify", label: "Verify" },
+	{ key: "commit", label: "Commit" },
+] as const;
+
+function implementationTaskModificationFieldName(candidate: string): ImplementationTaskModificationFieldKey | null {
+	const normalized = candidate.toLowerCase().replace(/\*/g, "").replace(/\s+/g, " ").trim();
+	if (normalized === "do" || normalized === "steps" || normalized === "actions" || normalized === "work") return "do";
+	if (normalized === "files" || normalized === "paths" || normalized === "files changed" || normalized === "file") return "files";
+	if (normalized === "done when" || normalized === "donewhen" || normalized === "acceptance" || normalized === "acceptance criteria" || normalized === "exit criteria") return "done when";
+	if (normalized === "verify" || normalized === "verification" || normalized === "test" || normalized === "tests") return "verify";
+	if (normalized === "commit" || normalized === "commit message" || normalized === "commit_message") return "commit";
+	return null;
+}
+
+function normalizeImplementationTaskMutationText(value: unknown): string {
+	if (Array.isArray(value)) {
+		return value
+			.map((entry) => normalizeImplementationTaskMutationText(entry))
+			.filter(Boolean)
+			.join("\n")
+			.trim();
+	}
+	if (typeof value === "string") return value.replace(/\r\n/g, "\n").trim();
+	if (typeof value === "number" || typeof value === "boolean") return String(value).trim();
+	return "";
+}
+
+function normalizeImplementationTaskMutationInline(value: unknown): string {
+	return normalizeImplementationWhitespace(normalizeImplementationTaskMutationText(value));
+}
+
+function parseImplementationStructuredTaskMutation(value: unknown): ImplementationTaskModificationDraft | null {
+	if (!isRecord(value) || typeof value === "string") return null;
+
+	const fields: Partial<Record<ImplementationTaskModificationFieldKey, string>> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		const mapped = implementationTaskModificationFieldName(key);
+		if (!mapped) continue;
+		const normalizedValue = mapped === "do"
+			? normalizeImplementationTaskMutationText(entry)
+			: normalizeImplementationTaskMutationInline(entry);
+		if (normalizedValue) fields[mapped] = normalizedValue;
+	}
+
+	const title = normalizeImplementationTaskMutationInline(
+		value.title
+			?? value.subject
+			?? value.name
+			?? value.task
+			?? value.summary,
+	);
+	const taskNumber = normalizeImplementationTaskMutationInline(
+		value.id
+			?? value.taskId
+			?? value.taskNumber
+			?? value.number,
+	);
+	if (!taskNumber && !title && Object.keys(fields).length === 0) return null;
+	return {
+		taskNumber: taskNumber || undefined,
+		title: title || undefined,
+		fields,
+	};
+}
+
+function parseImplementationLooseTaskMutationBlock(block: string): ImplementationTaskModificationDraft | null {
+	const normalizedBlock = block.replace(/\r\n/g, "\n").trim();
+	if (!normalizedBlock) return null;
+
+	const lines = normalizedBlock.split("\n");
+	const firstLine = lines[0]?.trim() ?? "";
+	const checkboxMatch = firstLine.match(/^\s*-\s*\[([ xX])\]\s+(.+?)\s*$/);
+	const titleSource = checkboxMatch?.[2]?.trim() ?? firstLine.replace(/^[-*]\s+/, "").trim();
+	const titleMatch = titleSource.match(/^(\d+(?:\.\d+)*\.?)\s+(.+)$/);
+	const taskNumber = titleMatch?.[1]?.replace(/\.$/, "").trim();
+	const title = normalizeImplementationWhitespace(titleMatch?.[2] ?? titleSource);
+	const bodyLines = checkboxMatch ? lines.slice(1) : lines.slice(1);
+	const fields: Partial<Record<ImplementationTaskModificationFieldKey, string>> = {};
+	let currentField: ImplementationTaskModificationFieldKey | null = null;
+	const doFallback: string[] = [];
+
+	for (const line of bodyLines) {
+		const fieldMatch = line.match(/^\s*(?:-\s*)?(?:\*\*)?([^:*]+?)(?:\*\*)?:\s*(.*)$/);
+		if (fieldMatch) {
+			const mappedField = implementationTaskModificationFieldName(fieldMatch[1] ?? "");
+			if (mappedField) {
+				currentField = mappedField;
+				const normalizedValue = mappedField === "do"
+					? normalizeImplementationTaskMutationText(fieldMatch[2] ?? "")
+					: normalizeImplementationTaskMutationInline(fieldMatch[2] ?? "");
+				fields[mappedField] = normalizedValue;
+				continue;
+			}
+		}
+
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		if (currentField) {
+			const existing = fields[currentField] ?? "";
+			const appended = currentField === "do"
+				? [existing, trimmed].filter(Boolean).join("\n")
+				: [existing, trimmed].filter(Boolean).join(" ");
+			fields[currentField] = currentField === "do"
+				? appended.trim()
+				: normalizeImplementationWhitespace(appended);
+			continue;
+		}
+		doFallback.push(trimmed);
+	}
+
+	if (!fields.do && doFallback.length > 0) fields.do = doFallback.join("\n").trim();
+	if (!taskNumber && !title && Object.keys(fields).length === 0) return null;
+	return {
+		taskNumber: taskNumber || undefined,
+		title: title || undefined,
+		fields,
+	};
+}
+
+function formatImplementationTaskMutationDoField(value: string): string {
+	const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	if (lines.length === 0) return "    1. Clarify missing implementation steps.";
+	return lines.map((line, index) => {
+		const cleaned = line.replace(/^[-*]\s+/, "").trim();
+		const numberedMatch = cleaned.match(/^\d+\.\s+(.+)$/);
+		return `    ${index + 1}. ${(numberedMatch?.[1] ?? cleaned).trim()}`;
+	}).join("\n");
+}
+
+function createImplementationGeneratedTaskMutationId(
+	originalTaskId: string,
+	usedTaskIds: ReadonlySet<string>,
+	maxModificationDepth?: number,
+): string {
+	const normalizedOriginalTaskId = normalizeImplementationField(originalTaskId);
+	if (!/^\d+(?:\.\d+)*$/.test(normalizedOriginalTaskId)) {
+		throw new Error(`TASK_MODIFICATION_REQUEST cannot auto-generate a numeric task id from ${originalTaskId}.`);
+	}
+	const firstCandidate = `${normalizedOriginalTaskId}.1`;
+	if (typeof maxModificationDepth === "number" && taskMutationDepth(firstCandidate) > maxModificationDepth) {
+		throw new Error(`Proposed task id ${firstCandidate} exceeds max modification depth ${maxModificationDepth}.`);
+	}
+	for (let candidateIndex = 1; candidateIndex <= 999; candidateIndex += 1) {
+		const candidate = `${normalizedOriginalTaskId}.${candidateIndex}`;
+		if (!usedTaskIds.has(candidate)) return candidate;
+	}
+	throw new Error(`TASK_MODIFICATION_REQUEST could not allocate a unique task id under ${normalizedOriginalTaskId}.`);
+}
+
+function defaultImplementationTaskMutationField(
+	fieldKey: ImplementationTaskModificationFieldKey,
+	input: {
+		taskNumber: string;
+		originalTaskId: string;
+		reasoning: string;
+		type: ImplementationTaskModificationType;
+		fallbackFiles?: string | null;
+		fallbackVerify?: string | null;
+		title: string;
+	},
+): string {
+	switch (fieldKey) {
+		case "do":
+			return `Clarify and execute the work needed for ${input.taskNumber}: ${input.title}. ${input.reasoning}`.trim();
+		case "files":
+			return normalizeImplementationField(input.fallbackFiles) || "None specified; discover during execution.";
+		case "done when":
+			if (input.type === "ADD_PREREQUISITE") return `${input.taskNumber} is completed and unblocks ${input.originalTaskId}.`;
+			if (input.type === "ADD_FOLLOWUP") return `${input.taskNumber} follow-up work is completed after ${input.originalTaskId}.`;
+			return `${input.taskNumber} is completed and narrows or splits the scope of ${input.originalTaskId}.`;
+		case "verify":
+			return normalizeImplementationField(input.fallbackVerify) || `echo "MANUAL_VERIFY_REQUIRED ${input.taskNumber}"`;
+		case "commit":
+			return `chore(spec): complete ${input.taskNumber}`;
+		default:
+			return "";
+	}
+}
+
+export function createImplementationCanonicalTaskBlock(input: CreateImplementationCanonicalTaskBlockInput): string {
+	const commitValue = normalizeImplementationField(input.fields.commit);
+	const commitField = commitValue.startsWith("`") && commitValue.endsWith("`")
+		? commitValue
+		: `\`${commitValue}\``;
+	return [
+		`- [ ] ${input.taskNumber} ${normalizeImplementationWhitespace(input.title)}`,
+		"  - **Do**:",
+		formatImplementationTaskMutationDoField(input.fields.do),
+		`  - **Files**: ${normalizeImplementationWhitespace(input.fields.files)}`,
+		`  - **Done when**: ${normalizeImplementationWhitespace(input.fields["done when"])}`,
+		`  - **Verify**: ${normalizeImplementationWhitespace(input.fields.verify)}`,
+		`  - **Commit**: ${commitField}`,
+	].join("\n");
+}
+
+export function normalizeImplementationTaskModificationProposals(
+	input: NormalizeImplementationTaskModificationProposalsInput,
+): string[] {
+	const proposals = Array.isArray(input.proposedTasks) ? input.proposedTasks : [];
+	const usedTaskIds = new Set<string>(input.existingTaskIds ? [...input.existingTaskIds] : []);
+	return proposals.map((proposal, index) => {
+		const draft = parseImplementationStructuredTaskMutation(proposal)
+			?? (typeof proposal === "string" ? parseImplementationLooseTaskMutationBlock(proposal) : null)
+			?? (typeof proposal === "string" && proposal.trim()
+				? { title: normalizeImplementationWhitespace(proposal), fields: {} }
+				: null);
+		if (!draft) throw new Error(`Proposed task ${index + 1} is not a supported task block or structured task object.`);
+
+		const requestedTaskNumber = normalizeImplementationField(draft.taskNumber);
+		const taskNumber = requestedTaskNumber
+			&& !usedTaskIds.has(requestedTaskNumber)
+			&& (typeof input.maxModificationDepth !== "number" || taskMutationDepth(requestedTaskNumber) <= input.maxModificationDepth)
+				? requestedTaskNumber
+				: createImplementationGeneratedTaskMutationId(input.originalTaskId, usedTaskIds, input.maxModificationDepth);
+		usedTaskIds.add(taskNumber);
+		const title = normalizeImplementationWhitespace(draft.title ?? `Recovered task for ${input.originalTaskId}`);
+		const normalizedFields = IMPLEMENTATION_TASK_MODIFICATION_REQUIRED_FIELDS.reduce<Record<ImplementationTaskModificationFieldKey, string>>((current, field) => {
+			const existingValue = field.key === "do"
+				? normalizeImplementationTaskMutationText(draft.fields[field.key])
+				: normalizeImplementationTaskMutationInline(draft.fields[field.key]);
+			current[field.key] = existingValue || defaultImplementationTaskMutationField(field.key, {
+				taskNumber,
+				originalTaskId: input.originalTaskId,
+				reasoning: input.reasoning,
+				type: input.type,
+				fallbackFiles: input.fallbackFiles,
+				fallbackVerify: input.fallbackVerify,
+				title,
+			});
+			return current;
+		}, {} as Record<ImplementationTaskModificationFieldKey, string>);
+		return createImplementationCanonicalTaskBlock({
+			taskNumber,
+			title,
+			fields: normalizedFields,
+		});
+	});
+}
+
 export function validateImplementationTaskModificationRequestPayload(parsed: unknown): ImplementationTaskModificationRequest {
 	if (!isRecord(parsed)) throw new Error("TASK_MODIFICATION_REQUEST payload must be a JSON object.");
 
@@ -1504,7 +1775,12 @@ export function validateImplementationTaskModificationRequestPayload(parsed: unk
 	if (!reasoning) throw new Error("TASK_MODIFICATION_REQUEST must include reasoning.");
 
 	const proposedTasks = Array.isArray(parsed.proposedTasks)
-		? parsed.proposedTasks.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean)
+		? normalizeImplementationTaskModificationProposals({
+			type: typeValue,
+			originalTaskId,
+			reasoning,
+			proposedTasks: parsed.proposedTasks,
+		})
 		: [];
 	if (proposedTasks.length === 0) throw new Error("TASK_MODIFICATION_REQUEST must include at least one proposed task block.");
 	if ((typeValue === "ADD_PREREQUISITE" || typeValue === "ADD_FOLLOWUP") && proposedTasks.length !== 1) {
@@ -2165,9 +2441,8 @@ export function rewriteImplementationProgressTruthfully(
 export const syncImplementationProgressAfterCompletion = rewriteImplementationProgressTruthfully;
 
 export function deleteImplementationStateFile(spec: SpecStateReference, options: RalphPathOptions = {}): boolean {
-	const statePath = getRalphStatePath(spec, options);
-	if (!existsSync(statePath)) return false;
-	unlinkSync(statePath);
+	if (!existsSync(getRalphStatePath(spec, options))) return false;
+	unlinkSync(getRalphStatePath(spec, options));
 	return true;
 }
 

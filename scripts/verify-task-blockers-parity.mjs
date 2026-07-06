@@ -12,8 +12,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 
 const root = process.cwd();
 const requestedCase = parseCaseArg(process.argv.slice(2));
@@ -46,6 +46,7 @@ const cases = new Map([
   ['red-pass-evidence-contract', verifyRedPassEvidenceContract],
   ['executor-topology-contract', verifyExecutorTopologyContract],
   ['planner-template-contract', verifyPlannerTemplateContract],
+  ['stable-helper-exports', verifyStableHelperExports],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
 const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
@@ -169,7 +170,7 @@ async function verifyTopologyHelperContract() {
 }
 
 async function verifyTopologyClassificationFixtures() {
-  const helper = loadTaskCompletionHelper();
+  const helper = await loadTaskCompletionHelper();
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-topology-'));
 
   try {
@@ -259,7 +260,7 @@ async function verifyTopologyInputNormalization() {
     for (const testCase of inputs) {
       testCase.input.filesDirective = testCase.filesDirective;
       materializeWorkspaceInput(testCase.input);
-      const helper = loadTaskCompletionHelper();
+      const helper = await loadTaskCompletionHelper();
       const report = helper.analyzeTaskWorkspace(testCase.input);
       const taskFileEntries = (report.entries ?? [])
         .filter((entry) => entry.kind === 'task_file')
@@ -287,7 +288,7 @@ async function verifyTopologyInputNormalization() {
     };
 
     try {
-      const helper = loadTaskCompletionHelper();
+      const helper = await loadTaskCompletionHelper();
       helper.analyzeTaskWorkspace(memoizedInput);
     } finally {
       childProcess.spawnSync = originalSpawnSync;
@@ -302,7 +303,7 @@ async function verifyTopologyInputNormalization() {
 }
 
 async function verifyCommitModeDerivation() {
-  const helper = loadTaskCompletionHelper();
+  const helper = await loadTaskCompletionHelper();
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-commit-mode-'));
 
   try {
@@ -373,34 +374,40 @@ async function verifyCommitModeDerivation() {
 }
 
 async function verifyCoordinatorPreflightContract() {
-  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
-  const indexSource = readFileSync(indexPath, 'utf8');
+  const helper = await loadTaskCompletionHelper();
+  const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-topology-'));
 
-  if (!/from\s+["']\.\/task-completion\.ts["']/.test(indexSource)) {
-    expectedFail('coordinator must import task-completion helpers before executor dispatch.');
-  }
+  try {
+    const repoRoot = createGitFixture(join(fixtureRoot, 'single-repo'));
+    const input = createWorkspaceInput({
+      specDir: join(repoRoot, 'specs', 'preflight'),
+      taskFiles: [join(repoRoot, 'src', 'task.ts')],
+      commitDirective: '`feat(task-blockers): preflight fixture`',
+    });
+    materializeWorkspaceInput(input);
 
-  if (!/analyzeTaskWorkspace\(/.test(indexSource)) {
-    expectedFail('coordinator must compute a workspace report before dispatching the executor.');
-  }
+    const report = helper.analyzeTaskWorkspace(input);
+    if (!Array.isArray(report.promptGuidance) || report.promptGuidance.length === 0) {
+      expectedFail('task-completion helper must return prompt guidance for topology preflight.');
+    }
 
-  if (!/formatTaskWorkspaceReport\(/.test(indexSource)) {
-    expectedFail('coordinator must format the workspace report for prompt-visible preflight guidance.');
-  }
+    const promptGuidance = report.promptGuidance.join('\n');
+    if (!/preflight workspace topology/i.test(promptGuidance) || !/single_repo/i.test(promptGuidance) || !/commit-required/i.test(promptGuidance)) {
+      expectedFail('topology preflight guidance must mention preflight, single_repo, and commit-required behavior.');
+    }
 
-  const promptSection = indexSource.match(/function buildImplementationPrompt\([\s\S]*?\n}\n\nfunction subagentCompletionOutput/);
-  if (!promptSection || !/topology/i.test(promptSection[0]) || !/single_repo/i.test(promptSection[0]) || !/commit-required/i.test(promptSection[0])) {
-    expectedFail('executor prompt must mention topology preflight and preserve single_repo commit-required behavior.');
-  }
-
-  const executionSection = indexSource.match(/const definition = implementationSubagentDefinition\(task\);[\s\S]*?const prompt = buildImplementationPrompt\(task, definition, spec, state, options\);/);
-  if (!executionSection || !/analyzeTaskWorkspace/.test(executionSection[0])) {
-    expectedFail('coordinator must compute workspace topology in the execution flow before building the executor prompt.');
+    const formattedReport = helper.formatTaskWorkspaceReport(report);
+    if (!/topology=single_repo/.test(formattedReport) || !/commitMode=required/.test(formattedReport)) {
+      expectedFail('formatted workspace report must carry single_repo topology and commit-required guidance for prompt reuse.');
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
   }
 }
 
 async function verifyRelaxedCompletionValidationFixtures() {
-  const helper = loadTaskCompletionHelper();
+  const helper = await loadTaskCompletionHelper();
+  const implementationHelper = await loadImplementationLoopHelper();
   const fixtureRoot = mkdtempSync(join(tmpdir(), 'task-blockers-relaxed-completion-'));
 
   try {
@@ -409,6 +416,16 @@ async function verifyRelaxedCompletionValidationFixtures() {
     const repoPlusNonRepo = createGitFixture(join(fixtureRoot, 'repo-plus-nonrepo', 'repo'));
     const noRepoRoot = join(fixtureRoot, 'no-repo');
     mkdirSync(noRepoRoot, { recursive: true });
+
+    const assessTaskCompletionOutput = helper.analyzeTaskWorkspace.assessTaskCompletionOutput;
+    if (typeof assessTaskCompletionOutput !== 'function') {
+      expectedFail('task-completion helper must expose topology-aware completion assessment for relaxed workspace fixtures.');
+    }
+
+    const validateImplementationCompletionBridge = implementationHelper?.validateImplementationCompletionBridge;
+    if (typeof validateImplementationCompletionBridge !== 'function') {
+      expectedFail('implementation-loop.ts must export validateImplementationCompletionBridge for relaxed completion fixtures.');
+    }
 
     const casesToVerify = [
       {
@@ -448,16 +465,35 @@ async function verifyRelaxedCompletionValidationFixtures() {
       const report = helper.analyzeTaskWorkspace(testCase.input);
       assertTopologyCase(testCase, report);
       assertCommitModeCase({ ...testCase, expectedCommitMode: 'topology_relaxed' }, report);
-    }
 
-    const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
-    if (!/commit_reason/i.test(indexSource)) {
-      expectedFail('completion validation must parse `commit_reason` so multi_repo, repo_plus_nonrepo, and no_repo tasks can finish with `commit: none` plus topology evidence.');
-    }
+      const validOutput = `TASK_COMPLETE\nevidence: topology-relaxed fixture\ncommit: none\ncommit_reason: ${testCase.expectedCommitReason}`;
+      const validAssessment = assessTaskCompletionOutput(validOutput, report);
+      if (!validAssessment?.ok) {
+        expectedFail(`relaxed completion fixture ${testCase.name} must accept commit: none with commit_reason: ${testCase.expectedCommitReason}.`);
+      }
 
-    const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
-    if (!validationSection || !/workspaceReport|task-completion|topology_relaxed|commitReason/.test(validationSection[0])) {
-      expectedFail('completion validation must reuse the workspace topology report when deciding whether non-single_repo `commit: none` completions are valid.');
+      const bridgeValidation = validateImplementationCompletionBridge({
+        output: validOutput,
+        signal: 'TASK_COMPLETE',
+        task: { rawTitle: testCase.name, subject: testCase.name },
+        assessCompletionOutput: (output) => assessTaskCompletionOutput(output, report),
+        detectFailureReason: () => 'generic verification noise',
+      });
+      if (!bridgeValidation.ok) {
+        expectedFail(`implementation completion bridge must accept topology-relaxed output for ${testCase.name}.`);
+      }
+
+      const invalidOutput = 'TASK_COMPLETE\nevidence: topology-relaxed fixture\ncommit: none';
+      const invalidValidation = validateImplementationCompletionBridge({
+        output: invalidOutput,
+        signal: 'TASK_COMPLETE',
+        task: { rawTitle: testCase.name, subject: testCase.name },
+        assessCompletionOutput: (output) => assessTaskCompletionOutput(output, report),
+        detectFailureReason: () => 'generic verification noise',
+      });
+      if (invalidValidation.ok || !/commit_reason/i.test(String(invalidValidation.error ?? ''))) {
+        expectedFail(`implementation completion bridge must require commit_reason for topology-relaxed fixture ${testCase.name}.`);
+      }
     }
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true });
@@ -465,55 +501,70 @@ async function verifyRelaxedCompletionValidationFixtures() {
 }
 
 async function verifyTopologyBlockerPriorityContract() {
-  const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
-  const helperSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'task-completion.ts'), 'utf8');
-  const failureReasonSection = indexSource.match(/function detectExplicitFailureReason\([\s\S]*?\n}\n\nfunction extractCompletionEvidence/);
+  const helper = await loadTaskCompletionHelper();
+  const selectTaskCompletionBlocker = helper.analyzeTaskWorkspace.selectTaskCompletionBlocker;
 
-  if (!failureReasonSection) {
-    expectedFail('parity coverage could not locate detectExplicitFailureReason for blocker-priority assertions.');
+  if (typeof selectTaskCompletionBlocker !== 'function') {
+    expectedFail('task-completion helper must expose topology-aware blocker selection for parity fixtures.');
   }
 
-  if (!/TaskCompletionAssessment/.test(helperSource)) {
-    expectedFail('task-completion helper must define TaskCompletionAssessment so topology-aware blocker decisions are testable.');
-  }
+  const blocker = selectTaskCompletionBlocker({
+    topologyBlocker: 'Workspace commit topology multi_repo requires split_repo_workspace evidence.',
+    modificationBlocker: 'task modification blocker',
+    verificationBlocker: 'generic verification noise',
+    fallbackBlocker: 'fallback blocker',
+  });
 
-  if (!/multi_repo|repo_plus_nonrepo|no_repo|topology_relaxed|commit topology|split_repo_workspace/i.test(failureReasonSection[0])) {
-    expectedFail('blocker selection must prefer topology/commit-topology reasons ahead of generic verification noise for non-single_repo failures.');
+  if (!/topology|split_repo_workspace|multi_repo/i.test(String(blocker))) {
+    expectedFail('blocker selection must prefer topology-aware commit blockers ahead of generic verification noise.');
   }
 }
 
 async function verifyRedPassEvidenceContract() {
-  const helperSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'task-completion.ts'), 'utf8');
-  const indexSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'index.ts'), 'utf8');
-  const evidenceSection = indexSource.match(/function extractCompletionEvidence\([\s\S]*?\n}\n\nfunction validateSubagentCompletion/);
-  const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
+  const helper = await loadTaskCompletionHelper();
+  const implementationHelper = await loadImplementationLoopHelper();
+  const hasExpectedFailureProof = helper.analyzeTaskWorkspace.hasExpectedFailureProof;
+  const validateImplementationCompletionBridge = implementationHelper?.validateImplementationCompletionBridge;
 
-  if (!evidenceSection || !validationSection) {
-    expectedFail('parity coverage could not locate completion-evidence parsing for RED_PASS assertions.');
+  if (typeof hasExpectedFailureProof !== 'function') {
+    expectedFail('task-completion helper must expose keyed expected-failure proof detection for RED_PASS fixtures.');
   }
 
-  if (!helperSource.includes("const KEYED_COMPLETION_EVIDENCE_PATTERN = /^(?:verify|verification|evidence):\\s*(.+)$/i;")) {
-    expectedFail('task-completion helper must centralize keyed `verify:`/`verification:`/`evidence:` parsing behind one stable completion-evidence pattern.');
+  if (typeof validateImplementationCompletionBridge !== 'function') {
+    expectedFail('implementation-loop.ts must export validateImplementationCompletionBridge for RED_PASS fixtures.');
   }
 
-  if (!/function\s+extractKeyedCompletionEvidence\(/.test(helperSource) || !/function\s+collectKeyedCompletionEvidence\(/.test(helperSource)) {
-    expectedFail('task-completion helper must expose one internal extraction path for keyed completion evidence collection.');
+  if (!hasExpectedFailureProof('verify: RED_PASS')) {
+    expectedFail('keyed RED_PASS proof must be detected from verify: lines.');
   }
 
-  if (!/parseTaskCompletionFields\([\s\S]*extractKeyedCompletionEvidence/.test(helperSource) || !/hasExpectedFailureProof\([\s\S]*collectKeyedCompletionEvidence/.test(helperSource)) {
-    expectedFail('task-completion helper must reuse the centralized keyed-evidence extractor for both completion-field parsing and RED_PASS validation.');
+  if (hasExpectedFailureProof('FAIL verifier output without keyed proof')) {
+    expectedFail('raw failing output must not count as RED_PASS proof without a keyed evidence line.');
   }
 
-  if (!/RED_PASS/.test(indexSource)) {
-    expectedFail('completion validation must explicitly recognize keyed `verify: RED_PASS` proof for `[RED]` TASK_COMPLETE outputs.');
+  const redTask = { rawTitle: '6.1 [RED] fixture', subject: 'red fixture' };
+  const validResult = validateImplementationCompletionBridge({
+    output: 'TASK_COMPLETE\nverify: RED_PASS',
+    signal: 'TASK_COMPLETE',
+    task: redTask,
+    hasExpectedFailureProof,
+    assessCompletionOutput: () => ({ ok: true }),
+    detectFailureReason: () => 'missing RED_PASS proof',
+  });
+  if (!validResult.ok) {
+    expectedFail('RED tasks must accept TASK_COMPLETE outputs with keyed verify: RED_PASS proof.');
   }
 
-  if (!/\[RED\]|expected-failure|red[-_ ]pass/i.test(validationSection[0])) {
-    expectedFail('completion validation must branch on `[RED]` task context so expected failures only count when keyed proof is present.');
-  }
-
-  if (!/verify\|verification\|evidence/.test(evidenceSection[0]) || !/RED_PASS/.test(evidenceSection[0])) {
-    expectedFail('keyed evidence parsing must require `verify:`/`verification:`/`evidence:` lines to carry `RED_PASS` instead of accepting raw failing output.');
+  const invalidResult = validateImplementationCompletionBridge({
+    output: 'TASK_COMPLETE\nFAIL without keyed proof',
+    signal: 'TASK_COMPLETE',
+    task: redTask,
+    hasExpectedFailureProof,
+    assessCompletionOutput: () => ({ ok: true }),
+    detectFailureReason: () => 'missing RED_PASS proof',
+  });
+  if (invalidResult.ok || !/RED_PASS/i.test(String(invalidResult.error ?? ''))) {
+    expectedFail('RED tasks must reject TASK_COMPLETE outputs that omit keyed RED_PASS proof.');
   }
 }
 
@@ -543,6 +594,44 @@ async function verifyPlannerTemplateContract() {
     surfaceName: 'templates/tasks.md',
     source: tasksTemplateSource,
   });
+}
+
+async function verifyStableHelperExports() {
+  const helperSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'task-completion.ts'), 'utf8');
+  const implementationHelperSource = readFileSync(join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts'), 'utf8');
+  const verifierSource = readFileSync(join(root, 'scripts', 'verify-task-blockers-parity.mjs'), 'utf8');
+
+  const requiredTaskCompletionExports = [
+    /export function analyzeTaskWorkspace\(/,
+    /export function classifyTaskWorkspace\(/,
+    /export function formatTaskWorkspaceReport\(/,
+    /export function normalizeVerificationAgentOutputEnvelope\(/,
+    /export function normalizeQaVerificationResultEnvelope\(/,
+    /export function normalizePackageScriptOutputEnvelope\(/,
+    /export function normalizeNestedVerifierResultEnvelope\(/,
+  ];
+  if (requiredTaskCompletionExports.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('task-completion.ts must expose stable helper exports for topology, evidence, and verification-envelope contract fixtures.');
+  }
+
+  const requiredImplementationExports = [
+    /export function createImplementationCompletionBridgeInput\(/,
+    /export function validateImplementationCompletionBridge\(/,
+    /export function createImplementationVerificationDecision\(/,
+  ];
+  if (requiredImplementationExports.some((pattern) => !pattern.test(implementationHelperSource))) {
+    expectedFail('implementation-loop.ts must expose stable completion and verification decision bridges for task-blocker parity fixtures.');
+  }
+
+  const brittleVerifierPatterns = [
+    /readFileSync\(join\(root, 'extensions', 'ralph-specum', 'index\.ts'\), 'utf8'\)/,
+    /indexSource\.match\(/,
+    /coordinatorSource\.match\(/,
+  ];
+  const stillCoupled = brittleVerifierPatterns.filter((pattern) => pattern.test(verifierSource));
+  if (stillCoupled.length > 0) {
+    expectedFail('task-blockers verifier still depends on coordinator source text layout instead of exercising stable helper exports and behavior fixtures.');
+  }
 }
 
 async function verifyAcceptanceChecklist() {
@@ -664,33 +753,39 @@ function assertTemplateSurfaceContract({ surfaceName, source }) {
   }
 }
 
-function loadTaskCompletionHelper() {
-  const helperPath = join(root, 'extensions', 'ralph-specum', 'task-completion.ts');
-  const helperSource = readFileSync(helperPath, 'utf8');
-  const executableSource = transpileTaskCompletionSource(helperSource);
-  const context = {
-    module: { exports: {} },
-    exports: {},
-    require: createRequire(import.meta.url),
-  };
+let taskCompletionHelperPromise;
+let implementationLoopHelperPromise;
 
-  vm.runInNewContext(executableSource, context, { filename: helperPath });
-  return context.module.exports;
+async function loadTaskCompletionHelper() {
+  taskCompletionHelperPromise ??= loadRuntimeTsModule('extensions/ralph-specum/task-completion.ts');
+  return taskCompletionHelperPromise;
 }
 
-function transpileTaskCompletionSource(source) {
-  return source
-    .replace(/import\s+\{([^}]+)\}\s+from\s+'([^']+)';/g, 'const {$1} = require("$2");')
-    .replace(/export\s+type\s+[\s\S]*?;\n/g, '')
-    .replace(/export\s+interface\s+[\s\S]*?\n}\n/g, '')
-    .replace(/export\s+function\s+analyzeTaskWorkspace\(([^)]*)\)\s*:\s*TaskWorkspaceReport\s*{/m, 'function analyzeTaskWorkspace($1) {')
-    .replace(/export\s+function\s+classifyTaskWorkspace\(([^)]*)\)\s*:\s*TaskTopology\s*{/m, 'function classifyTaskWorkspace($1) {')
-    .replace(/export\s+function\s+formatTaskWorkspaceReport\(([^)]*)\)\s*:\s*string\s*{/m, 'function formatTaskWorkspaceReport($1) {')
-    .replace(/report:\s*TaskWorkspaceReport/g, 'report')
-    .replace(/input:\s*TaskWorkspaceInput\s*=\s*{}/g, 'input = {}')
-    .replace(/entries:\s*TaskWorkspaceEntry\[\]\s*=\s*\[\]/g, 'entries = []')
-    .replace(/\(repoRoot\):\s*repoRoot is string\s*=>\s*Boolean\(repoRoot\)/g, '(repoRoot) => Boolean(repoRoot)')
-    .concat('\nmodule.exports = { analyzeTaskWorkspace, classifyTaskWorkspace, formatTaskWorkspaceReport };\n');
+async function loadImplementationLoopHelper() {
+  implementationLoopHelperPromise ??= loadRuntimeTsModule('extensions/ralph-specum/implementation-loop.ts');
+  return implementationLoopHelperPromise;
+}
+
+async function loadRuntimeTsModule(rootRelativePath) {
+  const modulePath = join(root, rootRelativePath);
+  const moduleUrl = pathToFileURL(modulePath);
+  try {
+    return await import(moduleUrl.href);
+  } catch (error) {
+    if (isExpectedMissingHelperError(error, modulePath)) return null;
+    throw error;
+  }
+}
+
+function isExpectedMissingHelperError(error, modulePath) {
+  const message = String(error?.message ?? '');
+  return (
+    error?.code === 'ERR_MODULE_NOT_FOUND'
+    || error?.code === 'ERR_UNKNOWN_FILE_EXTENSION'
+    || message.includes('Cannot find module')
+    || message.includes('Unknown file extension')
+    || message.includes(modulePath)
+  );
 }
 
 function createGitFixture(dirPath) {

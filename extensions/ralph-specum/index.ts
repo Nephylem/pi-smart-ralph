@@ -95,6 +95,7 @@ import {
 	createImplementationReviewCheckpoint,
 	createImplementationStateDefaults,
 	createImplementationStatePatch,
+	createImplementationTaskMutationRemapPatch,
 	describeImplementationOutstandingCompletionWork,
 	formatImplementationFinalizerIndexFailureOutput,
 	formatImplementationFinalizerSuccessOutput,
@@ -116,10 +117,12 @@ import {
 	latestImplementationReviewStatus,
 	mergeImplementationBatchTaskEvidence,
 	nextImplementationReviewIteration,
+	normalizeImplementationTaskModificationProposals,
 	parseImplementationTaskModification,
 	recordImplementationReviewEvidence,
 	recordImplementationTaskEvidence,
 	validateImplementationExecutionState,
+	validateImplementationTaskMutation,
 	validateImplementationTaskCompletion,
 	type ImplementationCompletionSignal,
 	type ImplementationCompletionValidation,
@@ -5141,8 +5144,10 @@ function buildPhasePrompt(
 		`- command: /${definition.commandName}`,
 		"- Write only files inside basePath unless inspecting the codebase.",
 		"- Do not edit Smart Ralph package/runtime files unless explicitly listed in the spec.",
-		"- Do not proceed to the next Ralph phase.",
-		"- The coordinator will validate the artifact, ask for normal-mode approval, and set final awaitingApproval state.",
+		"- Work-plane only: generate or revise the requested phase artifact; do not manage Ralph control-plane state.",
+		"- Do not proceed to the next Ralph phase or make approval decisions.",
+		"- The coordinator owns phase transitions, approval gates, .ralph-state.json finalization, and task mirroring.",
+		"- Return artifact status, evidence, blockers, and next-step signals for the coordinator.",
 		"",
 		...phaseSpecificInstructions(definition, state, parsed),
 		...phaseReviewInstructions(reviewContext),
@@ -6388,7 +6393,12 @@ function parseTaskModificationRequest(output: string): TaskModificationRequest |
 	if (!reasoning) throw new Error("TASK_MODIFICATION_REQUEST must include reasoning.");
 
 	const proposedTasks = Array.isArray(parsed.proposedTasks)
-		? parsed.proposedTasks.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean)
+		? normalizeImplementationTaskModificationProposals({
+			type: typeValue,
+			originalTaskId,
+			reasoning,
+			proposedTasks: parsed.proposedTasks,
+		})
 		: [];
 	if (proposedTasks.length === 0) throw new Error("TASK_MODIFICATION_REQUEST must include at least one proposed task block.");
 	if ((typeValue === "ADD_PREREQUISITE" || typeValue === "ADD_FOLLOWUP") && proposedTasks.length !== 1) {
@@ -6486,26 +6496,32 @@ function handleTaskModificationRequest(
 			{ key: "verify", label: "Verify" },
 			{ key: "commit", label: "Commit" },
 		] as const;
-		const proposedParsed = request.proposedTasks.map((block, index) => {
+		const normalizedProposedTasks = normalizeImplementationTaskModificationProposals({
+			type: request.type,
+			originalTaskId: request.originalTaskId,
+			reasoning: request.reasoning,
+			proposedTasks: request.proposedTasks,
+			existingTaskIds,
+			maxModificationDepth,
+			fallbackFiles: task.fields["files"] ?? "",
+			fallbackVerify: task.fields["verify"] ?? "",
+		});
+		const proposedParsed = normalizedProposedTasks.map((block, index) => {
 			const parsedTasks = parseTasksForNativeCards(block.trim());
 			if (parsedTasks.length !== 1) throw new Error(`Proposed task ${index + 1} must be a single checkbox task block.`);
-			const parsedTask = parsedTasks[0];
-			if (parsedTask.status === "completed") throw new Error(`Proposed task ${index + 1} must be unchecked.`);
-			if (!parsedTask.taskNumber) throw new Error(`Proposed task ${index + 1} must start with a numeric task id.`);
-			if (existingTaskIds.has(parsedTask.taskNumber)) throw new Error(`Proposed task id ${parsedTask.taskNumber} already exists in tasks.md.`);
-			if (taskModificationDepth(parsedTask.taskNumber) > maxModificationDepth) {
-				throw new Error(`Proposed task id ${parsedTask.taskNumber} exceeds max modification depth ${maxModificationDepth}.`);
-			}
-			for (const field of requiredFields) {
-				if (!parsedTask.fields[field.key]) throw new Error(`Proposed task ${parsedTask.taskNumber} is missing required field: ${field.label}.`);
-			}
-			return parsedTask;
+			return parsedTasks[0];
 		});
-
-		const proposedTaskIds = proposedParsed.map((entry) => entry.taskNumber ?? entry.stableKey);
-		if (new Set(proposedTaskIds).size !== proposedTaskIds.length) {
-			throw new Error(`TASK_MODIFICATION_REQUEST proposed duplicate task ids: ${proposedTaskIds.join(", ")}.`);
-		}
+		// Helper rejects duplicate ids with `TASK_MODIFICATION_REQUEST proposed duplicate task ids: ...` before any mutation.
+		const { proposedTaskIds } = validateImplementationTaskMutation({
+			request,
+			currentTaskId,
+			priorCount,
+			maxModificationsPerTask,
+			maxModificationDepth,
+			proposedTasks: proposedParsed,
+			requiredFields: requiredFields,
+			existingTaskIds: existingTaskIds,
+		});
 
 		let refreshedTaskData = taskData;
 		let anchorTask = refreshedTaskData.tasks.find((entry) => entry.stableKey === task.stableKey) ?? refreshedTaskData.tasks[task.index];
@@ -6518,7 +6534,7 @@ function handleTaskModificationRequest(
 			if (!anchorTask) throw new Error(`Unable to relocate task ${currentTaskId} after updating completion state.`);
 		}
 
-		insertTaskBlocks(spec, anchorTask, request.proposedTasks.map((block) => block.trim()), request.type === "ADD_PREREQUISITE" ? "before" : "after");
+		insertTaskBlocks(spec, anchorTask, normalizedProposedTasks.map((block) => block.trim()), request.type === "ADD_PREREQUISITE" ? "before" : "after");
 
 		const updatedTasks = readImplementationTasks(spec).tasks;
 		const next = nextImplementationTask(updatedTasks);
@@ -6546,25 +6562,18 @@ function handleTaskModificationRequest(
 				spec,
 				{
 					...nativeTaskMirrorStatePatch(mirror),
-					phase: next.kind === "complete" ? "completed" : "execution",
-					taskIndex: next.kind === "complete" ? updatedTasks.length : next.task.index,
-					totalTasks: updatedTasks.length,
-					taskIteration: 1,
-					globalIteration: (numberField(state, "globalIteration") ?? 1) + 1,
-					blocked: false,
-					validationError: null,
-					activeTaskPendingEvidence: null,
-					modificationMap: modificationStatePatch,
-					maxModificationsPerTask,
-					maxModificationDepth,
-					lastSubagentOutput: truncateForPrompt(output, 6000),
-					lastTaskModification: {
-						type: request.type,
-						originalTaskId: request.originalTaskId,
+					...createImplementationTaskMutationRemapPatch({
+						state,
+						nativeTaskMap: mirror.nativeTaskMap,
+						totalTasks: updatedTasks.length,
+						nextTaskIndex: next.kind === "complete" ? updatedTasks.length : next.task.index,
+						modificationStatePatch,
+						request,
 						proposedTaskIds,
-						reasoning: request.reasoning,
-						appliedAt: new Date().toISOString(),
-					},
+						lastSubagentOutput: truncateForPrompt(output, 6000),
+						maxModificationsPerTask,
+						maxModificationDepth,
+					}),
 				},
 				options,
 			),
@@ -6806,7 +6815,9 @@ function buildImplementationPrompt(
 		`- statePath: ${getRalphStatePath(spec, options)} (read-only; never edit this file)`,
 		"- Write only files required by the task block unless inspection is needed.",
 		"- Do not edit Smart Ralph package/runtime files unless they are explicitly listed in the task.",
+		"- Work-plane only: executor/QA/refactor subagents complete the scoped task and return signals/evidence.",
 		"- Never ask the user; report USER_INPUT_REQUIRED or a blocker instead.",
+		"- The coordinator owns native task status, retry/block decisions, task advancement, and ALL_TASKS_COMPLETE.",
 		"- The coordinator will update native pi-task cards and will not advance without evidence.",
 		...workspaceGuidance,
 		"",

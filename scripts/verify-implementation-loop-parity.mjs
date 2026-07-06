@@ -374,9 +374,9 @@ async function verifyTaskModification() {
   }
 
   const validMutationPatterns = [
-    /modificationMap:\s*modificationStatePatch/,
     /nativeTaskMirrorStatePatch\(mirror\)/,
-    /totalTasks:\s*updatedTasks\.length/,
+    /(?:modificationMap:\s*modificationStatePatch|createImplementationTaskMutationRemapPatch\([\s\S]*modificationStatePatch)/,
+    /(?:totalTasks:\s*updatedTasks\.length|createImplementationTaskMutationRemapPatch\([\s\S]*totalTasks:\s*updatedTasks\.length)/,
   ];
   const missingValidMutationBehavior = validMutationPatterns.filter((pattern) => !pattern.test(handlerSource));
   if (missingValidMutationBehavior.length > 0) {
