@@ -297,6 +297,61 @@ test('ralph-subagents widget renders queued row after subagents:created event', 
   }
 });
 
+test('ralph-subagents widget updates existing row to running after subagents:started event', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+
+    await pi.events.get('session_start')[0]({}, ctx);
+
+    const subagentWidgetInstall = ctx.widgets.find(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    assert.equal(typeof subagentWidgetInstall?.value, 'function');
+
+    const renderRequests = [];
+    const renderer = subagentWidgetInstall.value(
+      {
+        terminal: { columns: 120 },
+        requestRender() { renderRequests.push(Date.now()); },
+      },
+      {
+        fg(_color, text) { return text; },
+        bold(text) { return text; },
+      },
+    );
+
+    pi.emit('subagents:created', {
+      id: 'agent-started-1',
+      type: 'ralph-design',
+      description: 'Design phase agent',
+    });
+    pi.emit('subagents:started', {
+      id: 'agent-started-1',
+      status: 'started',
+    });
+
+    const ralphWidgetRegistrations = ctx.widgets.filter(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    const renderedLines = renderer.render();
+    const renderedText = renderedLines.join('\n');
+
+    assert.ok(renderRequests.length >= 2, 'expected created and started events to request widget renders');
+    assert.equal(ralphWidgetRegistrations.length, 1, 'expected lifecycle updates not to register duplicate widget keys');
+    assert.equal(renderedLines.length, 1, 'expected started lifecycle event to update the existing row in place');
+    assert.match(renderedText, /Design/);
+    assert.match(renderedText, /running|active/i);
+    assert.doesNotMatch(renderedText, /queued|pending/i);
+
+    renderer.dispose?.();
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('phase command handler returns after startup before delegated coordinator work resolves', async () => {
   // BEFORE failure mode: there was no regression proof that /ralph-* command handlers
   // return after startup while coordinator/delegated work remains pending in the background.

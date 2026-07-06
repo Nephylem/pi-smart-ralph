@@ -343,7 +343,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 3.4 [RED] Failing test: `subagents:started` updates row without duplicate widget key
+- [x] 3.4 [RED] Failing test: `subagents:started` updates row without duplicate widget key
   - **Do**:
     1. Emit `subagents:created`, then `subagents:started` for same id.
     2. Assert row changes to running/active state.
