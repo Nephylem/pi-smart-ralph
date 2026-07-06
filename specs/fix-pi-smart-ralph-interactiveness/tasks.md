@@ -600,7 +600,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-12, FR-9_
   - _Design: Existing Patterns phase-scoped native task widget_
 
-- [ ] Q4.2 [VERIFY] Quality check: native task widget scope slice
+- [x] Q4.2 [VERIFY] Quality check: native task widget scope slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -610,7 +610,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 4.7 [RED] Failing test: Smart Ralph never overwrites pi-subagents `agents` widget
+- [x] 4.7 [RED] Failing test: Smart Ralph never overwrites pi-subagents `agents` widget
   - **Do**:
     1. Add smoke test inspecting mocked `setWidget` keys across session/lifecycle updates.
     2. Assert Smart Ralph uses `ralph-subagents` and not `agents`.

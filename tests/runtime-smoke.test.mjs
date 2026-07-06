@@ -254,6 +254,50 @@ test('session_start installs Ralph footer and ralph-subagents widget surfaces', 
   }
 });
 
+test('Smart Ralph custom subagent widget never overwrites pi-subagents agents widget key', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+
+    await pi.events.get('session_start')[0]({}, ctx);
+
+    const subagentWidgetInstall = ctx.widgets.find(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    assert.equal(typeof subagentWidgetInstall?.value, 'function');
+
+    const renderer = subagentWidgetInstall.value(
+      {
+        terminal: { columns: 120 },
+        requestRender() {},
+      },
+      {
+        fg(_color, text) { return text; },
+        bold(text) { return text; },
+      },
+    );
+
+    pi.emit('subagents:created', { id: 'agent-widget-key-1', type: 'ralph-research' });
+    pi.emit('subagents:started', { id: 'agent-widget-key-1', status: 'running' });
+    pi.emit('subagents:completed', { id: 'agent-widget-key-1', status: 'completed' });
+    await pi.events.get('session_shutdown')[0]({}, ctx);
+
+    const widgetKeys = ctx.widgets.filter((entry) => entry.kind === 'widget').map((entry) => entry.key);
+    assert.ok(widgetKeys.includes('ralph-subagents'), 'expected Smart Ralph to install its custom widget key');
+    assert.equal(widgetKeys.includes('agents'), false, 'expected Smart Ralph not to overwrite pi-subagents agents widget');
+    assert.ok(
+      widgetKeys.filter((key) => key === 'ralph-subagents').length >= 3,
+      'expected session and lifecycle custom widget updates to keep using ralph-subagents instead of agents',
+    );
+
+    renderer.dispose?.();
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('ralph-subagents widget renders queued row after subagents:created event', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   try {
