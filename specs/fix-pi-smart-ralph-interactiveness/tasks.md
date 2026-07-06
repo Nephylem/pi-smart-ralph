@@ -286,7 +286,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-5, FR-8, FR-9_
   - _Design: Safe Ralph UI helpers_
 
-- [ ] Q2.3 [VERIFY] Quality check: no-UI fallback slice
+- [x] Q2.3 [VERIFY] Quality check: no-UI fallback slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -298,7 +298,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
 
 ## Phase 3: `ralph-subagents` Lifecycle TDD
 
-- [ ] 3.1 [RED] Failing test: `subagents:created` renders queued row
+- [x] 3.1 [RED] Failing test: `subagents:created` renders queued row
   - **Do**:
     1. Extend test event bus to emit `subagents:created`.
     2. Mount `ralph-subagents` renderer from mocked `setWidget`.

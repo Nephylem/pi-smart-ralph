@@ -24,6 +24,9 @@ function createMockPi() {
       handlers.push(handler);
       events.set(name, handlers);
     },
+    emit(name, payload) {
+      for (const handler of events.get(name) ?? []) handler(payload);
+    },
     async rpcCall(name, payload) {
       rpcCalls.push({ name, payload });
       throw new Error(`mock rpc unavailable: ${name}`);
@@ -246,6 +249,49 @@ test('session_start installs Ralph footer and ralph-subagents widget surfaces', 
       () => pi.events.get('session_start')[0]({}, { cwd: projectRoot, hasUI: true }),
       'expected session_start surface installation to no-op safely when Pi UI methods are unavailable',
     );
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('ralph-subagents widget renders queued row after subagents:created event', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+
+    await pi.events.get('session_start')[0]({}, ctx);
+
+    const subagentWidgetInstall = ctx.widgets.find(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    assert.equal(typeof subagentWidgetInstall?.value, 'function');
+
+    const renderRequests = [];
+    const renderer = subagentWidgetInstall.value(
+      {
+        terminal: { columns: 120 },
+        requestRender() { renderRequests.push(Date.now()); },
+      },
+      {
+        fg(_color, text) { return text; },
+        bold(text) { return text; },
+      },
+    );
+
+    pi.emit('subagents:created', {
+      id: 'agent-queued-1',
+      type: 'ralph-research',
+      description: 'Research phase agent',
+    });
+
+    const renderedLines = renderer.render();
+    assert.ok(renderRequests.length > 0, 'expected created event to request a widget render');
+    assert.match(renderedLines.join('\n'), /Research/);
+    assert.match(renderedLines.join('\n'), /queued|pending/i);
+
+    renderer.dispose?.();
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
