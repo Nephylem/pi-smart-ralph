@@ -187,7 +187,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-3, FR-8, FR-11, AC-2.1, AC-5.2_
   - _Design: Ralph interactive surfaces; Safe Ralph UI helpers_
 
-- [ ] 2.3 [YELLOW] Refactor: consolidate surface installation guards
+- [x] 2.3 [YELLOW] Refactor: consolidate surface installation guards
   - **Do**:
     1. Remove duplicate `ctx.hasUI`/method checks where local helper owns them.
     2. Keep call sites simple and explicit.

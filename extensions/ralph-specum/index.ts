@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionWidgetOptions } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	findSpec,
@@ -1462,8 +1462,9 @@ function formatCoordinatorAnimationStatus(label: string): string {
 }
 
 function setUiStatus(ctx: ExtensionCommandContext, key: RalphUiStatusKey, message?: string): void {
-	if (!ctx.hasUI || typeof ctx.ui.setStatus !== "function") return;
-	ctx.ui.setStatus(key, message);
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.setStatus !== "function") return;
+	ui.setStatus(key, message);
 }
 
 function renderRalphStatus(): void {
@@ -1692,10 +1693,7 @@ function formatFooterMcpBadge(
 }
 
 function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-	const ui = getRalphOptionalUi(ctx);
-	if (typeof ui?.setFooter !== "function") return;
-	ralphFooterState.ctx = ctx;
-	ui.setFooter((tui, theme, footerData) => {
+	const installed = setRalphUiFooter(ctx, (tui, theme, footerData) => {
 		const unsubscribeBranch = footerData.onBranchChange(() => tui.requestRender());
 		const timer = setInterval(() => {
 			if (ralphStatusAnimation.active) tui.requestRender();
@@ -1741,6 +1739,7 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 			},
 		};
 	});
+	if (installed) ralphFooterState.ctx = ctx;
 }
 
 function printJsonOutput(ctx: ExtensionCommandContext, message: string, type: "info" | "warning" = "info"): void {
@@ -1758,13 +1757,35 @@ type TaskCounts = {
 	total: number;
 };
 
-type RalphOptionalUiContext = Omit<ExtensionCommandContext, "ui"> & {
+type RalphOptionalUiContext = {
+	hasUI?: boolean;
 	ui?: Partial<ExtensionCommandContext["ui"]>;
 };
 
-function getRalphOptionalUi(ctx: ExtensionCommandContext): Partial<ExtensionCommandContext["ui"]> | undefined {
+type RalphWidgetFactory = NonNullable<Parameters<ExtensionCommandContext["ui"]["setWidget"]>[1]>;
+type RalphWidgetContent = string[] | RalphWidgetFactory | undefined;
+
+function getRalphOptionalUi(ctx: RalphOptionalUiContext): Partial<ExtensionCommandContext["ui"]> | undefined {
 	if (!ctx.hasUI) return undefined;
-	return (ctx as RalphOptionalUiContext).ui;
+	return ctx.ui;
+}
+
+function setRalphUiFooter(ctx: RalphOptionalUiContext, ...args: Parameters<ExtensionCommandContext["ui"]["setFooter"]>): boolean {
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.setFooter !== "function") return false;
+	ui.setFooter(...args);
+	return true;
+}
+
+function setRalphUiWidget(ctx: RalphOptionalUiContext, key: string, content: RalphWidgetContent, options?: ExtensionWidgetOptions): boolean {
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.setWidget !== "function") return false;
+	if (typeof content === "function") {
+		ui.setWidget(key, content, options);
+	} else {
+		ui.setWidget(key, content, options);
+	}
+	return true;
 }
 
 const NATIVE_TASK_TOOLS = ["TaskCreate", "TaskUpdate", "TaskExecute"] as const;
@@ -2910,17 +2931,16 @@ function statusIcon(status: NativeTaskStatus): string {
 }
 
 function maybeShowNativeTaskStartupWidget(ctx: ExtensionCommandContext, label: string): void {
-	if (!ctx.hasUI || typeof ctx.ui.setWidget !== "function" || !/^(start|tasks|implement)$/.test(label)) return;
-	ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, [
+	if (!/^(start|tasks|implement)$/.test(label)) return;
+	setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, [
 		`● Ralph ${label}: pi-tasks surface ready`,
 		"  ◻ Waiting for tasks.md mirroring or execution updates…",
 	], { placement: "aboveEditor" });
 }
 
 function showMirroredNativeTaskWidget(ctx: ExtensionCommandContext, cards: NativeTaskCard[]): void {
-	if (!ctx.hasUI || typeof ctx.ui.setWidget !== "function") return;
 	if (cards.length === 0) {
-		ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
+		setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
 		return;
 	}
 
@@ -2940,7 +2960,7 @@ function showMirroredNativeTaskWidget(ctx: ExtensionCommandContext, cards: Nativ
 		lines.push(`  ${statusIcon(task.status)} #${task.id} ${label}${blockers}`);
 	}
 	if (cards.length > visibleCards.length) lines.push(`    … and ${cards.length - visibleCards.length} more`);
-	ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, lines, { placement: "aboveEditor" });
+	setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, lines, { placement: "aboveEditor" });
 }
 
 function mirrorTasksToNativeTaskCards(
@@ -4750,10 +4770,8 @@ function formatSubagentWidgetLine(
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-	const ui = getRalphOptionalUi(ctx);
-	if (typeof ui?.setWidget !== "function") return;
 	ralphSubagentWidgetState.tracked.clear();
-	ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
+	setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
 		let hadVisible = false;
 		const request = () => tui.requestRender();
 		const unsubscribeCreated = eventOn(pi.events, "subagents:created", (raw) => {
@@ -10431,13 +10449,9 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		ralphFooterState.ctx = null;
 		ralphFooterState.subagent = null;
 		stopRalphStatusAnimation();
-		if (ctx.hasUI) {
-			if (typeof ctx.ui.setFooter === "function") ctx.ui.setFooter(undefined);
-			if (typeof ctx.ui.setWidget === "function") {
-				ctx.ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, undefined);
-				ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
-			}
-		}
+		setRalphUiFooter(ctx, undefined);
+		setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, undefined);
+		setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
 	});
 
 	pi.on("resources_discover", async () => {
