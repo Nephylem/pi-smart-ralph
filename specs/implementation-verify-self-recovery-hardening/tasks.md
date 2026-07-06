@@ -157,7 +157,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
 
 ## Phase 4: Structured verification result envelopes
 
-- [ ] 4.1 [RED] Failing test: verifier and QA outputs normalize into structured envelopes
+- [x] 4.1 [RED] Failing test: verifier and QA outputs normalize into structured envelopes
   - **Do**:
     1. Add a `verification-envelope` case to `scripts/verify-implementation-loop-parity.mjs`.
     2. Cover pass and fail outputs from verification agents, package scripts, and nested parity scripts.

@@ -35,6 +35,7 @@ const cases = new Map([
   ['verification-recovery-policy', verifyVerificationRecoveryPolicy],
   ['verify-auto-recovery', verifyVerifyAutoRecovery],
   ['shared-surface-preflight', verifySharedSurfacePreflight],
+  ['verification-envelope', verifyVerificationEnvelope],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -985,6 +986,115 @@ async function verifySharedSurfacePreflight() {
   }
   if (preflightCallIndex > firstPackageVerifyIndex) {
     throw new Error('shared-surface preflight invocation appears after package verification commands.');
+  }
+}
+
+async function verifyVerificationEnvelope() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('verification envelope helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const completionPath = join(root, 'extensions', 'ralph-specum', 'task-completion.ts');
+  const completionSource = existsSync(completionPath) ? readFileSync(completionPath, 'utf8') : '';
+  const combinedSource = `${helperSource}\n${completionSource}`;
+
+  const envelopeShapePatterns = [
+    /export (?:interface|type) (?:VerificationResultEnvelope|ImplementationVerificationResultEnvelope)\b[\s\S]*?status[\s\S]*?reasonCode[\s\S]*?category[\s\S]*?failingCommand[\s\S]*?recoverable[\s\S]*?suggestedRecovery[\s\S]*?evidence/s,
+    /status\s*:\s*[\s\S]{0,300}(?:VERIFICATION_PASS|VERIFICATION_FAIL|TASK_COMPLETE|TASK_FAILED)/,
+    /reasonCode\??\s*:/,
+    /category\??\s*:/,
+    /failingCommand\??\s*:/,
+    /recoverable\s*:\s*boolean/,
+    /suggestedRecovery\??\s*:/,
+    /evidence\s*:\s*(?:string\[\]|Array<string>)/,
+  ];
+  if (envelopeShapePatterns.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail('structured verification result envelope does not yet expose status, reasonCode, category, failingCommand, recoverable, suggestedRecovery, and evidence fields.');
+  }
+
+  const normalizerExports = [
+    /export function (?:normalizeImplementationVerificationResultEnvelope|normalizeVerificationResultEnvelope|createImplementationVerificationResultEnvelope)\(/,
+    /export function (?:normalizeImplementationQaResultEnvelope|normalizeQaVerificationResultEnvelope|normalizeVerificationAgentOutputEnvelope)\(/,
+    /export function (?:normalizeImplementationPackageResultEnvelope|normalizePackageVerificationResultEnvelope|normalizePackageScriptOutputEnvelope)\(/,
+    /export function (?:normalizeNestedParityVerificationResultEnvelope|normalizeImplementationParityResultEnvelope|normalizeNestedVerifierResultEnvelope)\(/,
+  ];
+  if (normalizerExports.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail('implementation-loop/task-completion helpers do not yet export normalizers for verification-agent, QA-agent, package-script, and nested parity-script outputs.');
+  }
+
+  const fixtureContracts = [
+    {
+      label: 'verification agent pass output',
+      source: 'VERIFICATION_PASS\nverify: node scripts/verify-implementation-loop-parity.mjs --case shared-surface-preflight\nEvidence: PASS shared-surface-preflight',
+      status: 'VERIFICATION_PASS',
+      reasonCode: 'VERIFY_OK',
+      recoverable: false,
+      evidence: 'PASS shared-surface-preflight',
+    },
+    {
+      label: 'verification agent fail output',
+      source: 'VERIFICATION_FAIL\nreasonCode: VERIFY_SHARED_CONTRACT_DRIFT\nfailingCommand: node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist\nEvidence: acceptance checklist failed',
+      status: 'VERIFICATION_FAIL',
+      reasonCode: 'VERIFY_SHARED_CONTRACT_DRIFT',
+      category: 'shared_contract_drift',
+      failingCommand: 'node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist',
+      recoverable: true,
+      suggestedRecovery: 'repair_shared_contract',
+      evidence: 'acceptance checklist failed',
+    },
+    {
+      label: 'package script fail output',
+      source: 'npm run verify:pack\nEXPECTED_FAIL verify-publish-bundle: cleanup artifact remained in package staging root',
+      status: 'VERIFICATION_FAIL',
+      reasonCode: 'VERIFY_CLEANUP_ARTIFACT_FAILURE',
+      category: 'cleanup_artifact_failure',
+      failingCommand: 'npm run verify:pack',
+      recoverable: true,
+      suggestedRecovery: 'cleanup_artifacts',
+      evidence: 'cleanup artifact remained',
+    },
+    {
+      label: 'nested parity script fail output',
+      source: 'FAIL verification-recovery-policy: VERIFY_FATAL_RUNTIME_FAILURE in nested parity verifier',
+      status: 'VERIFICATION_FAIL',
+      reasonCode: 'VERIFY_FATAL_RUNTIME_FAILURE',
+      category: 'fatal_runtime_failure',
+      failingCommand: 'node scripts/verify-implementation-loop-parity.mjs --case verification-recovery-policy',
+      recoverable: false,
+      suggestedRecovery: 'block',
+      evidence: 'nested parity verifier',
+    },
+  ];
+
+  const missingFixtureContracts = [];
+  for (const contract of fixtureContracts) {
+    const requiredValues = [
+      contract.status,
+      contract.reasonCode,
+      contract.category,
+      contract.failingCommand,
+      String(contract.recoverable),
+      contract.suggestedRecovery,
+      contract.evidence,
+    ].filter(Boolean);
+    const missingValues = requiredValues.filter((value) => !combinedSource.includes(value));
+    if (missingValues.length > 0) {
+      missingFixtureContracts.push(`${contract.label}: ${missingValues.join(', ')}`);
+    }
+  }
+  if (missingFixtureContracts.length > 0) {
+    expectedFail(`verification envelope normalizers do not yet cover pass/fail outputs from verification agents, package scripts, and nested parity scripts with required normalized fields: ${missingFixtureContracts.join('; ')}.`);
+  }
+
+  const decisionBridgePatterns = [
+    /(VerificationResultEnvelope|ImplementationVerificationResultEnvelope)[\s\S]{0,800}(recoverable|reasonCode|suggestedRecovery)/,
+    /(recoverable|reasonCode|suggestedRecovery)[\s\S]{0,800}(block|recovery|decision)/i,
+    /(rawSummary|rawOutput|output)[\s\S]{0,800}(envelope|structured)/i,
+  ];
+  if (decisionBridgePatterns.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail('coordinator decision bridge is not yet provably consuming structured envelope fields instead of prose-only output parsing.');
   }
 }
 
