@@ -4759,19 +4759,7 @@ function handleRalphSubagentLifecycleEvent(raw: unknown, fallbackStatus: string)
 	if (upsertTrackedSubagent(raw, fallbackStatus)) requestRalphSubagentWidgetRender();
 }
 
-function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSubagentRecord {
-	const live = getRalphSubagentManager()?.getRecord(entry.id);
-	if (live) {
-		return {
-			...live,
-			type: live.type ?? entry.type,
-			description: live.description ?? entry.description,
-			startedAt: live.startedAt || entry.startedAt,
-			completedAt: live.completedAt ?? entry.completedAt,
-			status: normalizeRalphSubagentStatus(live.status, entry.status),
-			error: live.error ?? entry.error,
-		};
-	}
+function fallbackTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSubagentRecord {
 	return {
 		id: entry.id,
 		type: entry.type,
@@ -4788,6 +4776,25 @@ function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSu
 				contextUsage: { percent: null },
 			}),
 		} : undefined,
+	};
+}
+
+function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSubagentRecord {
+	const fallback = fallbackTrackedSubagentRecord(entry);
+	const live = getRalphSubagentManager()?.getRecord(entry.id);
+	if (!live) return fallback;
+	return {
+		...live,
+		id: live.id || fallback.id,
+		type: live.type ?? fallback.type,
+		description: live.description ?? fallback.description,
+		startedAt: live.startedAt || fallback.startedAt,
+		completedAt: live.completedAt ?? fallback.completedAt,
+		status: normalizeRalphSubagentStatus(live.status, fallback.status),
+		error: live.error ?? fallback.error,
+		toolUses: live.toolUses ?? fallback.toolUses,
+		lifetimeUsage: live.lifetimeUsage ?? fallback.lifetimeUsage,
+		session: live.session ?? fallback.session,
 	};
 }
 
@@ -4892,14 +4899,20 @@ function formatSubagentWidgetErrorDetail(record: RalphSubagentRecord): string {
 	return detail ? ` · ${detail}` : "";
 }
 
+function formatSubagentWidgetDescription(record: RalphSubagentRecord): string {
+	const description = record.description?.trim();
+	return description ? ` ${description}` : "";
+}
+
 function formatSubagentWidgetLine(
 	record: RalphSubagentRecord,
 	frame: string,
 	theme: { fg(color: any, text: string): string; bold(text: string): string },
 ): string {
 	const name = theme.bold(theme.fg("text", formatSubagentWidgetName(record.type)));
+	const description = formatSubagentWidgetDescription(record);
 	if (record.status === "queued") {
-		return `${theme.fg("accent", "[")} ${theme.fg("muted", "⋯")} ${name} ${theme.fg("muted", "🤖 queued")} ${theme.fg("accent", "]")}`;
+		return `${theme.fg("accent", "[")} ${theme.fg("muted", "⋯")} ${name}${theme.fg("dim", description)} ${theme.fg("muted", "🤖 queued")} ${theme.fg("accent", "]")}`;
 	}
 	if (record.status !== "running") {
 		const finished = formatSubagentWidgetFinishedState(record, theme);
@@ -4907,13 +4920,13 @@ function formatSubagentWidgetLine(
 		const tools = formatSubagentToolCount(record.toolUses ?? 0);
 		const elapsed = formatFooterElapsed(record.startedAt, record.completedAt);
 		const errorDetail = finished.showErrorDetail ? formatSubagentWidgetErrorDetail(record) : "";
-		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)}${theme.fg(finished.color as any, errorDetail)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "]")}`;
+		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))}${theme.fg("dim", description)} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)}${theme.fg(finished.color as any, errorDetail)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "]")}`;
 	}
 	const icon = theme.fg("accent", frame);
 	const progress = formatSubagentWidgetProgress(record);
 	const tools = formatSubagentToolCount(record.toolUses ?? 0);
 	const elapsed = formatFooterElapsed(record.startedAt);
-	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 running")} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("text", progress)} ${theme.fg("accent", "]")}`;
+	return `${theme.fg("accent", "[")} ${icon} ${name}${theme.fg("dim", description)} ${theme.fg("muted", "🤖 running")} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("text", progress)} ${theme.fg("accent", "]")}`;
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {

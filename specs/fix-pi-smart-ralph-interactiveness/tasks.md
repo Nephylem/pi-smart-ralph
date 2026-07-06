@@ -489,7 +489,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-7, AC-3.5, NFR-1_
   - _Design: Ralph subagent lifecycle tracker; Manager fallback_
 
-- [ ] 3.14 [GREEN] Pass test: enrich rows from pi-subagents manager fallback
+- [x] 3.14 [GREEN] Pass test: enrich rows from pi-subagents manager fallback
   - **Do**:
     1. Resolve manager records by id when event data is incomplete.
     2. Merge type, description, tool use, token, and status data safely.
