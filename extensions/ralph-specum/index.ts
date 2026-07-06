@@ -10319,6 +10319,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	type RalphCoordinatorJob = {
 		label: string;
 		startedAt: number;
+		startWorkflow?: () => void;
 	};
 
 	let activeRalphCoordinatorJob: RalphCoordinatorJob | null = null;
@@ -10341,17 +10342,23 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		job: RalphCoordinatorJob,
 		run: () => Promise<void>,
 	): void {
+		let workflowStarted = false;
+		job.startWorkflow = () => {
+			if (workflowStarted) return;
+			workflowStarted = true;
+			void (async () => {
+				try {
+					await run();
+				} catch (error) {
+					await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
+				} finally {
+					finishRalphCoordinatorJob(ctx, job);
+				}
+			})();
+		};
 		const detachedWorkflowImmediate = setImmediate(() => {
 			const detachedWorkflowTimer = setTimeout(() => {
-				void (async () => {
-					try {
-						await run();
-					} catch (error) {
-						await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
-					} finally {
-						finishRalphCoordinatorJob(ctx, job);
-					}
-				})();
+				job.startWorkflow?.();
 			}, 0);
 			(detachedWorkflowTimer as { unref?: () => void }).unref?.();
 		});
@@ -10364,6 +10371,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		run: () => Promise<void>,
 	): Promise<void> {
 		if (activeRalphCoordinatorJob) {
+			activeRalphCoordinatorJob.startWorkflow?.();
 			const elapsedSeconds = Math.max(0, Math.floor((Date.now() - activeRalphCoordinatorJob.startedAt) / 1000));
 			await notify(
 				ctx,

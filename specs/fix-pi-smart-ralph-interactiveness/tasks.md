@@ -85,7 +85,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-2, AC-1.2, NFR-1_
   - _Design: Coordinator job guard; Error Handling concurrent Ralph job_
 
-- [ ] 1.5 [GREEN] Pass test: keep active job guard user-visible
+- [x] 1.5 [GREEN] Pass test: keep active job guard user-visible
   - **Do**:
     1. Ensure active coordinator state blocks a second job.
     2. Route overlap feedback through `notify`/console fallback.
