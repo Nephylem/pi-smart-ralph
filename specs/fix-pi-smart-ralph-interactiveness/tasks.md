@@ -632,7 +632,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-11, AC-5.2_
   - _Design: Widget identity decision_
 
-- [ ] 4.9 [YELLOW] Refactor: centralize Ralph widget key constant
+- [x] 4.9 [YELLOW] Refactor: centralize Ralph widget key constant
   - **Do**:
     1. Use a single local constant for `ralph-subagents` if absent.
     2. Keep native task widget key separate.

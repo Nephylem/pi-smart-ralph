@@ -1822,6 +1822,7 @@ const WEB_FETCH_TOOLS = ["agent_browser"] as const;
 const MCP_PROXY_TOOL = "mcp";
 const NATIVE_TASK_LOCK_RETRY_MS = 50;
 const NATIVE_TASK_LOCK_MAX_RETRIES = 100;
+const RALPH_SUBAGENT_WIDGET_KEY = "ralph-subagents";
 const RALPH_NATIVE_TASK_WIDGET_KEY = "ralph-tasks";
 const NATIVE_TASK_WIDGET_LIMIT = 10;
 
@@ -4535,7 +4536,6 @@ type RalphSubagentLifecycleEvent = {
 
 const RALPH_SUBAGENT_STATUS_INTERVAL_MS = 250;
 const RALPH_TOKEN_BAR_WIDTH = 16;
-const RALPH_SUBAGENT_WIDGET_KEY = "ralph-subagents";
 const RALPH_SUBAGENT_WIDGET_BAR_WIDTH = 10;
 const RALPH_SUBAGENT_WIDGET_MAX_LINES = 6;
 const RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS = 4_000;
