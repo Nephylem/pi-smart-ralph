@@ -512,7 +512,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-7, FR-9_
   - _Design: RalphSubagentManager; Security Considerations_
 
-- [ ] Q3.5 [VERIFY] Quality check: manager fallback slice
+- [x] Q3.5 [VERIFY] Quality check: manager fallback slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -524,7 +524,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
 
 ## Phase 4: Integration Defaults and E2E-Equivalent Verification
 
-- [ ] 4.1 [RED] Failing test: bootstrap preserves pi-subagents defaults
+- [x] 4.1 [RED] Failing test: bootstrap preserves pi-subagents defaults
   - **Do**:
     1. Add/extend bootstrap test for generated `.pi/subagents.json`.
     2. Assert `widgetMode: "background"` and `fleetView: true`.

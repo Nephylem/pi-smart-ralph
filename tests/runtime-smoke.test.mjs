@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate as waitImmediate } from 'node:timers/promises';
@@ -601,6 +601,32 @@ test('concurrent Ralph phase command is rejected while one coordinator job is ac
     assert.equal(delegatedStartCount, 1, 'expected only the first delegated coordinator promise to start');
     assert.equal(ctx.notifications.at(-1).type, 'warning');
     assert.match(ctx.notifications.at(-1).message, /already running/i);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('ralph-init bootstrap preserves pi-subagents background FleetView defaults', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+    const configDir = join(projectRoot, '.pi');
+    const subagentsConfigPath = join(configDir, 'subagents.json');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      subagentsConfigPath,
+      `${JSON.stringify({ widgetMode: 'inline', fleetView: false, defaultJoinMode: 'manual' }, null, 2)}\n`,
+      'utf8',
+    );
+
+    await pi.commands.get('ralph-init').handler('', ctx);
+
+    const subagentsConfig = JSON.parse(readFileSync(subagentsConfigPath, 'utf8'));
+    assert.equal(subagentsConfig.widgetMode, 'background');
+    assert.equal(subagentsConfig.fleetView, true);
+    assert.equal(subagentsConfig.defaultJoinMode, 'manual');
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
