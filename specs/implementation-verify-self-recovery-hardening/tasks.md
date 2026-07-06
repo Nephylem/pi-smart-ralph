@@ -134,7 +134,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-5, AC-3.1_
   - _Design: Shared-surface preflight planner; Loop runtime_
 
-- [ ] 3.3 [YELLOW] Refactor: extract impacted-verifier bundle planner
+- [x] 3.3 [YELLOW] Refactor: extract impacted-verifier bundle planner
   - **Do**:
     1. Centralize touched-file to verifier-bundle mapping.
     2. Keep bundle planning stable for package and runtime parity tests.
