@@ -27,15 +27,45 @@ const ORIGINAL_RESOURCE_ROOT_AVAILABLE = existsSync(ORIGINAL_RESOURCE_ROOT);
 const SHOULD_VERIFY_ORIGINAL_RESOURCES = ORIGINAL_RESOURCE_ROOT_AVAILABLE;
 const ORIGINAL_RESOURCE_DIRECTORIES = ['commands', 'templates', 'references', 'skills', 'schemas'];
 const packagePathFailureCaseKey = 'package-path-failure';
+const PACKAGE_VERIFICATION_ENVELOPE_FIELDS = Object.freeze([
+  'status',
+  'category',
+  'reasonCode',
+  'failingCommand',
+  'recoverable',
+  'suggestedRecovery',
+  'evidence',
+]);
+const PACKAGE_VERIFICATION_DIAGNOSTIC_FIELDS = Object.freeze([
+  ...PACKAGE_VERIFICATION_ENVELOPE_FIELDS,
+  'originalRoot',
+  'checkedPath',
+  'missingPathType',
+  'message',
+]);
+const PACKAGE_VERIFICATION_FAILURE_ENVELOPE = Object.freeze({
+  status: 'VERIFICATION_FAIL',
+  category: 'publish_bundle_failure',
+  reasonCode: 'VERIFY_PUBLISH_BUNDLE_FAILURE',
+  failingCommand: 'node scripts/verify-publish-bundle.mjs',
+  recoverable: true,
+  suggestedRecovery: 'repair_publish_bundle',
+  requiredFields: PACKAGE_VERIFICATION_DIAGNOSTIC_FIELDS,
+});
 const diagnosticFixture = typeof process.env.RALPH_PUBLISH_DIAGNOSTIC_FIXTURE === 'string'
   ? process.env.RALPH_PUBLISH_DIAGNOSTIC_FIXTURE.trim()
   : '';
 const portableDiagnostics = [];
 
-function addPortablePublishDiagnostic({ reasonCode = 'VERIFY_PUBLISH_BUNDLE_FAILURE', checkedPath, missingPathType, message }) {
+function addPortablePublishDiagnostic({ reasonCode = PACKAGE_VERIFICATION_FAILURE_ENVELOPE.reasonCode, checkedPath, missingPathType, message }) {
   const diagnostic = {
+    status: PACKAGE_VERIFICATION_FAILURE_ENVELOPE.status,
+    category: PACKAGE_VERIFICATION_FAILURE_ENVELOPE.category,
     reasonCode,
-    failingCommand: 'node scripts/verify-publish-bundle.mjs',
+    failingCommand: PACKAGE_VERIFICATION_FAILURE_ENVELOPE.failingCommand,
+    recoverable: PACKAGE_VERIFICATION_FAILURE_ENVELOPE.recoverable,
+    suggestedRecovery: PACKAGE_VERIFICATION_FAILURE_ENVELOPE.suggestedRecovery,
+    evidence: [message],
     originalRoot: normalizePosixPath(ORIGINAL_RESOURCE_ROOT),
     checkedPath: normalizePosixPath(checkedPath),
     missingPathType,
@@ -510,8 +540,7 @@ function verifyPackagePathFailureCase() {
       expectedFail(packagePathFailureCaseKey, `publish-bundle failure output is missing a machine-readable diagnostic block for ${fixture.label}. Output: ${output}`);
     }
 
-    const requiredFields = ['reasonCode', 'failingCommand', 'originalRoot', 'checkedPath', 'missingPathType', 'message'];
-    const missingFields = requiredFields.filter((field) => diagnostic?.[field] === undefined || diagnostic?.[field] === null || diagnostic?.[field] === '');
+    const missingFields = PACKAGE_VERIFICATION_FAILURE_ENVELOPE.requiredFields.filter((field) => diagnostic?.[field] === undefined || diagnostic?.[field] === null || diagnostic?.[field] === '');
     if (missingFields.length > 0) {
       expectedFail(packagePathFailureCaseKey, `publish-bundle diagnostic for ${fixture.label} is missing required fields ${missingFields.join(', ')}. Diagnostic: ${JSON.stringify(diagnostic)}`);
     }
@@ -520,6 +549,21 @@ function verifyPackagePathFailureCase() {
       expectedFail(packagePathFailureCaseKey, `${fixture.label} fixture must classify as missingPathType=${fixture.expectedMissingPathType}; got ${JSON.stringify(diagnostic.missingPathType)}`);
     }
   }
+}
+
+function printPortableDiagnosticEnvelope(diagnostic) {
+  console.error(diagnostic.status);
+  console.error(`category: ${diagnostic.category}`);
+  console.error(`reasonCode: ${diagnostic.reasonCode}`);
+  console.error(`failingCommand: ${diagnostic.failingCommand}`);
+  console.error(`recoverable: ${diagnostic.recoverable}`);
+  console.error(`suggestedRecovery: ${diagnostic.suggestedRecovery}`);
+  if (Array.isArray(diagnostic.evidence)) {
+    for (const line of diagnostic.evidence) {
+      console.error(`Evidence: ${line}`);
+    }
+  }
+  console.error(JSON.stringify(diagnostic, null, 2));
 }
 
 function main() {
@@ -549,7 +593,7 @@ function main() {
   if (failures.length > 0) {
     console.error('Smart Ralph package verification failed:');
     if (portableDiagnostics.length > 0) {
-      console.error(JSON.stringify(portableDiagnostics[0], null, 2));
+      printPortableDiagnosticEnvelope(portableDiagnostics[0]);
       if (portableDiagnostics.length > 1) {
         console.error(`Additional portable diagnostics: ${JSON.stringify(portableDiagnostics.slice(1))}`);
       }

@@ -335,7 +335,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-12, FR-13, AC-7.1, AC-7.2_
   - _Design: Package verification diagnostics; Cleanup recovery_
 
-- [ ] 7.3 [YELLOW] Refactor: centralize package-verification diagnostics
+- [x] 7.3 [YELLOW] Refactor: centralize package-verification diagnostics
   - **Do**:
     1. Reuse failure-envelope fields across package verifiers.
     2. Keep pack failure output stable for coordinator recovery logic.

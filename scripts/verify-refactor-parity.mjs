@@ -37,6 +37,31 @@ const verifierTempPrefixes = [
   'ralph-refactor-commit-spec-',
   'ralph-refactor-git-wrapper-',
 ];
+const packageVerificationEnvelopeFields = Object.freeze([
+  'status',
+  'category',
+  'reasonCode',
+  'failingCommand',
+  'recoverable',
+  'suggestedRecovery',
+  'evidence',
+]);
+const packageVerificationDiagnosticFields = Object.freeze([
+  ...packageVerificationEnvelopeFields,
+  'originalRoot',
+  'checkedPath',
+  'missingPathType',
+  'message',
+  'artifactList',
+]);
+const cleanupRecoveryFailureEnvelope = Object.freeze({
+  status: 'VERIFICATION_FAIL',
+  category: 'cleanup_artifact_failure',
+  reasonCode: 'VERIFY_CLEANUP_ARTIFACT_FAILURE',
+  failingCommand: 'node scripts/verify-refactor-parity.mjs --case cleanup-recovery',
+  recoverable: true,
+  suggestedRecovery: 'cleanup_artifacts',
+});
 
 const cases = new Map([
   ['command-registration', verifyCommandRegistration],
@@ -132,6 +157,11 @@ async function runVerifierCase(caseName, verifyCase) {
 }
 
 function printCaseFailure(result) {
+  const packageDiagnostic = result.error?.packageDiagnostic;
+  if (packageDiagnostic) {
+    printPackageVerificationDiagnostic(packageDiagnostic);
+  }
+
   if (result.error?.expectedFail === true) {
     console.error(`EXPECTED_FAIL ${result.name}: ${result.error.message}`);
     return;
@@ -892,7 +922,13 @@ async function verifyCleanupCase() {
   const repairedAfter = cleanupVerifierTempArtifacts(remainingEntries);
   const stillRemainingEntries = listVerifierTempEntries().filter((entry) => !beforeEntries.has(entry));
   if (stillRemainingEntries.length > 0) {
-    expectedFail(`verifier cleanup must remove temporary artifacts; artifactList=${JSON.stringify(stillRemainingEntries)}`);
+    expectedPackageVerificationFail({
+      message: 'verifier cleanup must remove temporary artifacts before package verification succeeds.',
+      checkedPath: tmpdir(),
+      missingPathType: 'file',
+      artifactList: stillRemainingEntries,
+      evidence: [`artifactList=${JSON.stringify(stillRemainingEntries)}`],
+    });
   }
 
   if (repairedBefore.length > 0 || repairedAfter.length > 0) {
@@ -932,12 +968,67 @@ async function verifyCleanupRecoveryCase() {
   }
 
   if (publishCase.status !== 0) {
-    missingContracts.push('portable publish path diagnostics');
+    missingContracts.push(`portable publish path diagnostics with fields ${formatPackageDiagnosticFieldList()}`);
   }
 
   if (missingContracts.length > 0) {
     expectedFail(`cleanup recovery coverage is missing ${missingContracts.join(', ')}. package-path-failure output: ${publishOutput || `exit ${publishCase.status ?? 'unknown'}`}`);
   }
+}
+
+function formatPackageDiagnosticFieldList() {
+  return packageVerificationDiagnosticFields.join(', ');
+}
+
+function createPackageVerificationDiagnostic({
+  category = cleanupRecoveryFailureEnvelope.category,
+  reasonCode = cleanupRecoveryFailureEnvelope.reasonCode,
+  failingCommand = cleanupRecoveryFailureEnvelope.failingCommand,
+  recoverable = cleanupRecoveryFailureEnvelope.recoverable,
+  suggestedRecovery = cleanupRecoveryFailureEnvelope.suggestedRecovery,
+  checkedPath = root,
+  missingPathType = 'file',
+  message,
+  evidence = [],
+  artifactList = [],
+}) {
+  return {
+    status: cleanupRecoveryFailureEnvelope.status,
+    category,
+    reasonCode,
+    failingCommand,
+    recoverable,
+    suggestedRecovery,
+    evidence: Array.isArray(evidence) ? evidence : [String(evidence)],
+    originalRoot: root.replace(/\\/g, '/'),
+    checkedPath: String(checkedPath).replace(/\\/g, '/'),
+    missingPathType,
+    message,
+    artifactList: Array.isArray(artifactList) ? artifactList : [],
+  };
+}
+
+function printPackageVerificationDiagnostic(diagnostic) {
+  console.error(diagnostic.status);
+  console.error(`category: ${diagnostic.category}`);
+  console.error(`reasonCode: ${diagnostic.reasonCode}`);
+  console.error(`failingCommand: ${diagnostic.failingCommand}`);
+  console.error(`recoverable: ${diagnostic.recoverable}`);
+  console.error(`suggestedRecovery: ${diagnostic.suggestedRecovery}`);
+  if (Array.isArray(diagnostic.evidence) && diagnostic.evidence.length > 0) {
+    for (const line of diagnostic.evidence) {
+      console.error(`Evidence: ${line}`);
+    }
+  }
+  if (Array.isArray(diagnostic.artifactList) && diagnostic.artifactList.length > 0) {
+    console.error(`artifactList=${JSON.stringify(diagnostic.artifactList)}`);
+  }
+  console.error(JSON.stringify(diagnostic, null, 2));
+}
+
+function expectedPackageVerificationFail(input) {
+  const diagnostic = createPackageVerificationDiagnostic(input);
+  expectedFail(diagnostic.message, { packageDiagnostic: diagnostic });
 }
 
 async function verifyPackageWiring() {
@@ -1467,10 +1558,11 @@ function isExpectedMissingHelperError(error) {
   );
 }
 
-function expectedFail(message) {
+function expectedFail(message, metadata = {}) {
   const error = new Error(message);
   error.expectedFail = true;
   error.caseName = activeCase;
+  Object.assign(error, metadata);
   throw error;
 }
 
