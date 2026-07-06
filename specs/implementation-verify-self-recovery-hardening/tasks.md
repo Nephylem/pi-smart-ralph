@@ -229,7 +229,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-8, FR-9, AC-5.1, AC-5.2_
   - _Design: State finalizer; Progress sync_
 
-- [ ] 5.3 [YELLOW] Refactor: isolate state-finalization and progress-sync helpers
+- [x] 5.3 [YELLOW] Refactor: isolate state-finalization and progress-sync helpers
   - **Do**:
     1. Extract cleanup, completion-evidence, and state-deletion writers from the main loop flow.
     2. Keep progress artifact formatting deterministic.
