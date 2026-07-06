@@ -175,7 +175,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-3, FR-11, AC-2.1, AC-5.2_
   - _Design: Ralph interactive surfaces; Safe Ralph UI helpers_
 
-- [ ] 2.2 [GREEN] Pass test: self-guard footer and widget installation
+- [x] 2.2 [GREEN] Pass test: self-guard footer and widget installation
   - **Do**:
     1. Make footer installation safely no-op when unavailable.
     2. Make `ralph-subagents` installation safely no-op when unavailable.

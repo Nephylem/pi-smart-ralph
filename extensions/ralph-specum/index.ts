@@ -1692,9 +1692,10 @@ function formatFooterMcpBadge(
 }
 
 function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-	if (!ctx.hasUI) return;
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.setFooter !== "function") return;
 	ralphFooterState.ctx = ctx;
-	ctx.ui.setFooter((tui, theme, footerData) => {
+	ui.setFooter((tui, theme, footerData) => {
 		const unsubscribeBranch = footerData.onBranchChange(() => tui.requestRender());
 		const timer = setInterval(() => {
 			if (ralphStatusAnimation.active) tui.requestRender();
@@ -1756,6 +1757,15 @@ type TaskCounts = {
 	pending: number;
 	total: number;
 };
+
+type RalphOptionalUiContext = Omit<ExtensionCommandContext, "ui"> & {
+	ui?: Partial<ExtensionCommandContext["ui"]>;
+};
+
+function getRalphOptionalUi(ctx: ExtensionCommandContext): Partial<ExtensionCommandContext["ui"]> | undefined {
+	if (!ctx.hasUI) return undefined;
+	return (ctx as RalphOptionalUiContext).ui;
+}
 
 const NATIVE_TASK_TOOLS = ["TaskCreate", "TaskUpdate", "TaskExecute"] as const;
 const WEB_RESEARCH_TOOLS = ["agent_browser"] as const;
@@ -4740,9 +4750,10 @@ function formatSubagentWidgetLine(
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-	if (!ctx.hasUI) return;
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.setWidget !== "function") return;
 	ralphSubagentWidgetState.tracked.clear();
-	ctx.ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
+	ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
 		let hadVisible = false;
 		const request = () => tui.requestRender();
 		const unsubscribeCreated = eventOn(pi.events, "subagents:created", (raw) => {
@@ -4795,9 +4806,8 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 }
 
 function ensureRalphInteractiveSurfaces(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-	if (!ctx.hasUI) return;
-	if (typeof ctx.ui.setFooter === "function") installRalphFooter(pi, ctx);
-	if (typeof ctx.ui.setWidget === "function") installRalphSubagentWidget(pi, ctx);
+	installRalphFooter(pi, ctx);
+	installRalphSubagentWidget(pi, ctx);
 }
 
 function setSubagentStatusSurfaces(ctx: ExtensionCommandContext, message: string): void {
