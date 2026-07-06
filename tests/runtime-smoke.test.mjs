@@ -146,7 +146,9 @@ test('UI contexts route Ralph notifications through ctx.ui.notify with message a
 test('no-UI context no-ops status, footer, and widget paths while notifications fall back to console', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   const consoleWarnings = [];
+  const consoleLogs = [];
   const originalWarn = console.warn;
+  const originalLog = console.log;
   try {
     const pi = createMockPi();
     ralphSpecumExtension(pi);
@@ -167,6 +169,9 @@ test('no-UI context no-ops status, footer, and widget paths while notifications 
     console.warn = (...args) => {
       consoleWarnings.push(args.join(' '));
     };
+    console.log = (...args) => {
+      consoleLogs.push(args.join(' '));
+    };
 
     await assert.doesNotReject(() => pi.events.get('session_start')[0]({}, ctx));
     await assert.doesNotReject(() => pi.commands.get('ralph-research').handler('no-ui-status-widget-paths', ctx));
@@ -174,10 +179,13 @@ test('no-UI context no-ops status, footer, and widget paths while notifications 
     await assert.doesNotReject(() => pi.events.get('session_shutdown')[0]({}, ctx));
     await assert.doesNotReject(() => pi.commands.get('ralph-index').handler('--bad-option', ctx));
 
+    assert.equal(consoleLogs.length, 1, 'expected no-UI info notification to fall back to console.log once');
+    assert.match(consoleLogs[0], /Started Ralph research/);
     assert.equal(consoleWarnings.length, 1, 'expected no-UI warning notifications to fall back to console.warn');
     assert.match(consoleWarnings[0], /Unsupported \/ralph-index option/);
   } finally {
     console.warn = originalWarn;
+    console.log = originalLog;
     rmSync(projectRoot, { recursive: true, force: true });
   }
 });

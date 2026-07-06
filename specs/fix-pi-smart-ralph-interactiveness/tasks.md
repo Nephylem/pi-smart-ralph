@@ -275,7 +275,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-5, FR-8, AC-2.4, AC-4.1, AC-4.2_
   - _Design: Safe Ralph UI helpers; Error Handling_
 
-- [ ] 2.9 [YELLOW] Refactor: keep no-UI paths side-effect small
+- [x] 2.9 [YELLOW] Refactor: keep no-UI paths side-effect small
   - **Do**:
     1. Remove redundant no-op branches if helper guards cover them.
     2. Keep console fallback limited to notification messages.

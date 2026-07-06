@@ -1384,6 +1384,11 @@ function getRalphUiNotify(ctx: RalphOptionalUiContext): RalphUiNotify | undefine
 	return typeof notify === "function" ? notify : undefined;
 }
 
+function writeNotificationConsoleFallback(message: string, type: RalphUiNotificationType): void {
+	const write = type === "warning" ? console.warn : console.log;
+	write(message);
+}
+
 async function notify(ctx: ExtensionCommandContext, message: string, type: RalphUiNotificationType = "info") {
 	const uiNotify = getRalphUiNotify(ctx);
 	if (uiNotify) {
@@ -1391,12 +1396,7 @@ async function notify(ctx: ExtensionCommandContext, message: string, type: Ralph
 		return;
 	}
 
-	if (type === "warning") {
-		console.warn(message);
-		return;
-	}
-
-	console.log(message);
+	writeNotificationConsoleFallback(message, type);
 }
 
 const RALPH_STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -4785,8 +4785,7 @@ function formatSubagentWidgetLine(
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
-	ralphSubagentWidgetState.tracked.clear();
-	setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
+	const installed = setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
 		let hadVisible = false;
 		const request = () => tui.requestRender();
 		const unsubscribeCreated = eventOn(pi.events, "subagents:created", (raw) => {
@@ -4836,6 +4835,7 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 			},
 		};
 	}, { placement: "aboveEditor" });
+	if (installed) ralphSubagentWidgetState.tracked.clear();
 }
 
 function ensureRalphInteractiveSurfaces(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
