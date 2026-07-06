@@ -4656,6 +4656,40 @@ function readRalphSubagentEventNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
+function normalizeRalphSubagentStatus(value: unknown, fallbackStatus: string): string {
+	const status = typeof value === "string" ? value.trim().toLowerCase() : "";
+	switch (status) {
+		case "created":
+		case "pending":
+		case "queued":
+			return "queued";
+		case "active":
+		case "in-progress":
+		case "in_progress":
+		case "started":
+		case "running":
+			return "running";
+		case "complete":
+		case "completed":
+		case "done":
+		case "success":
+			return "completed";
+		case "failed":
+		case "failure":
+		case "error":
+			return "error";
+		case "aborted":
+		case "steered":
+		case "stopped":
+			return status;
+		case "canceled":
+		case "cancelled":
+			return "stopped";
+		default:
+			return fallbackStatus;
+	}
+}
+
 function normalizeRalphSubagentLifecycleEvent(raw: unknown, fallbackStatus: string): RalphSubagentLifecycleEvent | undefined {
 	if (!raw || typeof raw !== "object") return undefined;
 	const event = raw as {
@@ -4672,7 +4706,7 @@ function normalizeRalphSubagentLifecycleEvent(raw: unknown, fallbackStatus: stri
 		id,
 		type: readRalphSubagentEventText(event.type),
 		description: readRalphSubagentEventText(event.description),
-		status: readRalphSubagentEventText(event.status) ?? fallbackStatus,
+		status: normalizeRalphSubagentStatus(event.status, fallbackStatus),
 		toolUses: readRalphSubagentEventNumber(event.toolUses),
 		totalTokens: readRalphSubagentEventNumber(event.tokens?.total),
 	};
@@ -4710,7 +4744,7 @@ function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSu
 			description: live.description ?? entry.description,
 			startedAt: live.startedAt || entry.startedAt,
 			completedAt: live.completedAt ?? entry.completedAt,
-			status: live.status || entry.status,
+			status: normalizeRalphSubagentStatus(live.status, entry.status),
 		};
 	}
 	return {
@@ -4813,7 +4847,7 @@ function formatSubagentWidgetLine(
 	const progress = formatSubagentWidgetProgress(record);
 	const tools = formatSubagentToolCount(record.toolUses ?? 0);
 	const elapsed = formatFooterElapsed(record.startedAt);
-	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 ")}${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("text", progress)} ${theme.fg("accent", "]")}`;
+	return `${theme.fg("accent", "[")} ${icon} ${name} ${theme.fg("muted", "🤖 running")} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("text", progress)} ${theme.fg("accent", "]")}`;
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {

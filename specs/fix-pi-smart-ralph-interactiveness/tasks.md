@@ -333,7 +333,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, FR-9_
   - _Design: RalphSubagentLifecycleEvent; Performance Considerations_
 
-- [ ] Q3.1 [VERIFY] Quality check: queued lifecycle slice
+- [x] Q3.1 [VERIFY] Quality check: queued lifecycle slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -355,7 +355,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, FR-11, AC-3.2, AC-5.2_
   - _Design: Ralph subagent lifecycle tracker; Widget identity decision_
 
-- [ ] 3.5 [GREEN] Pass test: upsert started events in existing tracker entry
+- [x] 3.5 [GREEN] Pass test: upsert started events in existing tracker entry
   - **Do**:
     1. Update existing tracked entry on `subagents:started`.
     2. Preserve original start timestamp when appropriate.
