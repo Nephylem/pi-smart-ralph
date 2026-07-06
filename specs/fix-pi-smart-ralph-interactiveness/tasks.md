@@ -322,7 +322,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, AC-3.1_
   - _Design: Ralph subagent lifecycle tracker; Error Handling missing id_
 
-- [ ] 3.3 [YELLOW] Refactor: normalize lifecycle event parsing
+- [x] 3.3 [YELLOW] Refactor: normalize lifecycle event parsing
   - **Do**:
     1. Keep event normalization local to tracker/widget code.
     2. Preserve row width truncation behavior.

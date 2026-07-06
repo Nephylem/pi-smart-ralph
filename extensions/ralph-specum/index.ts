@@ -4504,6 +4504,15 @@ type RalphTrackedSubagentEntry = {
 	totalTokens?: number;
 };
 
+type RalphSubagentLifecycleEvent = {
+	id: string;
+	type?: string;
+	description?: string;
+	status: string;
+	toolUses?: number;
+	totalTokens?: number;
+};
+
 const RALPH_SUBAGENT_STATUS_INTERVAL_MS = 250;
 const RALPH_TOKEN_BAR_WIDTH = 16;
 const RALPH_SUBAGENT_WIDGET_KEY = "ralph-subagents";
@@ -4639,8 +4648,16 @@ function formatSubagentWidgetProgress(record: RalphSubagentRecord): string {
 	return `${formatTokenCount(current)} tok`;
 }
 
-function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
-	if (!raw || typeof raw !== "object") return;
+function readRalphSubagentEventText(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readRalphSubagentEventNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
+}
+
+function normalizeRalphSubagentLifecycleEvent(raw: unknown, fallbackStatus: string): RalphSubagentLifecycleEvent | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
 	const event = raw as {
 		id?: unknown;
 		type?: unknown;
@@ -4649,23 +4666,38 @@ function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
 		toolUses?: unknown;
 		tokens?: { total?: unknown };
 	};
-	if (typeof event.id !== "string" || !event.id.trim()) return;
+	const id = readRalphSubagentEventText(event.id);
+	if (!id) return undefined;
+	return {
+		id,
+		type: readRalphSubagentEventText(event.type),
+		description: readRalphSubagentEventText(event.description),
+		status: readRalphSubagentEventText(event.status) ?? fallbackStatus,
+		toolUses: readRalphSubagentEventNumber(event.toolUses),
+		totalTokens: readRalphSubagentEventNumber(event.tokens?.total),
+	};
+}
+
+function isActiveTrackedSubagentStatus(status: string): boolean {
+	return status === "running" || status === "queued";
+}
+
+function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
+	const event = normalizeRalphSubagentLifecycleEvent(raw, fallbackStatus);
+	if (!event) return;
 	const existing = ralphSubagentWidgetState.tracked.get(event.id);
 	const now = Date.now();
-	const nextStatus = typeof event.status === "string" && event.status.trim() ? event.status : fallbackStatus;
 	const next: RalphTrackedSubagentEntry = {
 		id: event.id,
-		type: typeof event.type === "string" ? event.type : existing?.type,
-		description: typeof event.description === "string" ? event.description : existing?.description,
+		type: event.type ?? existing?.type,
+		description: event.description ?? existing?.description,
 		startedAt: existing?.startedAt ?? now,
 		completedAt: existing?.completedAt,
-		status: nextStatus,
-		toolUses: typeof event.toolUses === "number" && Number.isFinite(event.toolUses) ? Math.max(0, event.toolUses) : existing?.toolUses,
-		totalTokens: typeof event.tokens?.total === "number" && Number.isFinite(event.tokens.total) ? Math.max(0, event.tokens.total) : existing?.totalTokens,
+		status: event.status,
+		toolUses: event.toolUses ?? existing?.toolUses,
+		totalTokens: event.totalTokens ?? existing?.totalTokens,
 	};
-	if (nextStatus !== "running" && nextStatus !== "queued") next.completedAt = now;
-	if (nextStatus === "running" && existing?.startedAt) next.startedAt = existing.startedAt;
-	if (nextStatus === "queued" && existing?.startedAt) next.startedAt = existing.startedAt;
+	if (!isActiveTrackedSubagentStatus(event.status)) next.completedAt = now;
 	ralphSubagentWidgetState.tracked.set(event.id, next);
 }
 
@@ -4702,7 +4734,7 @@ function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSu
 function readActiveSubagentRecords(): RalphSubagentRecord[] {
 	return [...ralphSubagentWidgetState.tracked.values()]
 		.map(resolveTrackedSubagentRecord)
-		.filter((record) => record.status === "running" || record.status === "queued")
+		.filter((record) => isActiveTrackedSubagentStatus(record.status))
 		.sort((left, right) => left.startedAt - right.startedAt);
 }
 
@@ -4715,7 +4747,7 @@ function subagentWidgetLingerMs(status: string): number {
 function pruneExpiredTrackedSubagents(now = Date.now()): void {
 	for (const [id, entry] of ralphSubagentWidgetState.tracked.entries()) {
 		const record = resolveTrackedSubagentRecord(entry);
-		if (record.status === "running" || record.status === "queued") continue;
+		if (isActiveTrackedSubagentStatus(record.status)) continue;
 		if (!record.completedAt) {
 			ralphSubagentWidgetState.tracked.delete(id);
 			continue;
@@ -4731,7 +4763,7 @@ function readLingeringSubagentRecords(now = Date.now()): RalphSubagentRecord[] {
 	const finished: RalphSubagentRecord[] = [];
 	for (const entry of ralphSubagentWidgetState.tracked.values()) {
 		const record = resolveTrackedSubagentRecord(entry);
-		if (record.status === "running" || record.status === "queued") continue;
+		if (isActiveTrackedSubagentStatus(record.status)) continue;
 		if (!record.completedAt) continue;
 		finished.push(record);
 	}
