@@ -589,7 +589,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-12, AC-5.3_
   - _Design: Native task widget decision; maybeShowNativeTaskStartupWidget pattern_
 
-- [ ] 4.6 [YELLOW] Refactor: name phase scope predicate
+- [x] 4.6 [YELLOW] Refactor: name phase scope predicate
   - **Do**:
     1. Keep phase scope predicate explicit and easy to test.
     2. Avoid widening scope without requirement.
