@@ -2959,7 +2959,7 @@ function statusIcon(status: NativeTaskStatus): string {
 }
 
 function maybeShowNativeTaskStartupWidget(ctx: ExtensionCommandContext, label: string): void {
-	if (!/^(start|tasks|implement)$/.test(label)) return;
+	if (!/^(?:start|tasks|implement)$/.test(label)) return;
 	setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, [
 		`● Ralph ${label}: pi-tasks surface ready`,
 		"  ◻ Waiting for tasks.md mirroring or execution updates…",

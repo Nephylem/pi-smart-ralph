@@ -578,7 +578,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-12, AC-5.3, NFR-1_
   - _Design: Native task widget decision; Edge Cases research/requirements startup_
 
-- [ ] 4.5 [GREEN] Pass test: preserve native task phase regex
+- [x] 4.5 [GREEN] Pass test: preserve native task phase regex
   - **Do**:
     1. Keep native task startup widget limited to configured phases.
     2. Ensure research/requirements use status/subagent widget only.
