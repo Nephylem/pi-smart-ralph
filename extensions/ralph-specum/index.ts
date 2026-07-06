@@ -4794,6 +4794,12 @@ function subagentWidgetLingerMs(status: string): number {
 		: RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS;
 }
 
+function selectVisibleSubagentWidgetRecords(active: RalphSubagentRecord[], lingering: RalphSubagentRecord[]): RalphSubagentRecord[] {
+	const visibleActive = active.slice(-RALPH_SUBAGENT_WIDGET_MAX_LINES);
+	const remainingLines = Math.max(0, RALPH_SUBAGENT_WIDGET_MAX_LINES - visibleActive.length);
+	return [...lingering.slice(0, remainingLines), ...visibleActive].slice(0, RALPH_SUBAGENT_WIDGET_MAX_LINES);
+}
+
 function pruneExpiredTrackedSubagents(now = Date.now()): void {
 	for (const [id, entry] of ralphSubagentWidgetState.tracked.entries()) {
 		const record = resolveTrackedSubagentRecord(entry);
@@ -4899,9 +4905,7 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 				const now = Date.now();
 				const lingering = readLingeringSubagentRecords(now);
 				const active = readActiveSubagentRecords();
-				const visibleActive = active.slice(-RALPH_SUBAGENT_WIDGET_MAX_LINES);
-				const visibleLingering = lingering.slice(0, Math.max(0, RALPH_SUBAGENT_WIDGET_MAX_LINES - visibleActive.length));
-				const records = [...visibleLingering, ...visibleActive];
+				const records = selectVisibleSubagentWidgetRecords(active, lingering);
 				hadVisible = records.length > 0;
 				if (records.length === 0) return [];
 				const width = tui.terminal.columns;

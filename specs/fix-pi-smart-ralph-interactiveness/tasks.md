@@ -412,7 +412,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, AC-3.3, NFR-5_
   - _Design: Ralph subagent lifecycle tracker; Performance Considerations_
 
-- [ ] 3.9 [YELLOW] Refactor: bound terminal row retention constants
+- [x] 3.9 [YELLOW] Refactor: bound terminal row retention constants
   - **Do**:
     1. Keep success/error linger constants near widget constants.
     2. Keep max rendered lines enforced.
