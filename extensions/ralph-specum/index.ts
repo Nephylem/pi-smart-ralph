@@ -1445,24 +1445,42 @@ function formatRalphElapsed(startedAt: number): string {
 	return `${hours}h${remainingMinutes.toString().padStart(2, "0")}m`;
 }
 
-function renderAnimatedRalphStatus(message: string): string {
-	const frame = RALPH_STATUS_SPINNER_FRAMES[ralphStatusAnimation.frameIndex % RALPH_STATUS_SPINNER_FRAMES.length] ?? "•";
-	ralphStatusAnimation.frameIndex += 1;
-	const elapsed = ralphStatusAnimation.startedAt > 0 ? ` (${formatRalphElapsed(ralphStatusAnimation.startedAt)})` : "";
+type RalphUiStatusKey = "ralph" | "subagents";
+
+function formatAnimatedRalphStatus(message: string, frameIndex: number, startedAt: number): string {
+	const frame = RALPH_STATUS_SPINNER_FRAMES[frameIndex % RALPH_STATUS_SPINNER_FRAMES.length] ?? "•";
+	const elapsed = startedAt > 0 ? ` (${formatRalphElapsed(startedAt)})` : "";
 	return `${frame} ${message}${elapsed}`;
+}
+
+function formatCoordinatorStartupStatus(label: string): string {
+	return `Running Ralph ${label}`;
+}
+
+function formatCoordinatorAnimationStatus(label: string): string {
+	return `Ralph ${label}: coordinator running`;
+}
+
+function setUiStatus(ctx: ExtensionCommandContext, key: RalphUiStatusKey, message?: string): void {
+	if (!ctx.hasUI || typeof ctx.ui.setStatus !== "function") return;
+	ctx.ui.setStatus(key, message);
 }
 
 function renderRalphStatus(): void {
 	const ctx = ralphStatusAnimation.ctx;
-	if (!ctx?.hasUI || typeof ctx.ui.setStatus !== "function") return;
+	if (!ctx) return;
 
 	const message = ralphStatusAnimation.currentMessage ?? ralphStatusAnimation.fallbackMessage;
 	if (!message) {
-		ctx.ui.setStatus("ralph", undefined);
+		setUiStatus(ctx, "ralph", undefined);
 		return;
 	}
 
-	ctx.ui.setStatus("ralph", ralphStatusAnimation.active ? renderAnimatedRalphStatus(message) : message);
+	const statusMessage = ralphStatusAnimation.active
+		? formatAnimatedRalphStatus(message, ralphStatusAnimation.frameIndex, ralphStatusAnimation.startedAt)
+		: message;
+	if (ralphStatusAnimation.active) ralphStatusAnimation.frameIndex += 1;
+	setUiStatus(ctx, "ralph", statusMessage);
 }
 
 function setRalphStatus(ctx: ExtensionCommandContext, message?: string): void {
@@ -1473,7 +1491,7 @@ function setRalphStatus(ctx: ExtensionCommandContext, message?: string): void {
 		return;
 	}
 
-	if (ctx.hasUI && typeof ctx.ui.setStatus === "function") ctx.ui.setStatus("ralph", message);
+	setUiStatus(ctx, "ralph", message);
 }
 
 function startRalphStatusAnimation(ctx: ExtensionCommandContext, fallbackMessage: string): void {
@@ -1503,7 +1521,7 @@ function stopRalphStatusAnimation(ctx?: ExtensionCommandContext): void {
 	ralphStatusAnimation.fallbackMessage = undefined;
 	ralphStatusAnimation.frameIndex = 0;
 	ralphStatusAnimation.startedAt = 0;
-	if (statusCtx?.hasUI && typeof statusCtx.ui.setStatus === "function") statusCtx.ui.setStatus("ralph", undefined);
+	if (statusCtx) setUiStatus(statusCtx, "ralph", undefined);
 }
 
 function footerThinkingColor(level: ReturnType<ExtensionAPI["getThinkingLevel"]>): "thinkingOff" | "thinkingMinimal" | "thinkingLow" | "thinkingMedium" | "thinkingHigh" | "thinkingXhigh" {
@@ -4784,12 +4802,12 @@ function ensureRalphInteractiveSurfaces(pi: ExtensionAPI, ctx: ExtensionCommandC
 
 function setSubagentStatusSurfaces(ctx: ExtensionCommandContext, message: string): void {
 	setRalphStatus(ctx, message);
-	if (ctx.hasUI && typeof ctx.ui.setStatus === "function") ctx.ui.setStatus("subagents", message);
+	setUiStatus(ctx, "subagents", message);
 }
 
 function clearSubagentStatusSurfaces(ctx: ExtensionCommandContext): void {
 	if (!ralphStatusAnimation.active) setRalphStatus(ctx);
-	if (ctx.hasUI && typeof ctx.ui.setStatus === "function") ctx.ui.setStatus("subagents", undefined);
+	setUiStatus(ctx, "subagents", undefined);
 }
 
 function ralphSubagentStatusMessage(
@@ -10328,8 +10346,8 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		ensureRalphInteractiveSurfaces(pi, ctx);
 		maybeShowNativeTaskStartupWidget(ctx, label);
 		stopRalphStatusAnimation(ctx);
-		setRalphStatus(ctx, `Running Ralph ${label}`);
-		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
+		setRalphStatus(ctx, formatCoordinatorStartupStatus(label));
+		startRalphStatusAnimation(ctx, formatCoordinatorAnimationStatus(label));
 	}
 
 	function detachRalphCoordinatorWorkflow(

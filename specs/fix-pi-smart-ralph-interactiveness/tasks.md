@@ -140,7 +140,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-4, AC-2.2_
   - _Design: Safe Ralph UI helpers; Ralph interactive surfaces_
 
-- [ ] 1.9 [YELLOW] Refactor: isolate status message formatting
+- [x] 1.9 [YELLOW] Refactor: isolate status message formatting
   - **Do**:
     1. Keep status formatting local and deterministic.
     2. Avoid broad untyped UI calls.
