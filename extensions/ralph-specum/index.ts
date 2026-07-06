@@ -10647,6 +10647,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		setRalphUiFooter(ctx, undefined);
 		setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, undefined);
 		clearRalphSubagentWidgetRegistration();
+		setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, undefined);
 		setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
 	});
 

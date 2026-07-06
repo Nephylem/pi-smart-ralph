@@ -621,7 +621,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-11, AC-5.2, NFR-1_
   - _Design: Widget identity decision; Pitfalls duplicate displays_
 
-- [ ] 4.8 [GREEN] Pass test: keep custom widget key distinct
+- [x] 4.8 [GREEN] Pass test: keep custom widget key distinct
   - **Do**:
     1. Ensure all custom subagent widget calls use `ralph-subagents`.
     2. Do not call `setWidget("agents", ...)` from Smart Ralph code.
