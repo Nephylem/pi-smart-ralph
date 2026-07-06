@@ -4524,6 +4524,7 @@ const RALPH_SUBAGENT_WIDGET_MAX_LINES = 6;
 const RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS = 4_000;
 const RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS = 8_000;
 const RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+const RALPH_SUBAGENT_MANAGER_SYMBOL = Symbol.for("pi-subagents:manager");
 const ralphSubagentWidgetState: {
 	tracked: Map<string, RalphTrackedSubagentEntry>;
 	registeredUi?: Partial<ExtensionCommandContext["ui"]>;
@@ -4532,9 +4533,17 @@ const ralphSubagentWidgetState: {
 	tracked: new Map(),
 };
 
+function readGlobalSymbolValue(key: symbol): unknown {
+	return (globalThis as Record<symbol, unknown>)[key];
+}
+
 function getRalphSubagentManager(): RalphSubagentManager | undefined {
-	const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-	return manager && typeof manager.getRecord === "function" ? (manager as RalphSubagentManager) : undefined;
+	const manager = readGlobalSymbolValue(RALPH_SUBAGENT_MANAGER_SYMBOL);
+	return isRalphSubagentManager(manager) ? manager : undefined;
+}
+
+function isRalphSubagentManager(value: unknown): value is RalphSubagentManager {
+	return typeof value === "object" && value !== null && "getRecord" in value && typeof value.getRecord === "function";
 }
 
 function formatTokenCount(tokens: number): string {

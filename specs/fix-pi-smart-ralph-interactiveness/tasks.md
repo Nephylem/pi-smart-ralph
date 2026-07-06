@@ -501,7 +501,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-7, AC-3.5_
   - _Design: Error Handling manager unavailable; Interfaces RalphSubagentManager_
 
-- [ ] 3.15 [YELLOW] Refactor: keep manager access isolated
+- [x] 3.15 [YELLOW] Refactor: keep manager access isolated
   - **Do**:
     1. Isolate global symbol lookup in one local helper.
     2. Keep helper typed narrowly and side-effect free.
