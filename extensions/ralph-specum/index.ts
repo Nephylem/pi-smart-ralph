@@ -4467,6 +4467,7 @@ type RalphSubagentRecord = {
 	startedAt: number;
 	completedAt?: number;
 	status: string;
+	error?: string;
 	toolUses: number;
 	lifetimeUsage: {
 		input: number;
@@ -4500,6 +4501,7 @@ type RalphTrackedSubagentEntry = {
 	startedAt: number;
 	completedAt?: number;
 	status: string;
+	error?: string;
 	toolUses?: number;
 	totalTokens?: number;
 };
@@ -4509,6 +4511,7 @@ type RalphSubagentLifecycleEvent = {
 	type?: string;
 	description?: string;
 	status: string;
+	error?: string;
 	toolUses?: number;
 	totalTokens?: number;
 };
@@ -4679,14 +4682,13 @@ function normalizeRalphSubagentStatus(value: unknown, fallbackStatus: string): s
 		case "failed":
 		case "failure":
 		case "error":
-			return "error";
 		case "aborted":
-		case "steered":
 		case "stopped":
-			return status;
 		case "canceled":
 		case "cancelled":
-			return "stopped";
+			return "error";
+		case "steered":
+			return status;
 		default:
 			return fallbackStatus;
 	}
@@ -4699,16 +4701,21 @@ function normalizeRalphSubagentLifecycleEvent(raw: unknown, fallbackStatus: stri
 		type?: unknown;
 		description?: unknown;
 		status?: unknown;
+		error?: unknown;
 		toolUses?: unknown;
 		tokens?: { total?: unknown };
 	};
 	const id = readRalphSubagentEventText(event.id);
 	if (!id) return undefined;
+	const rawStatus = readRalphSubagentEventText(event.status)?.toLowerCase();
+	const status = normalizeRalphSubagentStatus(event.status, fallbackStatus);
+	const error = readRalphSubagentEventText(event.error) ?? (status === "error" && rawStatus && rawStatus !== "error" ? rawStatus : undefined);
 	return {
 		id,
 		type: readRalphSubagentEventText(event.type),
 		description: readRalphSubagentEventText(event.description),
-		status: normalizeRalphSubagentStatus(event.status, fallbackStatus),
+		status,
+		error,
 		toolUses: readRalphSubagentEventNumber(event.toolUses),
 		totalTokens: readRalphSubagentEventNumber(event.tokens?.total),
 	};
@@ -4739,6 +4746,7 @@ function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): boolean {
 		startedAt: existing?.startedAt ?? now,
 		completedAt: existing?.completedAt,
 		status: event.status,
+		error: event.error ?? existing?.error,
 		toolUses: event.toolUses ?? existing?.toolUses,
 		totalTokens: event.totalTokens ?? existing?.totalTokens,
 	};
@@ -4761,6 +4769,7 @@ function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSu
 			startedAt: live.startedAt || entry.startedAt,
 			completedAt: live.completedAt ?? entry.completedAt,
 			status: normalizeRalphSubagentStatus(live.status, entry.status),
+			error: live.error ?? entry.error,
 		};
 	}
 	return {
@@ -4770,6 +4779,7 @@ function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSu
 		startedAt: entry.startedAt,
 		completedAt: entry.completedAt,
 		status: entry.status,
+		error: entry.error,
 		toolUses: entry.toolUses ?? 0,
 		lifetimeUsage: { input: 0, output: 0, cacheWrite: 0 },
 		session: entry.totalTokens !== undefined ? {
@@ -4849,6 +4859,11 @@ function formatSubagentToolCount(toolUses: number): string {
 	return `${toolUses} tool${toolUses === 1 ? "" : "s"}`;
 }
 
+function formatSubagentWidgetErrorDetail(record: RalphSubagentRecord): string {
+	const detail = record.error?.trim();
+	return detail ? ` · ${detail}` : "";
+}
+
 function formatSubagentWidgetLine(
 	record: RalphSubagentRecord,
 	frame: string,
@@ -4863,7 +4878,8 @@ function formatSubagentWidgetLine(
 		const progress = formatSubagentWidgetProgress(record);
 		const tools = formatSubagentToolCount(record.toolUses ?? 0);
 		const elapsed = formatFooterElapsed(record.startedAt, record.completedAt);
-		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "]")}`;
+		const errorDetail = record.status === "error" ? formatSubagentWidgetErrorDetail(record) : "";
+		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)}${theme.fg(finished.color as any, errorDetail)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "]")}`;
 	}
 	const icon = theme.fg("accent", frame);
 	const progress = formatSubagentWidgetProgress(record);

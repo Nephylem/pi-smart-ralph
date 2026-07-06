@@ -444,7 +444,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, AC-3.4, NFR-1_
   - _Design: Ralph subagent lifecycle tracker; Error Handling workflow throws_
 
-- [ ] 3.11 [GREEN] Pass test: render failed/stopped/aborted terminal states
+- [x] 3.11 [GREEN] Pass test: render failed/stopped/aborted terminal states
   - **Do**:
     1. Normalize failed/error/stopped/aborted statuses as terminal error states.
     2. Preserve error text or indicator in row.
