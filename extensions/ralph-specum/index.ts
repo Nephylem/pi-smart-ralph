@@ -1116,7 +1116,7 @@ function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string
 	}
 
 	if (relativePath === ".pi/subagents.json") {
-		if (nextConfig.widgetMode === "off") {
+		if (nextConfig.widgetMode !== "background") {
 			nextConfig.widgetMode = "background";
 			if (!result.updatedKeys.includes("widgetMode")) result.updatedKeys.push("widgetMode");
 			result.preservedKeys = result.preservedKeys.filter((key) => key !== "widgetMode");

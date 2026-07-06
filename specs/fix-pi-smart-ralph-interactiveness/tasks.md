@@ -535,7 +535,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-10, AC-5.1, NFR-1_
   - _Design: Runtime bootstrap defaults_
 
-- [ ] 4.2 [GREEN] Pass test: keep `widgetMode` and `fleetView` defaults
+- [x] 4.2 [GREEN] Pass test: keep `widgetMode` and `fleetView` defaults
   - **Do**:
     1. Preserve bootstrap defaults for pi-subagents settings.
     2. Avoid dependency version or pi-subagents package-source changes.
