@@ -378,7 +378,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, FR-11, FR-9_
   - _Design: Callback setWidget with dispose and requestRender_
 
-- [ ] Q3.2 [VERIFY] Quality check: running lifecycle slice
+- [x] Q3.2 [VERIFY] Quality check: running lifecycle slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -388,7 +388,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 3.7 [RED] Failing test: `subagents:completed` renders bounded done linger
+- [x] 3.7 [RED] Failing test: `subagents:completed` renders bounded done linger
   - **Do**:
     1. Emit `subagents:completed` for a tracked id.
     2. Assert done/completed state appears.
