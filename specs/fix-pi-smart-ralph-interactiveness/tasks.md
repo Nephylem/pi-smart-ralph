@@ -400,7 +400,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, AC-3.3, NFR-5_
   - _Design: Finished rows decision; Edge Cases completed before started_
 
-- [ ] 3.8 [GREEN] Pass test: prune completed rows after bounded linger
+- [x] 3.8 [GREEN] Pass test: prune completed rows after bounded linger
   - **Do**:
     1. Mark completed entries with terminal timestamp.
     2. Render completed state during linger.

@@ -4802,7 +4802,7 @@ function pruneExpiredTrackedSubagents(now = Date.now()): void {
 			ralphSubagentWidgetState.tracked.delete(id);
 			continue;
 		}
-		if (now - record.completedAt > subagentWidgetLingerMs(record.status)) {
+		if (now - record.completedAt >= subagentWidgetLingerMs(record.status)) {
 			ralphSubagentWidgetState.tracked.delete(id);
 		}
 	}
