@@ -240,7 +240,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-8, FR-9, AC-5.1, AC-5.2_
   - _Design: State finalizer; Progress sync_
 
-- [ ] Q5 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for state cleanup
+- [x] Q5 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for state cleanup
   - **Do**:
     1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the new `state-cleanup` case.
   - **Files**: None
@@ -252,31 +252,31 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
 
 ## Phase 6: Harden parity verifiers against refactor drift
 
-- [ ] 6.1 [RED] Failing test: parity verifiers rely on behavior contracts, not `index.ts` source shape
+- [x] 6.1 [RED] Failing test: parity verifiers rely on behavior contracts, not `index.ts` source shape
   - **Do**:
     1. Add a `contract-surface` case to `scripts/verify-implementation-loop-parity.mjs`.
-    2. Add or extend focused cases in `scripts/verify-task-blockers-parity.mjs` for stable helper exports instead of helper-order or text scraping.
-    3. Assert behavior stays green when logic moves between `index.ts` and `implementation-loop.ts` behind stable bridges.
+    2. Add or extend focused cases in `scripts/verify-task-blockers-parity.mjs` to import/check stable helper bridges from `implementation-loop.ts` and `task-completion.ts` instead of helper-order assertions, raw `index.ts` scraping, or ad hoc TypeScript text matching.
+    3. Assert behavior stays green when recovery/finalizer logic moves between `index.ts` and `implementation-loop.ts` behind stable bridges, while the current source-shape-coupled verifiers still fail red.
   - **Files**: `scripts/verify-implementation-loop-parity.mjs`, `scripts/verify-task-blockers-parity.mjs`
-  - **Done when**: New cases fail for current source-shape coupling.
+  - **Done when**: New cases fail because current parity checks still couple to raw `index.ts` layout or syntax-shape assumptions instead of exported bridges and fixture behavior.
   - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case contract-surface 2>&1 | grep -q "FAIL\|EXPECTED_FAIL" && echo RED_PASS`
   - **Commit**: `test(implement): red - add contract surface verifier`
   - _Requirements: FR-10, AC-6.1_
   - _Design: Stable verifier contract surface_
 
-- [ ] 6.2 [GREEN] Pass test: replace brittle source-shape assertions with stable helper and fixture checks
+- [x] 6.2 [GREEN] Pass test: replace brittle source-shape assertions with stable helper and fixture checks
   - **Do**:
-    1. Export narrow stable helper bridges for completion, recovery, and finalizer logic where needed.
-    2. Replace large regex scraping of `index.ts` with helper imports and fixture-driven assertions where possible.
-    3. Reduce `verify-task-blockers-parity` dependency on raw file layout.
+    1. Export narrow stable helper bridges for completion, recovery, and finalizer logic where needed, including the helper surfaces the focused `stable-helper-exports` task-blockers case expects from `implementation-loop.ts` and `task-completion.ts`.
+    2. Replace `scripts/verify-implementation-loop-parity.mjs` scraping of `index.ts` function bodies with helper imports or fixture-driven assertions against the stable bridge surface.
+    3. Reduce `scripts/verify-task-blockers-parity.mjs` dependency on raw coordinator file layout so acceptance checks validate behavior/exports instead of source shape.
   - **Files**: `scripts/verify-implementation-loop-parity.mjs`, `scripts/verify-task-blockers-parity.mjs`, `extensions/ralph-specum/index.ts`, `extensions/ralph-specum/implementation-loop.ts`, `extensions/ralph-specum/task-completion.ts`
-  - **Done when**: Refactors across shared runtime files no longer cause false-negative parity failures and the `contract-surface` case passes.
+  - **Done when**: Refactors across shared runtime files no longer cause false-negative parity failures, `contract-surface` stops reporting `index.ts` body scraping / coordinator source-shape coupling, and the acceptance-checklist task-blockers verifier passes.
   - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case contract-surface && node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist`
   - **Commit**: `feat(verify): green - harden verifier contracts`
   - _Requirements: FR-10, AC-6.1_
   - _Design: Stable verifier contract surface; Behavior-first verifiers_
 
-- [ ] 6.3 [YELLOW] Refactor: replace ad hoc TypeScript loading paths in verifiers
+- [x] 6.3 [YELLOW] Refactor: replace ad hoc TypeScript loading paths in verifiers
   - **Do**:
     1. Remove or minimize custom regex transpilation for `task-completion.ts`.
     2. Use a stable module-loading path for verifier runtime imports.
@@ -287,7 +287,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-10, AC-6.1_
   - _Design: Stable verifier contract surface_
 
-- [ ] Q6 [VERIFY] Quality check: discovered parity node-verifier rows for contract hardening
+- [x] Q6 [VERIFY] Quality check: discovered parity node-verifier rows for contract hardening
   - **Do**:
     1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the new `contract-surface` case.
     2. Run the research.md `Verification Tooling` row for `node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist`.
@@ -300,7 +300,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
 
 ## Phase 7: Publish and cleanup gate hardening
 
-- [ ] 7.1 [RED] Failing test: publish gate cleanup failures self-repair or fail with exact reason code
+- [x] 7.1 [RED] Failing test: publish gate cleanup failures self-repair or fail with exact reason code
   - **Do**:
     1. Add a `cleanup-recovery` case to `scripts/verify-refactor-parity.mjs`.
     2. Add a package-path failure case to `scripts/verify-publish-bundle.mjs` for portable diagnostics.

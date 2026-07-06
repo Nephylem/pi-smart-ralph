@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const root = process.cwd();
+const requestedCase = parseCaseArg(process.argv.slice(2));
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 const failures = [];
@@ -24,6 +26,7 @@ const ORIGINAL_RESOURCE_ROOT = EXPLICIT_ORIGINAL_RESOURCE_ROOT ?? DEFAULT_ORIGIN
 const ORIGINAL_RESOURCE_ROOT_AVAILABLE = existsSync(ORIGINAL_RESOURCE_ROOT);
 const SHOULD_VERIFY_ORIGINAL_RESOURCES = ORIGINAL_RESOURCE_ROOT_AVAILABLE;
 const ORIGINAL_RESOURCE_DIRECTORIES = ['commands', 'templates', 'references', 'skills', 'schemas'];
+const packagePathFailureCaseKey = 'package-path-failure';
 
 function parseJsonFile(filePath, label) {
   try {
@@ -378,8 +381,103 @@ for (const name of ['@tintinweb/pi-subagents', '@tintinweb/pi-tasks', 'pi-mcp-ad
   if (!bundled.has(name)) failures.push(`missing bundledDependencies entry: ${name}`);
 }
 
-if (failures.length > 0) {
-  console.error('Smart Ralph package verification failed:');
-  for (const failure of failures) console.error(`- ${failure}`);
-  process.exit(1);
+function parseCaseArg(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index];
+    if (token === '--case') return args[index + 1] ?? '';
+    if (token.startsWith('--case=')) return token.slice('--case='.length);
+  }
+  return null;
 }
+
+function expectedFail(caseName, message) {
+  const error = new Error(message);
+  error.expectedFail = true;
+  error.caseName = caseName;
+  throw error;
+}
+
+function formatError(error) {
+  return String(error?.stack ?? error?.message ?? error);
+}
+
+function extractMachineReadableDiagnostic(output) {
+  const match = output.match(/\{[\s\S]*\}/m);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]);
+  } catch {
+    return null;
+  }
+}
+
+function verifyPackagePathFailureCase() {
+  const missingRoot = join(root, '__missing_publish_bundle_root__');
+  const result = spawnSync(process.execPath, [new URL(import.meta.url).pathname], {
+    cwd: root,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      RALPH_ORIGINAL_RESOURCE_ROOT: missingRoot,
+    },
+  });
+
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
+  if (result.status === 0) {
+    throw new Error('package-path-failure fixture must fail when the original resource root is missing.');
+  }
+
+  const diagnostic = extractMachineReadableDiagnostic(output);
+  if (!diagnostic) {
+    expectedFail(packagePathFailureCaseKey, `publish-bundle failure output is missing a machine-readable diagnostic block for missing original-root assumptions. Output: ${output}`);
+  }
+
+  const requiredFields = ['reasonCode', 'failingCommand', 'originalRoot', 'checkedPath', 'missingPathType', 'message'];
+  const missingFields = requiredFields.filter((field) => diagnostic?.[field] === undefined || diagnostic?.[field] === null || diagnostic?.[field] === '');
+  if (missingFields.length > 0) {
+    expectedFail(packagePathFailureCaseKey, `publish-bundle diagnostic is missing required fields ${missingFields.join(', ')}. Diagnostic: ${JSON.stringify(diagnostic)}`);
+  }
+
+  const source = readFileSync(new URL(import.meta.url), 'utf8');
+  const missingFixtureContracts = ['root', 'file', 'dependency_entrypoint'].filter((value) => !source.includes(`'${value}'`) && !source.includes(`"${value}"`));
+  if (missingFixtureContracts.length > 0) {
+    expectedFail(packagePathFailureCaseKey, `publish-bundle verifier does not yet cover portable missingPathType fixtures for ${missingFixtureContracts.join(', ')}.`);
+  }
+
+  if (diagnostic.missingPathType !== 'root') {
+    expectedFail(packagePathFailureCaseKey, `missing original-root fixture must classify as missingPathType=root; got ${JSON.stringify(diagnostic.missingPathType)}`);
+  }
+}
+
+function main() {
+  if (requestedCase) {
+    if (requestedCase !== packagePathFailureCaseKey) {
+      console.error(`Unknown verify case: ${requestedCase}`);
+      console.error(`Supported cases: ${packagePathFailureCaseKey}`);
+      process.exit(2);
+      return;
+    }
+
+    try {
+      verifyPackagePathFailureCase();
+      console.log(`PASS ${packagePathFailureCaseKey}`);
+      return;
+    } catch (error) {
+      if (error?.expectedFail === true) {
+        console.error(`EXPECTED_FAIL ${packagePathFailureCaseKey}: ${error.message}`);
+      } else {
+        console.error(`FAIL ${packagePathFailureCaseKey}: ${formatError(error)}`);
+      }
+      process.exit(1);
+      return;
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error('Smart Ralph package verification failed:');
+    for (const failure of failures) console.error(`- ${failure}`);
+    process.exit(1);
+  }
+}
+
+main();

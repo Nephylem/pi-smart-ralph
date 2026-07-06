@@ -13,6 +13,7 @@ let activeCase = requestedCase;
 
 const acceptanceChecklistCaseKey = 'acceptance-checklist';
 const cleanupCaseKey = 'cleanup';
+const cleanupRecoveryCaseKey = 'cleanup-recovery';
 const acceptanceChecklistCases = [
   'command-registration',
   'spec-resolution',
@@ -51,7 +52,7 @@ const cases = new Map([
   ['package-wiring', verifyPackageWiring],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
 ]);
-const supportedCaseNames = [...cases.keys(), cleanupCaseKey];
+const supportedCaseNames = [...cases.keys(), cleanupCaseKey, cleanupRecoveryCaseKey];
 
 async function main() {
   if (!requestedCase || requestedCase === 'all') {
@@ -83,6 +84,17 @@ async function main() {
 
   if (requestedCase === cleanupCaseKey) {
     const result = await runVerifierCase(requestedCase, verifyCleanupCase);
+    if (!result.ok) {
+      printCaseFailure(result);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`PASS ${requestedCase}`);
+    return;
+  }
+
+  if (requestedCase === cleanupRecoveryCaseKey) {
+    const result = await runVerifierCase(requestedCase, verifyCleanupRecoveryCase);
     if (!result.ok) {
       printCaseFailure(result);
       process.exitCode = 1;
@@ -882,6 +894,42 @@ async function verifyCleanupCase() {
 
   if (caseError) {
     throw caseError;
+  }
+}
+
+async function verifyCleanupRecoveryCase() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const missingContracts = [];
+
+  if (!/cleanup_artifact_failure[\s\S]{0,200}reasonCode:\s*["']VERIFY_CLEANUP_ARTIFACT_FAILURE["'][\s\S]{0,200}recoverable:\s*true[\s\S]{0,200}recoveryAction:\s*["']cleanup_artifacts["']/m.test(helperSource)) {
+    missingContracts.push('recoverable cleanup-artifact failure policy');
+  }
+
+  if (!/(artifactList|leftoverArtifacts|cleanupArtifactList|cleanupArtifacts?:\s*\[|leftover artifact list)/i.test(helperSource)) {
+    missingContracts.push('exact cleanup artifact-list normalization');
+  }
+
+  const publishCase = spawnSync(process.execPath, ['scripts/verify-publish-bundle.mjs', '--case', 'package-path-failure'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  const publishOutput = `${publishCase.stdout ?? ''}\n${publishCase.stderr ?? ''}`.trim();
+
+  if (publishCase.status === 0) {
+    if (!/PASS package-path-failure/.test(publishOutput)) {
+      throw new Error(`package-path-failure case must report a PASS marker when it succeeds; got ${JSON.stringify(publishOutput)}`);
+    }
+  } else if (!/(EXPECTED_FAIL|FAIL) package-path-failure:/.test(publishOutput)) {
+    throw new Error(`package-path-failure case must fail with a named diagnostic result; got ${JSON.stringify(publishOutput)}`);
+  }
+
+  if (publishCase.status !== 0) {
+    missingContracts.push('portable publish path diagnostics');
+  }
+
+  if (missingContracts.length > 0) {
+    expectedFail(`cleanup recovery coverage is missing ${missingContracts.join(', ')}. package-path-failure output: ${publishOutput || `exit ${publishCase.status ?? 'unknown'}`}`);
   }
 }
 
