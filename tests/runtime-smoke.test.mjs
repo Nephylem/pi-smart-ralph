@@ -352,6 +352,78 @@ test('ralph-subagents widget updates existing row to running after subagents:sta
   }
 });
 
+test('ralph-subagents widget fills incomplete lifecycle payloads from manager records', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  const managerSymbol = Symbol.for('pi-subagents:manager');
+  const previousManager = globalThis[managerSymbol];
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+    globalThis[managerSymbol] = {
+      getRecord(id) {
+        if (id !== 'agent-manager-fallback-1') return undefined;
+        return {
+          id,
+          type: 'ralph-requirements',
+          description: 'Requirements fallback metadata from manager',
+          startedAt: Date.now() - 2_000,
+          status: 'running',
+          toolUses: 5,
+          lifetimeUsage: { input: 250, output: 125, cacheWrite: 25 },
+          session: {
+            getSessionStats: () => ({
+              contextUsage: { tokens: 100, contextWindow: 200, percent: 50 },
+            }),
+          },
+        };
+      },
+    };
+
+    await pi.events.get('session_start')[0]({}, ctx);
+
+    const subagentWidgetInstall = ctx.widgets.find(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    assert.equal(typeof subagentWidgetInstall?.value, 'function');
+
+    const renderRequests = [];
+    const renderer = subagentWidgetInstall.value(
+      {
+        terminal: { columns: 160 },
+        requestRender() { renderRequests.push(Date.now()); },
+      },
+      {
+        fg(_color, text) { return text; },
+        bold(text) { return text; },
+      },
+    );
+
+    pi.emit('subagents:started', {
+      id: 'agent-manager-fallback-1',
+      status: 'running',
+    });
+
+    const renderedText = renderer.render().join('\n');
+    assert.ok(renderRequests.length > 0, 'expected incomplete lifecycle event to request a widget render');
+    assert.match(renderedText, /Requirements/);
+    assert.match(renderedText, /Requirements fallback metadata from manager/);
+    assert.match(renderedText, /running|active/i);
+    assert.match(renderedText, /5 tools/);
+    assert.match(renderedText, /50%/);
+    assert.match(renderedText, /100\/200 ctx/);
+
+    renderer.dispose?.();
+  } finally {
+    if (previousManager === undefined) {
+      delete globalThis[managerSymbol];
+    } else {
+      globalThis[managerSymbol] = previousManager;
+    }
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('ralph-subagents widget renders completed row for bounded linger then prunes it', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   const originalDateNow = Date.now;

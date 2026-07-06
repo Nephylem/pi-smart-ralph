@@ -467,7 +467,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, FR-9, NFR-5_
   - _Design: Ralph subagent lifecycle tracker_
 
-- [ ] Q3.4 [VERIFY] Quality check: failed lifecycle slice
+- [x] Q3.4 [VERIFY] Quality check: failed lifecycle slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -477,7 +477,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2, NFR-5_
   - _Design: Smoke test harness_
 
-- [ ] 3.13 [RED] Failing test: manager records fill incomplete lifecycle payloads
+- [x] 3.13 [RED] Failing test: manager records fill incomplete lifecycle payloads
   - **Do**:
     1. Install mocked `Symbol.for("pi-subagents:manager")` global manager record.
     2. Emit incomplete lifecycle event with only id/status.
