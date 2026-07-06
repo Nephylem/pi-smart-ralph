@@ -37,6 +37,7 @@ const cases = new Map([
   ['shared-surface-preflight', verifySharedSurfacePreflight],
   ['verification-envelope', verifyVerificationEnvelope],
   ['state-cleanup', verifyStateCleanup],
+  ['contract-surface', verifyContractSurface],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -91,7 +92,7 @@ async function verifyStateResume() {
     expectedFail('runImplementCommand does not delegate execution bootstrap/resume handling to implementation-loop helpers yet.');
   }
 
-  const bootstrapSection = indexSource.match(/state\s*=\s*mergeRalphState\([\s\S]*?awaitingApproval:\s*false,[\s\S]*?validationError:\s*null,[\s\S]*?\}\s*,\s*options\s*\);/);
+  const bootstrapSection = matchSource(indexSource, /state\s*=\s*mergeRalphState\([\s\S]*?awaitingApproval:\s*false,[\s\S]*?validationError:\s*null,[\s\S]*?\}\s*,\s*options\s*\);/);
   if (!bootstrapSection) {
     expectedFail('could not locate execution bootstrap state merge in runImplementCommand.');
   }
@@ -116,7 +117,7 @@ async function verifyStateResume() {
     expectedFail(`fresh execution bootstrap is missing ImplementationLoopStateV1 fields: ${missingBootstrapFields.join(', ')}`);
   }
 
-  const resumeSection = indexSource.match(/function implementationAttemptPatch\([\s\S]*?return\s*\{[\s\S]*?currentTask:\s*\{[\s\S]*?\};\n\}/);
+  const resumeSection = matchSource(indexSource, /function implementationAttemptPatch\([\s\S]*?return\s*\{[\s\S]*?currentTask:\s*\{[\s\S]*?\};\n\}/);
   if (!resumeSection) {
     expectedFail('could not locate implementationAttemptPatch resume state merge.');
   }
@@ -159,7 +160,7 @@ async function verifyStateIntegrity() {
     expectedFail('pre-execution state upgrade helper is not available yet.');
   }
 
-  const startupSection = indexSource.match(/taskData = readImplementationTasks\(spec\);[\s\S]*?state = ensureNativeTaskCardsForImplementation\(pi, ctx, spec, options, state, taskData\.tasks\);/);
+  const startupSection = matchSource(indexSource, /taskData = readImplementationTasks\(spec\);[\s\S]*?state = ensureNativeTaskCardsForImplementation\(pi, ctx, spec, options, state, taskData\.tasks\);/);
   if (!startupSection) {
     expectedFail('could not locate implementation startup state bootstrap and native-task repair sequence.');
   }
@@ -176,7 +177,7 @@ async function verifyStateIntegrity() {
     expectedFail('corrupt execution-state diagnostics do not yet name .ralph-state.json and the missing or invalid field.');
   }
 
-  const staleMapRepairSection = indexSource.match(/function ensureNativeTaskCardsForImplementation\([\s\S]*?return state \?\? \{\};\n\}/);
+  const staleMapRepairSection = matchSource(indexSource, /function ensureNativeTaskCardsForImplementation\([\s\S]*?return state \?\? \{\};\n\}/);
   if (!staleMapRepairSection) {
     expectedFail('could not locate native task map repair helper.');
   }
@@ -200,7 +201,7 @@ async function verifyRecoveryFix() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const failureSection = indexSource.match(/if \(!validation\.ok\) \{[\s\S]*?continue;\n\s*\}/);
+  const failureSection = matchSource(indexSource, /if \(!validation\.ok\) \{[\s\S]*?continue;\n\s*\}/);
   if (!failureSection) {
     expectedFail('could not locate implementation failure handling branch.');
   }
@@ -261,7 +262,7 @@ async function verifyRecoveryBounds() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const failureSection = indexSource.match(/if \(!validation\.ok\) \{[\s\S]*?continue;\n\s*\}/);
+  const failureSection = matchSource(indexSource, /if \(!validation\.ok\) \{[\s\S]*?continue;\n\s*\}/);
   if (!failureSection) {
     expectedFail('could not locate implementation failure handling branch.');
   }
@@ -322,7 +323,7 @@ async function verifyTaskModification() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const parseSection = indexSource.match(/function parseTaskModificationRequest\([\s\S]*?return \{[\s\S]*?proposedTasks,\n\t\};\n\}/);
+  const parseSection = matchSource(indexSource, /function parseTaskModificationRequest\([\s\S]*?return \{[\s\S]*?proposedTasks,\n\t\};\n\}/);
   if (!parseSection) {
     expectedFail('could not locate TASK_MODIFICATION_REQUEST payload parser.');
   }
@@ -338,8 +339,11 @@ async function verifyTaskModification() {
   if (missingInvalidPayloadChecks.length > 0) {
     expectedFail('TASK_MODIFICATION_REQUEST parser does not yet reject invalid payload shape before any mutation attempt.');
   }
+  if (!/normalizeImplementationTaskModificationProposals\(/.test(parseSection[0])) {
+    expectedFail('TASK_MODIFICATION_REQUEST parser does not yet normalize structured task objects into canonical task blocks.');
+  }
 
-  const handlerSection = indexSource.match(/function handleTaskModificationRequest\([\s\S]*?\n\}/);
+  const handlerSection = matchSource(indexSource, /function handleTaskModificationRequest\([\s\S]*?\n\}/);
   if (!handlerSection) {
     expectedFail('could not locate TASK_MODIFICATION_REQUEST application handler.');
   }
@@ -357,6 +361,7 @@ async function verifyTaskModification() {
     .sort((left, right) => left - right)[0] ?? -1;
   const validationIndices = [
     handlerSource.indexOf('request.originalTaskId !== currentTaskId'),
+    handlerSource.indexOf('normalizeImplementationTaskModificationProposals('),
     handlerSource.indexOf('proposed duplicate task ids'),
     handlerSource.indexOf('must be a single checkbox task block'),
     handlerSource.indexOf('already exists in tasks.md'),
@@ -380,6 +385,8 @@ async function verifyTaskModification() {
 
   const extractedHelperPatterns = [
     /export function (?:validate|parse)ImplementationTaskModification/,
+    /export function normalizeImplementationTaskModificationProposals/,
+    /export function createImplementationCanonicalTaskBlock/,
     /export function validateImplementationTaskMutation/,
     /export function applyImplementationTaskBlockMutation/,
     /export function createImplementationTaskMutationRemapPatch/,
@@ -397,6 +404,49 @@ async function verifyTaskModification() {
   if (!/from\s+["']\.\/implementation-loop(?:\.ts)?["'][\s\S]*ImplementationTaskModification/.test(indexSource)) {
     expectedFail('runImplementCommand does not yet delegate task modification request handling through implementation-loop.ts helpers.');
   }
+
+  const canonicalRenderingPatterns = [
+    /- \[ \] \$\{input\.taskNumber\}/,
+    /\*\*Do\*\*/,
+    /\*\*Files\*\*/,
+    /\*\*Done when\*\*/,
+    /\*\*Verify\*\*/,
+    /\*\*Commit\*\*/,
+  ];
+  if (!canonicalRenderingPatterns.every((pattern) => pattern.test(helperSource))) {
+    expectedFail('structured task proposals are not yet rendered through a stable canonical markdown task-block helper.');
+  }
+
+  const structuredRepairPatterns = [
+    /title\s*\?\?\s*value\.subject\s*\?\?\s*value\.name/i,
+    /doneWhen|acceptance criteria|exit criteria/i,
+    /files\s*\|\|\s*paths|files changed/i,
+    /Recovered task for/,
+    /MANUAL_VERIFY_REQUIRED/,
+    /createImplementationGeneratedTaskMutationId\(/,
+  ];
+  const missingStructuredRepairPatterns = structuredRepairPatterns.filter((pattern) => !pattern.test(helperSource));
+  if (missingStructuredRepairPatterns.length > 0) {
+    expectedFail('task modification helpers do not yet prove structured-object normalization plus bounded default-field repair for malformed task proposals.');
+  }
+
+  const helperDelegationPatterns = [
+    /validateImplementationTaskMutation\(/,
+    /applyImplementationTaskModification\(/,
+    /createImplementationTaskMutationRemapPatch\(/,
+  ];
+  const missingHelperDelegation = helperDelegationPatterns.filter((pattern) => !pattern.test(handlerSource));
+  if (missingHelperDelegation.length > 0) {
+    expectedFail('task modification handler does not yet delegate repaired proposal validation and remap-before-block behavior through implementation-loop helper exports.');
+  }
+
+  const repairBeforeBlockPatterns = [
+    /normalizeImplementationTaskModificationProposals\([\s\S]*fallbackFiles:[\s\S]*fallbackVerify:/,
+    /validateImplementationTaskMutation\([\s\S]*proposedTasks:[\s\S]*requiredFields:[\s\S]*existingTaskIds:/,
+  ];
+  if (!repairBeforeBlockPatterns.every((pattern) => pattern.test(handlerSource))) {
+    expectedFail('task modification handler does not yet prove recoverable missing fields and generated child ids are repaired before mutation-time blockers run.');
+  }
 }
 
 async function verifyCompletionGates() {
@@ -409,7 +459,7 @@ async function verifyCompletionGates() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const validationSection = indexSource.match(/function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
+  const validationSection = matchSource(indexSource, /function validateSubagentCompletion\([\s\S]*?\n}\n\nfunction runGitCommand/);
   if (!validationSection) {
     expectedFail('could not locate validateSubagentCompletion completion gate validator.');
   }
@@ -455,7 +505,7 @@ async function verifyLayer3Review() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const loopSection = indexSource.match(/implementationLoop: while \(true\) \{[\s\S]*?completedSummaries\.push\(`- Completed task/);
+  const loopSection = matchSource(indexSource, /implementationLoop: while \(true\) \{[\s\S]*?completedSummaries\.push\(`- Completed task/);
   if (!loopSection) {
     expectedFail('could not locate implementation execution loop for Layer 3 review checkpoints.');
   }
@@ -474,7 +524,7 @@ async function verifyLayer3Review() {
     expectedFail(`Layer 3 review cadence is not yet wired for phase-boundary, every-5th-task, and final-task checkpoints (${missingCheckpointPatterns.join(', ')}).`);
   }
 
-  const evidenceSection = indexSource.match(/setTaskCheckboxStatus\(spec, task\.index, true\);[\s\S]*?completedSummaries\.push\(`- Completed task/);
+  const evidenceSection = matchSource(indexSource, /setTaskCheckboxStatus\(spec, task\.index, true\);[\s\S]*?completedSummaries\.push\(`- Completed task/);
   if (!evidenceSection) {
     expectedFail('could not locate successful task completion state update for Layer 3 review evidence.');
   }
@@ -491,7 +541,7 @@ async function verifyLayer3Review() {
     expectedFail(`triggered Layer 3 reviews do not yet record REVIEW_PASS/REVIEW_FAIL evidence in progress or canonical evidence (${missingEvidencePatterns.join(', ')}).`);
   }
 
-  const finalSection = indexSource.match(/if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",/);
+  const finalSection = matchSource(indexSource, /if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",/);
   if (!finalSection) {
     expectedFail('could not locate ALL_TASKS_COMPLETE finalization path.');
   }
@@ -517,7 +567,7 @@ async function verifyParallelBatch() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const dependencySection = indexSource.match(/function assignNativeTaskDependencies\([\s\S]*?\n}\n\nfunction activeToolDependencyError/);
+  const dependencySection = matchSource(indexSource, /function assignNativeTaskDependencies\([\s\S]*?\n}\n\nfunction activeToolDependencyError/);
   if (!dependencySection) {
     expectedFail('could not locate native-task dependency assignment for [P] tasks.');
   }
@@ -532,7 +582,7 @@ async function verifyParallelBatch() {
     throw new Error('parallel task metadata no longer preserves downstream barrier prerequisites for contiguous [P] groups.');
   }
 
-  const nextTaskSection = indexSource.match(/function nextImplementationTask\([\s\S]*?\n}\n\nfunction stateRecordField/);
+  const nextTaskSection = matchSource(indexSource, /function nextImplementationTask\([\s\S]*?\n}\n\nfunction stateRecordField/);
   if (!nextTaskSection) {
     expectedFail('could not locate nextImplementationTask selection logic.');
   }
@@ -557,7 +607,7 @@ async function verifyParallelBatch() {
     expectedFail('batch planning and evidence recording are not yet isolated behind dedicated helper exports.');
   }
 
-  const loopSection = indexSource.match(/while \(true\) \{[\s\S]*?const next = nextImplementationTask\(tasks, numberField\(state, ["']taskIndex["']\)\);[\s\S]*?validation = validateSubagentCompletion\(completion, definition, task, workspaceReport\);/);
+  const loopSection = matchSource(indexSource, /while \(true\) \{[\s\S]*?const next = nextImplementationTask\(tasks, numberField\(state, ["']taskIndex["']\)\);[\s\S]*?validation = validateSubagentCompletion\(completion, definition, task, workspaceReport\);/);
   if (!loopSection) {
     expectedFail('could not locate implementation execution loop for runnable task delegation.');
   }
@@ -598,7 +648,7 @@ async function verifyCompletionFinalizer() {
   const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
   const indexSource = readFileSync(indexPath, 'utf8');
 
-  const finalSection = indexSource.match(/if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",[\s\S]*?return;/);
+  const finalSection = matchSource(indexSource, /if \(next\.kind === "complete"\) \{[\s\S]*?"ALL_TASKS_COMPLETE",[\s\S]*?return;/);
   if (!finalSection) {
     expectedFail('could not locate implementation completion finalization path.');
   }
@@ -853,7 +903,7 @@ async function verifyVerifyAutoRecovery() {
     expectedFail(`verify auto-recovery does not yet cover cleanup artifact failure, transient verifier failure, and shared-contract drift repaired in-place inside the same /ralph-implement session (${missingScenarioContracts.map((contract) => contract.label).join(', ')}).`);
   }
 
-  const failureSection = indexSource.match(/if \(!validation\.ok\) \{[\s\S]*?continue implementationLoop;[\s\S]*?\n\s*\}/);
+  const failureSection = matchSource(indexSource, /if \(!validation\.ok\) \{[\s\S]*?continue implementationLoop;[\s\S]*?\n\s*\}/);
   if (!failureSection) {
     expectedFail('could not locate implementation failure handling branch for verify auto-recovery.');
   }
@@ -1174,6 +1224,67 @@ async function verifyStateCleanup() {
   ];
   if (staleRetainedArtifactGuards.some((pattern) => !pattern.test(combinedSource))) {
     expectedFail(`completed specs do not yet prove retained completion artifacts omit stale blocked or in-flight fields: ${[...staleFailureFields, ...staleInflightFields].join(', ')}.`);
+  }
+}
+
+function matchSource(source, pattern) {
+  return source.match(pattern);
+}
+
+async function verifyContractSurface() {
+  const implementationVerifierPath = join(root, 'scripts', 'verify-implementation-loop-parity.mjs');
+  const taskBlockersVerifierPath = join(root, 'scripts', 'verify-task-blockers-parity.mjs');
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  const completionPath = join(root, 'extensions', 'ralph-specum', 'task-completion.ts');
+
+  const implementationVerifierSource = readFileSync(implementationVerifierPath, 'utf8');
+  const taskBlockersVerifierSource = readFileSync(taskBlockersVerifierPath, 'utf8');
+  const helperSource = existsSync(helperPath) ? readFileSync(helperPath, 'utf8') : '';
+  const completionSource = existsSync(completionPath) ? readFileSync(completionPath, 'utf8') : '';
+
+  const stableImplementationBridges = [
+    /export function validateImplementationCompletionBridge\(/,
+    /export function createImplementationCompletionBridgeInput\(/,
+    /export function planImplementationVerificationRecoveryFromEnvelope\(/,
+    /export function createImplementationSharedSurfacePreflightPlan\(/,
+    /export function createImplementationCompletionFinalizer\(/,
+  ];
+  const missingImplementationBridges = stableImplementationBridges.filter((pattern) => !pattern.test(helperSource));
+  if (missingImplementationBridges.length > 0) {
+    expectedFail('implementation-loop.ts does not yet expose the stable verifier bridge surface needed for behavior-first contract checks.');
+  }
+
+  const stableTaskCompletionBridges = [
+    /export function analyzeTaskWorkspace\(/,
+    /export function formatTaskWorkspaceReport\(/,
+    /export function normalizeVerificationAgentOutputEnvelope\(/,
+    /export function normalizePackageScriptOutputEnvelope\(/,
+    /export function normalizeNestedVerifierResultEnvelope\(/,
+  ];
+  const missingTaskCompletionBridges = stableTaskCompletionBridges.filter((pattern) => !pattern.test(completionSource));
+  if (missingTaskCompletionBridges.length > 0) {
+    expectedFail('task-completion.ts does not yet expose stable helper exports for verifier contract fixtures.');
+  }
+
+  if (!/\['stable-helper-exports',\s*verifyStableHelperExports\]/.test(taskBlockersVerifierSource)) {
+    expectedFail('verify-task-blockers-parity.mjs does not yet expose the stable-helper-exports case required by the contract-surface verifier.');
+  }
+
+  const sourceShapeCouplings = [
+    {
+      label: 'implementation-loop verifier scrapes index.ts function bodies',
+      pattern: /indexSource\.match\(\/function\s|indexSource\.match\(\/if \(next|indexSource\.match\(\/implementationLoop:/,
+      source: implementationVerifierSource,
+    },
+    {
+      label: 'task-blockers verifier scrapes coordinator source shape',
+      pattern: /indexSource\.match\(\/function\s|indexSource\.match\(\/const definition|promptSection|validationSection|failureReasonSection|evidenceSection/,
+      source: taskBlockersVerifierSource,
+    },
+  ].filter((check) => check.pattern.test(check.source));
+
+  if (sourceShapeCouplings.length > 0) {
+    expectedFail(`parity verifiers still rely on source-shape scraping instead of stable exported bridges: ${sourceShapeCouplings.map((check) => check.label).join('; ')}.`);
   }
 }
 

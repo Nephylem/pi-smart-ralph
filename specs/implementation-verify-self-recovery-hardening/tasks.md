@@ -346,6 +346,50 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-12, FR-13, AC-7.1, AC-7.2_
   - _Design: Package verification diagnostics_
 
+- [x] 7.4 [RED] Failing test: task modification requests accept structured proposals and reject only unrecoverable payload defects
+  - **Do**:
+    1. Extend the `task-modification` parity case to require structured task-object support and canonical task rendering.
+    2. Add assertions that recoverable missing fields such as `Do`, `Files`, `Done when`, `Verify`, `Commit`, or a generated child id are repaired before mutation-time blocking.
+  - **Files**: `scripts/verify-implementation-loop-parity.mjs`
+  - **Done when**: The task-modification case fails for missing structured payload normalization or repair-before-block behavior.
+  - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case task-modification 2>&1 | grep -q "FAIL\|EXPECTED_FAIL" && echo RED_PASS`
+  - **Commit**: `test(implement): red - harden task modification payload verifier`
+  - _Requirements: FR-15, FR-16, AC-8.1, AC-8.2_
+  - _Design: Task-modification normalizer_
+
+- [x] 7.5 [GREEN] Pass test: canonicalize structured and legacy task modification proposals before mutation
+  - **Do**:
+    1. Accept structured `TASK_MODIFICATION_REQUEST.proposedTasks` objects while preserving legacy markdown block support.
+    2. Canonicalize proposals into coordinator-rendered markdown blocks.
+    3. Repair recoverable missing fields and generated child ids before mutation-time validation.
+  - **Files**: `extensions/ralph-specum/implementation-loop.ts`, `extensions/ralph-specum/index.ts`, `agents/ralph-spec-executor.md`
+  - **Done when**: Structured task proposals, repaired field defaults, and canonical task blocks are used before mutation and the `task-modification` case passes.
+  - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case task-modification`
+  - **Commit**: `feat(implement): green - normalize task modification payloads`
+  - _Requirements: FR-15, FR-16, AC-8.1, AC-8.2_
+  - _Design: Task-modification normalizer; Canonical task proposal_
+
+- [x] 7.6 [YELLOW] Refactor: centralize task modification canonical rendering and default repair helpers
+  - **Do**:
+    1. Extract task-proposal parsing, canonical rendering, and generated-id helpers into `implementation-loop.ts`.
+    2. Keep the coordinator task-mutation path thin and deterministic.
+  - **Files**: `extensions/ralph-specum/implementation-loop.ts`, `extensions/ralph-specum/index.ts`
+  - **Done when**: Canonical task-modification helpers are isolated and the `task-modification` case stays green.
+  - **Verify**: `node scripts/verify-implementation-loop-parity.mjs --case task-modification`
+  - **Commit**: `refactor(implement): yellow - isolate task modification normalization`
+  - _Requirements: FR-15, FR-16, AC-8.1, AC-8.2_
+  - _Design: Task-modification normalizer_
+
+- [x] Q7 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for task modification recovery
+  - **Do**:
+    1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the `task-modification` case.
+  - **Files**: None
+  - **Done when**: The discovered implementation-loop node-verifier entrypoint exits `0` for `task-modification`.
+  - **Verify**: `RALPH_RUN="VT-4=task-modification" python3 -c 'from pathlib import Path; import os, subprocess, sys; text=Path("specs/implementation-verify-self-recovery-hardening/research.md").read_text(); qsec=text.split("## Quality Commands",1)[1].split("\n## ",1)[0]; vsec=text.split("## Verification Tooling",1)[1].split("\n## ",1)[0]; qrows=[l for l in qsec.splitlines() if l.startswith("| ") and not l.startswith("| Type") and not l.startswith("| ------------")]; vrows=[l for l in vsec.splitlines() if l.startswith("| ") and not l.startswith("| Tool") and not l.startswith("| -------------")]; amap={f"VT-{i+1}":r.split("`")[1] for i,r in enumerate(vrows) if "`" in r}; amap.update({f"QC-{r.split("|")[1].strip().replace(":","-")}":r.split("`")[1] for r in qrows if "`" in r}); items=[i for i in os.environ["RALPH_RUN"].split(",") if i]; resolved=[(item.partition("=")[0], (amap[item.partition("=")[0]].replace("acceptance-checklist", item.partition("=")[2]) if item.partition("=")[2] else amap[item.partition("=")[0]]), item.partition("=")[2]) for item in items]; print("\n".join(f"research.md {alias}" + (f" reused for {reuse}" if reuse else "") for alias,_,reuse in resolved)); sys.exit(subprocess.run(" && ".join(cmd for _,cmd,_ in resolved), shell=True).returncode)'`
+  - **Commit**: `chore(implement): pass task modification recovery checkpoint` (if fixes needed)
+  - _Requirements: FR-11, FR-15, FR-16, AC-8.1, AC-8.2_
+  - _Design: Parity verifier; Task-modification normalizer_
+
 - [ ] V1 [VERIFY] Package verification gate: discovered `verify` quality-command row
   - **Do**:
     1. Run the research.md `Quality Commands` `verify` row and matching `Verification Tooling` npm-script row: `npm run prepack`.
