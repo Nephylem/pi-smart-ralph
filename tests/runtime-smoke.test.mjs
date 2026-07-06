@@ -51,7 +51,7 @@ function createMockCtx(cwd) {
     ui: {
       async notify(message, type = 'info') { notifications.push({ message, type }); },
       setFooter(value) { widgets.push({ kind: 'footer', value }); },
-      setWidget(key, value) { widgets.push({ kind: 'widget', key, value }); },
+      setWidget(key, value, options) { widgets.push({ kind: 'widget', key, value, options }); },
       setStatus(key, message) { statuses.push({ key, message }); },
       async confirm() { return false; },
       async select(_title, options) { return options?.[0] ?? null; },
@@ -111,6 +111,37 @@ test('core command handlers work with a minimal Pi context', async () => {
     await pi.commands.get('ralph-index').handler('--bad-option', ctx);
     assert.equal(ctx.notifications.at(-1).type, 'warning');
     assert.match(ctx.notifications.at(-1).message, /Unsupported \/ralph-index option/);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('session_start installs Ralph footer and ralph-subagents widget surfaces', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+
+    await pi.events.get('session_start')[0]({}, ctx);
+
+    const footerInstall = ctx.widgets.find((entry) => entry.kind === 'footer');
+    assert.ok(footerInstall, 'expected session_start to install the Ralph footer surface');
+
+    const subagentWidgetInstall = ctx.widgets.find(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    assert.ok(subagentWidgetInstall, 'expected session_start to install the ralph-subagents widget');
+    assert.equal(
+      subagentWidgetInstall.options?.placement,
+      'aboveEditor',
+      'expected ralph-subagents widget to install as an above-editor interactive surface',
+    );
+
+    await assert.doesNotReject(
+      () => pi.events.get('session_start')[0]({}, { cwd: projectRoot, hasUI: true }),
+      'expected session_start surface installation to no-op safely when Pi UI methods are unavailable',
+    );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }

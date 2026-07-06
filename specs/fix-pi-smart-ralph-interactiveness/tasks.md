@@ -151,7 +151,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-4, FR-9_
   - _Design: Safe Ralph UI helpers_
 
-- [ ] Q1.3 [VERIFY] Quality check: coordinator startup status slice
+- [x] Q1.3 [VERIFY] Quality check: coordinator startup status slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -163,7 +163,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
 
 ## Phase 2: Safe UI Surface TDD
 
-- [ ] 2.1 [RED] Failing test: session start installs footer and `ralph-subagents` widget
+- [x] 2.1 [RED] Failing test: session start installs footer and `ralph-subagents` widget
   - **Do**:
     1. Add/extend `session_start` smoke test with mocked `setFooter`/`setWidget`.
     2. Assert footer install is called.
