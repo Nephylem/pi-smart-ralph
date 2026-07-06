@@ -10345,18 +10345,24 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
 		await notify(ctx, `Started Ralph ${label}. The coordinator will continue in the background; you can keep using Pi while its subagent runs.`);
 
-		void (async () => {
-			try {
-				await run();
-			} catch (error) {
-				await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
-			} finally {
-				if (activeRalphCoordinatorJob === job) {
-					activeRalphCoordinatorJob = null;
-					stopRalphStatusAnimation(ctx);
-				}
-			}
-		})();
+		const detachedWorkflowImmediate = setImmediate(() => {
+			const detachedWorkflowTimer = setTimeout(() => {
+				void (async () => {
+					try {
+						await run();
+					} catch (error) {
+						await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
+					} finally {
+						if (activeRalphCoordinatorJob === job) {
+							activeRalphCoordinatorJob = null;
+							stopRalphStatusAnimation(ctx);
+						}
+					}
+				})();
+			}, 0);
+			(detachedWorkflowTimer as { unref?: () => void }).unref?.();
+		});
+		(detachedWorkflowImmediate as { unref?: () => void }).unref?.();
 	}
 
 	pi.on("session_start", async (_event, ctx) => {

@@ -40,7 +40,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-1, AC-1.1, AC-1.3, NFR-1_
   - _Design: Coordinator job guard; Data Flow steps 1-4_
 
-- [ ] 1.2 [GREEN] Pass test: detach coordinator workflow after UI startup
+- [x] 1.2 [GREEN] Pass test: detach coordinator workflow after UI startup
   - **Do**:
     1. Install UI surfaces before detaching workflow execution.
     2. Catch detached workflow errors without keeping handler pending.
