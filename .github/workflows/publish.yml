@@ -8,7 +8,7 @@ on:
       - package.json
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -22,6 +22,7 @@ jobs:
       changed: ${{ steps.pkg.outputs.changed }}
       name: ${{ steps.pkg.outputs.name }}
       version: ${{ steps.pkg.outputs.version }}
+      tag: ${{ steps.pkg.outputs.tag }}
       previous_version: ${{ steps.pkg.outputs.previous_version }}
     steps:
       - name: Checkout repository
@@ -55,6 +56,7 @@ jobs:
           const changed = previousVersion !== current.version;
           console.log(`name=${current.name}`);
           console.log(`version=${current.version}`);
+          console.log(`tag=v${current.version}`);
           console.log(`previous_version=${previousVersion}`);
           console.log(`changed=${changed}`);
           NODE
@@ -144,3 +146,36 @@ jobs:
       - name: Publish to npm
         if: steps.npmcheck.outputs.exists == 'false'
         run: npm publish --access public --provenance
+
+      - name: Ensure matching GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ needs.detect-version-change.outputs.name }}
+          PACKAGE_VERSION: ${{ needs.detect-version-change.outputs.version }}
+          RELEASE_TAG: ${{ needs.detect-version-change.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force origin
+
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+            if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+              echo "Tag ${RELEASE_TAG} already exists at ${tag_commit}, not current commit ${GITHUB_SHA}."
+              echo "Refusing to create a mismatched GitHub release. Bump package.json version or fix the existing tag manually."
+              exit 1
+            fi
+            echo "Tag ${RELEASE_TAG} already exists at the current commit."
+          else
+            git tag "${RELEASE_TAG}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${RELEASE_TAG}"
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "GitHub release ${RELEASE_TAG} already exists."
+          else
+            gh release create "${RELEASE_TAG}" \
+              --target "${GITHUB_SHA}" \
+              --title "${RELEASE_TAG}" \
+              --notes "npm: https://www.npmjs.com/package/${PACKAGE_NAME}/v/${PACKAGE_VERSION}"
+          fi
