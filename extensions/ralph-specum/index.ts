@@ -82,6 +82,7 @@ import {
 	createImplementationCompletionBridgeInput,
 	createImplementationExecutionBatch,
 	createImplementationSharedSurfacePreflightPlan,
+	createRecoveredImplementationStatePatch,
 	createImplementationVerificationFailureEnvelope,
 	createImplementationVerificationRecoveryAttempt,
 	createImplementationVerificationRecoveryPolicy,
@@ -90,6 +91,7 @@ import {
 	createImplementationFinalizerIndexFailurePatch,
 	createImplementationFinalizerStartedPatch,
 	createImplementationFinalizerSuccessPatch,
+	deleteImplementationStateFile,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
 	createImplementationReviewCheckpoint,
@@ -105,6 +107,7 @@ import {
 	planImplementationVerificationRecovery,
 	rerunImplementationVerifierExactly,
 	runImplementationSharedSurfacePreflight,
+	rewriteImplementationProgressTruthfully,
 	SHARED_SURFACE_PREFLIGHT_COMMANDS,
 	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
@@ -7609,7 +7612,16 @@ async function runImplementCommand(
 					),
 					options,
 				);
-				unlinkIfExists(getRalphStatePath(spec, options));
+				writeProgress(
+					spec,
+					rewriteImplementationProgressTruthfully(readProgress(spec, options), {
+						specName: spec.name,
+						totalTasks: tasks.length,
+						completedAt,
+					}),
+					options,
+				);
+				deleteImplementationStateFile(spec, options);
 				// "ALL_TASKS_COMPLETE", plus optional "PR URL" terminal output is formatted by formatImplementationFinalizerSuccessOutput(...).
 				await notify(
 					ctx,
@@ -7786,7 +7798,7 @@ async function runImplementCommand(
 									globalIteration: globalIteration + 1,
 									blocked: false,
 									validationError: rerun.ok ? null : reason,
-									lastSubagentOutput: truncateForPrompt(rerun.output || verificationFailureOutput, 6000),
+									lastSubagentOutput: rerun.ok ? null : truncateForPrompt(rerun.output || verificationFailureOutput, 6000),
 									...createImplementationStateDefaults(state, {
 										...createImplementationVerificationRecoveryStatePatch({
 											state,
@@ -7803,6 +7815,7 @@ async function runImplementCommand(
 										maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 										maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 									}),
+									...(rerun.ok ? createRecoveredImplementationStatePatch() : {}),
 								},
 								options,
 							);

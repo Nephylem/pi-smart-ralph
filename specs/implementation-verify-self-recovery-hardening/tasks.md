@@ -192,7 +192,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-6, FR-7, AC-4.1, AC-4.2_
   - _Design: Failure envelope_
 
-- [ ] Q4 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for envelopes
+- [x] Q4 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for envelopes
   - **Do**:
     1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the new `verification-envelope` case.
   - **Files**: None
@@ -217,7 +217,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-8, FR-9, AC-5.1, AC-5.2_
   - _Design: State finalizer; Progress sync_
 
-- [ ] 5.2 [GREEN] Pass test: scrub stale runtime metadata on unblock, recovery, and completion
+- [x] 5.2 [GREEN] Pass test: scrub stale runtime metadata on unblock, recovery, and completion
   - **Do**:
     1. Clear stale blocked and failure fields when recovery succeeds.
     2. On successful completion, set completion evidence, clear stale `currentTask` and finalizer residue, and delete `<basePath>/.ralph-state.json`.

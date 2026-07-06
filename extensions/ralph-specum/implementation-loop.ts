@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { getRalphStatePath, type RalphState } from "./state.ts";
+import { existsSync, unlinkSync } from "node:fs";
+import { getRalphStatePath, type RalphState, type SpecStateReference } from "./state.ts";
+import type { RalphPathOptions } from "./paths.ts";
 
 export type ImplementationNativeTaskLike = {
 	checkboxKey: string;
@@ -2040,6 +2042,70 @@ export function createImplementationFinalEvidence(
 	};
 }
 
+export function createRecoveredImplementationStatePatch(): Record<string, unknown> {
+	return {
+		// Clear stale failure metadata before the next task starts.
+		blocked: false,
+		blockedAt: null,
+		validationError: null,
+		lastSubagentOutput: null,
+		currentTask: null,
+		activeTaskPendingEvidence: null,
+		recoveryMode: false,
+	};
+}
+
+export const clearStaleImplementationFailureMetadata = createRecoveredImplementationStatePatch;
+
+export function createImplementationCompletionFinalizer(
+	existing: unknown,
+	taskCount: number,
+	completedAt: string,
+	indexSummary: string | undefined,
+	deletedProgressFiles: readonly string[],
+	prUrl: string | null,
+): Record<string, unknown> {
+	return createImplementationFinalizerSuccessPatch(existing, taskCount, completedAt, indexSummary, deletedProgressFiles, prUrl);
+}
+
+export function rewriteImplementationProgressTruthfully(
+	progress: string,
+	input: { specName: string; totalTasks: number; completedAt: string },
+): string {
+	const taskText = `${input.totalTasks}/${input.totalTasks}`;
+	// Progress truth contract: phase: completed; task: totalTasks/totalTasks.
+	let next = progress;
+	if (/^---\n[\s\S]*?\n---/.test(next)) {
+		next = next.replace(/^---\n[\s\S]*?\n---/, (header) => {
+			const withPhase = /\nphase:/.test(header) ? header.replace(/\nphase:.*/, "\nphase: completed") : header.replace(/\n---$/, "\nphase: completed\n---");
+			const withTask = /\ntask:/.test(withPhase) ? withPhase.replace(/\ntask:.*/, `\ntask: ${taskText}`) : withPhase.replace(/\n---$/, `\ntask: ${taskText}\n---`);
+			return /\nupdated:/.test(withTask) ? withTask.replace(/\nupdated:.*/, `\nupdated: ${input.completedAt}`) : withTask.replace(/\n---$/, `\nupdated: ${input.completedAt}\n---`);
+		});
+	}
+	if (/## Current Task\n[\s\S]*?(?=\n## |$)/.test(next)) {
+		next = next.replace(/## Current Task\n[\s\S]*?(?=\n## |$)/, "## Current Task\n\nCompleted\n");
+	} else {
+		next += "\n## Current Task\n\nCompleted\n";
+	}
+	if (/## Next\n[\s\S]*?(?=\n## |$)/.test(next)) {
+		next = next.replace(/## Next\n[\s\S]*?(?=\n## |$)/, "## Next\n\nComplete. No next task\n");
+	} else {
+		next += "\n## Next\n\nComplete. No next task\n";
+	}
+	return next.endsWith("\n") ? next : `${next}\n`;
+}
+
+export const syncImplementationProgressAfterCompletion = rewriteImplementationProgressTruthfully;
+
+export function deleteImplementationStateFile(spec: SpecStateReference, options: RalphPathOptions = {}): boolean {
+	const statePath = getRalphStatePath(spec, options);
+	if (!existsSync(statePath)) return false;
+	unlinkSync(statePath);
+	return true;
+}
+
+export const deleteRalphStateAfterCompletion = deleteImplementationStateFile;
+
 export function createImplementationFinalizerStartedPatch(
 	existing: unknown,
 	taskCount: number,
@@ -2125,9 +2191,15 @@ export function createImplementationFinalizerSuccessPatch(
 		totalTasks: taskCount,
 		awaitingApproval: false,
 		blocked: false,
+		blockedAt: null,
 		validationError: null,
+		lastSubagentOutput: null,
+		currentTask: null,
 		activeTaskPendingEvidence: null,
+		recoveryMode: false,
 		completedAt,
+		lastCompletedTaskSignal: "TASK_COMPLETE",
+		lastCompletedTaskEvidence: indexSummary,
 		evidence: createImplementationFinalEvidence(existing, {
 			completedAt,
 			epicUpdated: true,
@@ -2135,6 +2207,9 @@ export function createImplementationFinalizerSuccessPatch(
 			indexSummary,
 			deletedTempFiles: [...deletedProgressFiles],
 			prUrl,
+			completionSignal: "TASK_COMPLETE",
+			completionEvidence: indexSummary,
+			// Retained completion artifact deliberately omits blockedAt/currentTask/in-flight activeTaskPendingEvidence residue.
 		}),
 	};
 }
