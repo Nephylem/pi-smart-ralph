@@ -312,6 +312,17 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-12, FR-13, AC-7.1, AC-7.2_
   - _Design: Package verification diagnostics; Cleanup recovery_
 
+- [x] 7.1.1 Refresh manifest checksum for adapted schema before publish-gate hardening
+  - **Do**:
+    1. Update `references/ralph-resource-manifest.v1.json` so the `schemas/spec.schema.json` entry `sha256` matches the current packaged schema file.
+    2. Confirm `node scripts/verify-publish-bundle.mjs` no longer fails on the manifest/schema checksum mismatch.
+  - **Files**: `references/ralph-resource-manifest.v1.json`
+  - **Done when**: `node scripts/verify-publish-bundle.mjs` is unblocked from the current manifest/schema checksum failure.
+  - **Verify**: `node scripts/verify-publish-bundle.mjs`
+  - **Commit**: `chore(pack): refresh schema manifest checksum`
+  - _Requirements: FR-12, FR-13, AC-7.1, AC-7.2_
+  - _Design: Package verification diagnostics; Cleanup recovery_
+
 - [ ] 7.2 [GREEN] Pass test: package verify flow repairs temp artifacts and reports portable failures
   - **Do**:
     1. Normalize temporary-artifact cleanup before package verification reruns.

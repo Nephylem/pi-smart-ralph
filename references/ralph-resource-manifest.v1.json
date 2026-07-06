@@ -230,7 +230,7 @@
     "kind": "schema",
     "status": "adapted",
     "notes": "Packaged schema is intentionally adapted for Pi runtime parity, including implementation-loop state and in-flight execution constraints.",
-    "sha256": "2c718325a4dc7ddafd304e211361b524305aa6b824114a4b8e445b34f9dc65a0"
+    "sha256": "633a531c24476c72d31cf028035c19bec8ddb792a1117311ae385f13276d3017"
   },
   {
     "originalPath": "skills/communication-style/references/examples.md",
