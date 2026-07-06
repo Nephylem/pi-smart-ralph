@@ -643,7 +643,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-11, FR-9_
   - _Design: Ralph interactive surfaces_
 
-- [ ] Q4.3 [VERIFY] Quality check: widget key slice
+- [x] Q4.3 [VERIFY] Quality check: widget key slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -653,7 +653,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] VE1 [VERIFY] Startup/build verification using discovered Node typecheck
+- [x] VE1 [VERIFY] Startup/build verification using discovered Node typecheck
   - **Do**:
     1. Use research.md Verification Tooling row `Node typecheck`.
     2. Verify Pi extension TypeScript surface builds without emitting.
@@ -664,7 +664,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-2, FR-9_
   - _Design: Test Strategy; Technical Decisions testing_
 
-- [ ] VE2 [VERIFY] TUI behavior verification using discovered mocked Pi UI harness
+- [x] VE2 [VERIFY] TUI behavior verification using discovered mocked Pi UI harness
   - **Do**:
     1. Use research.md Verification Tooling rows `Node unit/smoke tests` and `TUI unit harness`.
     2. Verify mocked `ctx.ui`/event-bus behavior covers coordinator, fallback, lifecycle, and defaults.
@@ -675,7 +675,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, FR-1, FR-2, FR-3, FR-5, FR-6, FR-7, FR-8, FR-10, FR-11, FR-12_
   - _Design: Smoke test harness; E2E Tests none/tooling boundary_
 
-- [ ] VE3 [VERIFY] Cleanup/package verification using discovered pack verifier
+- [x] VE3 [VERIFY] Cleanup/package verification using discovered pack verifier
   - **Do**:
     1. Use research.md Verification Tooling row `Pack verifiers`.
     2. Verify package dry-run checks leave extension packable after TUI changes.
@@ -688,7 +688,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
 
 ## Phase 5: Quality Gates and PR Lifecycle
 
-- [ ] V4 [VERIFY] Full local CI
+- [x] V4 [VERIFY] Full local CI
   - **Do**:
     1. Run all discovered local quality commands from research.md Quality Commands except install.
   - **Files**: None
@@ -698,7 +698,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2, NFR-3_
   - _Design: Test Strategy; Security Considerations_
 
-- [ ] V5 [VERIFY] CI pipeline passes
+- [x] V5 [VERIFY] CI pipeline passes
   - **Do**:
     1. Run local equivalent of `.github/workflows/quality.yml` discovered in research.md.
   - **Files**: None
@@ -708,7 +708,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2, NFR-3_
   - _Design: Test Strategy_
 
-- [ ] V6 [VERIFY] AC checklist
+- [x] V6 [VERIFY] AC checklist
   - **Do**:
     1. Verify tests and typecheck cover AC-1 through AC-5.
     2. Confirm no browser/server E2E tooling was added for this CLI/Pi extension fix.
@@ -719,7 +719,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: AC-1.1, AC-1.2, AC-1.3, AC-2.1, AC-2.2, AC-2.3, AC-2.4, AC-3.1, AC-3.2, AC-3.3, AC-3.4, AC-3.5, AC-4.1, AC-4.2, AC-4.3, AC-5.1, AC-5.2, AC-5.3, NFR-4_
   - _Design: Test Strategy; E2E Tests none_
 
-- [ ] VF [VERIFY] Goal verification: original failure now passes
+- [x] VF [VERIFY] Goal verification: original failure now passes
   - **Do**:
     1. Re-run discovered test and quality gates proving `/ralph-*` TUI behavior.
     2. Verify non-blocking startup, visible UI surfaces, lifecycle rows, and fallbacks via automated tests.

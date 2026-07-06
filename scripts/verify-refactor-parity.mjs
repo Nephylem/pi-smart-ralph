@@ -1432,16 +1432,20 @@ function createRefactorCommandFixture(tempRoot, options = {}) {
 
 async function captureConsoleLogs(run) {
   const originalLog = console.log;
+  const originalWarn = console.warn;
   const lines = [];
-  console.log = (...args) => {
+  const capture = (...args) => {
     lines.push(args.map((value) => String(value)).join(' '));
   };
+  console.log = capture;
+  console.warn = capture;
 
   try {
     await run();
     return lines;
   } finally {
     console.log = originalLog;
+    console.warn = originalWarn;
   }
 }
 

@@ -2254,10 +2254,17 @@ function implementArgumentCompletions(prefix: string) {
 	try {
 		return completeOptionValues(prefix, "--max-task-iterations", IMPLEMENT_ITERATION_COMPLETIONS)
 			?? completeOptionValues(prefix, "--max-global-iterations", IMPLEMENT_ITERATION_COMPLETIONS)
+			?? completeOptionValues(prefix, "--commit-progress", [
+				{ value: "off", label: "off", description: "Do not auto-commit coordinator progress (default)" },
+				{ value: "summary", label: "summary", description: "Commit coordinator progress once at successful completion" },
+				{ value: "per-task", label: "per-task", description: "Commit coordinator progress after each task" },
+			])
 			?? completeArgumentToken(prefix, [
 				flagItem("--recovery-mode", "Resume with extra blocker-tolerant recovery behavior"),
 				flagItem("--max-task-iterations", "Set the per-task retry cap"),
 				flagItem("--max-global-iterations", "Set the overall coordinator loop cap"),
+				flagItem("--commit-progress", "Opt in to coordinator progress commits: off, summary, or per-task"),
+				flagItem("--no-commit-progress", "Disable coordinator progress commits"),
 				...specCompletionCandidates(),
 			]);
 	} catch {
@@ -3231,7 +3238,7 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"- /ralph-requirements [spec]                    Generate requirements.md",
 		"- /ralph-design [spec]                          Generate design.md",
 		"- /ralph-tasks [--quick|--autonomous] [--tasks-size fine|coarse] [spec]  Generate canonical tasks.md",
-		"- /ralph-implement [--recovery-mode] [--max-task-iterations N] [--max-global-iterations N] [spec]  Execute tasks.md through Ralph subagents",
+		"- /ralph-implement [--recovery-mode] [--max-task-iterations N] [--max-global-iterations N] [--commit-progress off|summary|per-task] [spec]  Execute tasks.md through Ralph subagents",
 		"- /ralph-refactor [spec] [--file requirements|design|tasks]  Update one existing spec artifact with bounded scope",
 		"- /ralph-index [--path <dir>] [--type controllers,services,models,helpers,migrations,other] [--exclude <pattern>] [--dry-run] [--force] [--changed] [--quick]  Generate searchable component/external index artifacts",
 		"- /ralph-switch <spec-name-or-path>            Switch active spec",
@@ -6224,11 +6231,14 @@ async function runQuickFlow(
 
 type CompletionSignal = ImplementationCompletionSignal;
 
+type ImplementationProgressCommitMode = "off" | "summary" | "per-task";
+
 type ImplementArguments = {
 	reference: string | null;
 	maxTaskIterations: number;
 	maxGlobalIterations: number;
 	recoveryMode: boolean;
+	progressCommitMode: ImplementationProgressCommitMode;
 	error?: string;
 };
 
@@ -6304,6 +6314,8 @@ type GitCommandResult = {
 const IMPLEMENT_AGENTS = ["ralph-spec-executor", "ralph-qa-engineer", "ralph-refactor-specialist"] as const;
 const IMPLEMENT_DEFAULT_MAX_TASK_ITERATIONS = 5;
 const IMPLEMENT_DEFAULT_MAX_GLOBAL_ITERATIONS = 100;
+const IMPLEMENT_DEFAULT_PROGRESS_COMMIT_MODE: ImplementationProgressCommitMode = "off";
+const IMPLEMENT_PROGRESS_COMMIT_MODE_VALUES = new Set<ImplementationProgressCommitMode>(["off", "summary", "per-task"]);
 
 function parseImplementArgs(args: string): ImplementArguments {
 	const tokenized = tokenizeCommandArgs(args);
@@ -6313,6 +6325,7 @@ function parseImplementArgs(args: string): ImplementArguments {
 	let maxTaskIterations = IMPLEMENT_DEFAULT_MAX_TASK_ITERATIONS;
 	let maxGlobalIterations = IMPLEMENT_DEFAULT_MAX_GLOBAL_ITERATIONS;
 	let recoveryMode = false;
+	let progressCommitMode = IMPLEMENT_DEFAULT_PROGRESS_COMMIT_MODE;
 
 	for (let index = 0; index < tokenized.tokens.length; index += 1) {
 		const token = tokenized.tokens[index];
@@ -6334,6 +6347,21 @@ function parseImplementArgs(args: string): ImplementArguments {
 			maxGlobalIterations = parsed.value;
 			continue;
 		}
+		if (token === "--no-commit-progress") {
+			progressCommitMode = "off";
+			continue;
+		}
+		if (token === "--commit-progress" || token.startsWith("--commit-progress=")) {
+			const value = token.includes("=")
+				? token.slice(token.indexOf("=") + 1)
+				: IMPLEMENT_PROGRESS_COMMIT_MODE_VALUES.has(tokenized.tokens[index + 1] as ImplementationProgressCommitMode)
+					? tokenized.tokens[++index]
+					: "per-task";
+			const parsed = parseImplementationProgressCommitModeOption(value);
+			if (parsed.error) return emptyImplementArguments(parsed.error);
+			progressCommitMode = parsed.value;
+			continue;
+		}
 		if (token.startsWith("--")) return emptyImplementArguments(`Unknown option: ${token}`);
 		positionals.push(token);
 	}
@@ -6347,7 +6375,14 @@ function parseImplementArgs(args: string): ImplementArguments {
 		maxTaskIterations,
 		maxGlobalIterations,
 		recoveryMode,
+		progressCommitMode,
 	};
+}
+
+function parseImplementationProgressCommitModeOption(value: string | undefined): { value: ImplementationProgressCommitMode; error?: string } {
+	const normalized = value?.trim() as ImplementationProgressCommitMode | undefined;
+	if (normalized && IMPLEMENT_PROGRESS_COMMIT_MODE_VALUES.has(normalized)) return { value: normalized };
+	return { value: IMPLEMENT_DEFAULT_PROGRESS_COMMIT_MODE, error: `--commit-progress must be one of: off, summary, per-task.` };
 }
 
 function parsePositiveIntegerOption(name: string, value: string | undefined): { value: number; error?: string } {
@@ -6365,6 +6400,7 @@ function emptyImplementArguments(error: string): ImplementArguments {
 		maxTaskIterations: IMPLEMENT_DEFAULT_MAX_TASK_ITERATIONS,
 		maxGlobalIterations: IMPLEMENT_DEFAULT_MAX_GLOBAL_ITERATIONS,
 		recoveryMode: false,
+		progressCommitMode: IMPLEMENT_DEFAULT_PROGRESS_COMMIT_MODE,
 		error,
 	};
 }
@@ -6608,6 +6644,7 @@ function appendTaskModificationProgress(
 	request: TaskModificationRequest,
 	proposedTaskIds: string[],
 	options: RalphPathOptions,
+	commitMode: ImplementationProgressCommitMode,
 ): CoordinatorProgressCommitResult {
 	const progressPath = appendProgress(
 		spec,
@@ -6624,9 +6661,11 @@ function appendTaskModificationProgress(
 		options,
 	);
 
-	return commitTrackedProgressIfDirty(
+	return maybeCommitTrackedProgressIfDirty(
 		progressPath,
 		`chore(ralph): record task modification for ${spec.name} task ${task.taskNumber ?? task.index + 1}`,
+		commitMode,
+		"per-task",
 	);
 }
 
@@ -6724,12 +6763,8 @@ function handleTaskModificationRequest(
 			request,
 			proposedTaskIds,
 		});
-		const progressCommit = appendTaskModificationProgress(spec, task, request, proposedTaskIds, options);
-		const progressCommitSummary = progressCommit.committed
-			? `; coordinator progress commit ${progressCommit.hash ?? "unknown"}`
-			: progressCommit.error
-				? `; coordinator progress commit failed: ${progressCommit.error}`
-				: "";
+		const progressCommit = appendTaskModificationProgress(spec, task, request, proposedTaskIds, options, implementationProgressCommitModeFromState(state));
+		const progressCommitSummary = formatCoordinatorProgressCommitSummary(progressCommit);
 		const summary = `- Applied ${request.type} to task ${request.originalTaskId} -> ${proposedTaskIds.join(", ")} (${request.reasoning}${progressCommitSummary})`;
 
 		return {
@@ -7305,6 +7340,33 @@ function commitTrackedProgressIfDirty(progressPath: string, message: string): Co
 	return { committed: true, hash: gitShortHead(root) };
 }
 
+function maybeCommitTrackedProgressIfDirty(
+	progressPath: string,
+	message: string,
+	mode: ImplementationProgressCommitMode,
+	trigger: "per-task" | "summary",
+): CoordinatorProgressCommitResult {
+	return mode === trigger ? commitTrackedProgressIfDirty(progressPath, message) : { committed: false };
+}
+
+function implementationProgressCommitModeFromState(state: RalphState | null): ImplementationProgressCommitMode {
+	return normalizeImplementationProgressCommitMode(stringField(state, "implementationProgressCommitMode"));
+}
+
+function normalizeImplementationProgressCommitMode(value: unknown): ImplementationProgressCommitMode {
+	return typeof value === "string" && IMPLEMENT_PROGRESS_COMMIT_MODE_VALUES.has(value as ImplementationProgressCommitMode)
+		? value as ImplementationProgressCommitMode
+		: IMPLEMENT_DEFAULT_PROGRESS_COMMIT_MODE;
+}
+
+function formatCoordinatorProgressCommitSummary(result: CoordinatorProgressCommitResult): string {
+	return result.committed
+		? `; coordinator progress commit ${result.hash ?? "unknown"}`
+		: result.error
+			? `; coordinator progress commit failed: ${result.error}`
+			: "";
+}
+
 function appendImplementationProgress(
 	spec: SpecEntry,
 	task: ParsedNativeTask,
@@ -7312,6 +7374,7 @@ function appendImplementationProgress(
 	evidence: string,
 	nativeTaskId: string,
 	options: RalphPathOptions,
+	commitMode: ImplementationProgressCommitMode,
 ): CoordinatorProgressCommitResult {
 	const progressPath = appendProgress(
 		spec,
@@ -7327,9 +7390,11 @@ function appendImplementationProgress(
 		options,
 	);
 
-	return commitTrackedProgressIfDirty(
+	return maybeCommitTrackedProgressIfDirty(
 		progressPath,
 		`chore(ralph): record implementation evidence for ${spec.name} task ${task.index + 1}`,
+		commitMode,
+		"per-task",
 	);
 }
 
@@ -7705,6 +7770,7 @@ async function runImplementCommand(
 				maxTaskIterations: parsed.maxTaskIterations,
 				maxGlobalIterations: parsed.maxGlobalIterations,
 				recoveryMode: parsed.recoveryMode || booleanField(state, "recoveryMode") === true,
+				implementationProgressCommitMode: parsed.progressCommitMode,
 				globalIteration: numberField(state, "globalIteration") ?? 1,
 				taskIteration: numberField(state, "taskIteration") ?? 1,
 				...createImplementationStateDefaults(state, {
@@ -7829,6 +7895,14 @@ async function runImplementCommand(
 					prUrl,
 				});
 				state = completionArtifacts.state;
+				const finalProgressCommit = maybeCommitTrackedProgressIfDirty(
+					completionArtifacts.progressPath,
+					`chore(ralph): record implementation summary for ${spec.name}`,
+					implementationProgressCommitModeFromState(state),
+					"summary",
+				);
+				const finalProgressCommitSummary = formatCoordinatorProgressCommitSummary(finalProgressCommit);
+				if (finalProgressCommitSummary) completedSummaries.push(`- Final coordinator progress${finalProgressCommitSummary}`);
 				// "ALL_TASKS_COMPLETE", plus optional "PR URL" terminal output is formatted by formatImplementationFinalizerSuccessOutput(...).
 				await notify(
 					ctx,
@@ -8150,7 +8224,7 @@ async function runImplementCommand(
 				}
 
 				setTaskCheckboxStatus(spec, task.index, true);
-				const coordinatorProgressCommit = appendImplementationProgress(spec, task, definition, validation.evidence ?? "", nativeUpdate.taskId, options);
+				const coordinatorProgressCommit = appendImplementationProgress(spec, task, definition, validation.evidence ?? "", nativeUpdate.taskId, options, implementationProgressCommitModeFromState(state));
 				try {
 					setNativeTaskExecutionStatus(ctx, state, spec, task, "completed", {
 						ralphExecutionAgent: definition.agentName,
@@ -8272,11 +8346,7 @@ async function runImplementCommand(
 					},
 					options,
 				);
-				const progressCommitSummary = coordinatorProgressCommit.committed
-					? `; coordinator progress commit ${coordinatorProgressCommit.hash ?? "unknown"}`
-					: coordinatorProgressCommit.error
-						? `; coordinator progress commit failed: ${coordinatorProgressCommit.error}`
-						: "";
+				const progressCommitSummary = formatCoordinatorProgressCommitSummary(coordinatorProgressCommit);
 				completedSummaries.push(`- Completed task ${task.index + 1}: ${task.subject} (${definition.completionSignal}; ${validation.evidence}${executionBatch.length > 1 ? `; sequential batch ${batchPosition + 1}/${executionBatch.length}` : ""}${progressCommitSummary})`);
 			}
 
@@ -10977,7 +11047,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("ralph-implement", {
-		description: "Execute tasks.md through Ralph subagents",
+		description: "Execute tasks.md through Ralph subagents; coordinator progress commits default off unless --commit-progress is set",
 		getArgumentCompletions: implementArgumentCompletions,
 		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "implement", () => runImplementCommand(pi, args, ctx)),
 	});

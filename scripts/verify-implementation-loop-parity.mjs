@@ -705,6 +705,19 @@ async function verifyEdgeCases() {
     throw new Error(`edge-case runtime behavior is missing: ${missingRuntimeBehavior.join(', ')}`);
   }
 
+  const progressCommitModePatterns = [
+    ['coordinator progress commits default off', /IMPLEMENT_DEFAULT_PROGRESS_COMMIT_MODE:\s*ImplementationProgressCommitMode\s*=\s*["']off["']/],
+    ['explicit progress commit toggle parsing', /--commit-progress[\s\S]*?--no-commit-progress/],
+    ['per-task progress commits are opt-in gated', /appendImplementationProgress[\s\S]*?maybeCommitTrackedProgressIfDirty\([\s\S]*?["']per-task["']/],
+    ['summary progress commits are opt-in gated', /maybeCommitTrackedProgressIfDirty\([\s\S]*?["']summary["']/],
+  ];
+  const missingProgressCommitMode = progressCommitModePatterns
+    .filter(([, pattern]) => !pattern.test(indexSource))
+    .map(([label]) => label);
+  if (missingProgressCommitMode.length > 0) {
+    throw new Error(`implementation progress auto-commit controls are missing: ${missingProgressCommitMode.join(', ')}`);
+  }
+
   const isolatedCoveragePatterns = [
     /export function createImplementationResumeRepairStatePatch\(/,
     /export function shouldRestartImplementationLoopAfterBatchModification\(/,

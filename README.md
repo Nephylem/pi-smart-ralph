@@ -337,7 +337,7 @@ For a small smoke test:
 | `/ralph-requirements [spec]` | Generate `requirements.md`. |
 | `/ralph-design [spec]` | Generate `design.md`. |
 | `/ralph-tasks [spec]` | Generate `tasks.md` and mirror tasks into Pi task cards. |
-| `/ralph-implement [spec]` | Execute open tasks through Ralph subagents. |
+| `/ralph-implement [spec]` | Execute open tasks through Ralph subagents; coordinator progress auto-commits default off. Use `--commit-progress summary` or `--commit-progress per-task` to opt in. |
 | `/ralph-feedback [message]` | Prepare a feedback draft for `Nephylem/pi-smart-ralph`, requiring confirmation or `--yes` before any GitHub write. |
 | `/ralph-status` | Show known specs and progress. |
 | `/ralph-switch <spec-or-path>` | Switch the active spec. |

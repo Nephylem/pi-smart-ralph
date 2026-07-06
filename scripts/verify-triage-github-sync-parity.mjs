@@ -1303,12 +1303,16 @@ async function runUnconfirmedGithubScenario({ label, ctxFactory }) {
     const triage = await loadRegisteredTriageCommand();
     const ctx = ctxFactory(fixtureRoot, notes);
     await triage.handler(`--output github-issues ${epicName}`, ctx);
-    await sleep(100);
+    const statePath = join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json');
+    await waitFor(() => {
+      const state = JSON.parse(readFileSync(statePath, 'utf8'));
+      return state.githubStatus === 'confirmation_required' && state.github?.status === 'skipped';
+    }, 1000, 'timed out waiting for unconfirmed GitHub sync metadata to persist');
 
     return {
       notes,
       ghWriteCallCount: readWriteCallCount(ghWriteLogPath),
-      epicState: JSON.parse(readFileSync(join(fixtureRoot, 'specs', '_epics', epicName, '.epic-state.json'), 'utf8')),
+      epicState: JSON.parse(readFileSync(statePath, 'utf8')),
     };
   } finally {
     process.env.PATH = originalPath;
