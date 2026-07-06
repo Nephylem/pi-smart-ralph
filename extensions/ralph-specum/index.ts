@@ -1050,18 +1050,32 @@ type RalphRuntimeConfigBootstrapResult = {
 	reloadRecommended: boolean;
 };
 
-const RALPH_SUBAGENTS_DEFAULT_CONFIG: Record<string, unknown> = {
+const RALPH_SUBAGENTS_DISPLAY_DEFAULTS = {
 	toolDescriptionMode: "compact",
 	widgetMode: "background",
 	fleetView: true,
+	disableDefaultAgents: true,
+} satisfies Record<string, unknown>;
+
+const RALPH_SUBAGENTS_EXECUTION_DEFAULTS = {
 	defaultJoinMode: "smart",
 	schedulingEnabled: false,
 	scopeModels: false,
-	disableDefaultAgents: true,
 	maxConcurrent: 4,
 	defaultMaxTurns: 0,
 	graceTurns: 5,
+} satisfies Record<string, unknown>;
+
+const RALPH_SUBAGENTS_DEFAULT_CONFIG: Record<string, unknown> = {
+	...RALPH_SUBAGENTS_DISPLAY_DEFAULTS,
+	...RALPH_SUBAGENTS_EXECUTION_DEFAULTS,
 };
+
+const RALPH_SUBAGENTS_REQUIRED_DEFAULTS = {
+	widgetMode: "background",
+	fleetView: true,
+	disableDefaultAgents: true,
+} satisfies Record<string, unknown>;
 
 const RALPH_TASKS_DEFAULT_CONFIG: Record<string, unknown> = {
 	taskScope: "session",
@@ -1075,6 +1089,19 @@ const RALPH_TASKS_DEFAULT_CONFIG: Record<string, unknown> = {
 
 function runtimeConfigFilePath(cwd: string, relativePath: string): string {
 	return join(resolve(cwd), relativePath);
+}
+
+function applyRequiredRuntimeConfigValues(
+	nextConfig: Record<string, unknown>,
+	result: RalphRuntimeConfigFileResult,
+	requiredValues: Record<string, unknown>,
+): void {
+	for (const [key, value] of Object.entries(requiredValues)) {
+		if (nextConfig[key] === value) continue;
+		nextConfig[key] = value;
+		if (!result.updatedKeys.includes(key)) result.updatedKeys.push(key);
+		result.preservedKeys = result.preservedKeys.filter((preservedKey) => preservedKey !== key);
+	}
 }
 
 function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string, defaults: Record<string, unknown>): RalphRuntimeConfigFileResult {
@@ -1116,21 +1143,7 @@ function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string
 	}
 
 	if (relativePath === ".pi/subagents.json") {
-		if (nextConfig.widgetMode !== "background") {
-			nextConfig.widgetMode = "background";
-			if (!result.updatedKeys.includes("widgetMode")) result.updatedKeys.push("widgetMode");
-			result.preservedKeys = result.preservedKeys.filter((key) => key !== "widgetMode");
-		}
-		if (nextConfig.fleetView !== true) {
-			nextConfig.fleetView = true;
-			if (!result.updatedKeys.includes("fleetView")) result.updatedKeys.push("fleetView");
-			result.preservedKeys = result.preservedKeys.filter((key) => key !== "fleetView");
-		}
-		if (nextConfig.disableDefaultAgents !== true) {
-			nextConfig.disableDefaultAgents = true;
-			if (!result.updatedKeys.includes("disableDefaultAgents")) result.updatedKeys.push("disableDefaultAgents");
-			result.preservedKeys = result.preservedKeys.filter((key) => key !== "disableDefaultAgents");
-		}
+		applyRequiredRuntimeConfigValues(nextConfig, result, RALPH_SUBAGENTS_REQUIRED_DEFAULTS);
 	}
 
 	if (relativePath === ".pi/tasks-config.json") {

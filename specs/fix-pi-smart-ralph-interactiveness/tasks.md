@@ -546,7 +546,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-10, AC-5.1_
   - _Design: Runtime bootstrap defaults; Technical Decisions dependency changes_
 
-- [ ] 4.3 [YELLOW] Refactor: keep bootstrap defaults readable
+- [x] 4.3 [YELLOW] Refactor: keep bootstrap defaults readable
   - **Do**:
     1. Keep default settings grouped by key names.
     2. Preserve existing user override behavior.
