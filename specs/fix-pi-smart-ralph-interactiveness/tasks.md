@@ -129,7 +129,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-4, AC-2.2, NFR-1_
   - _Design: Safe Ralph UI helpers; Ralph interactive surfaces_
 
-- [ ] 1.8 [GREEN] Pass test: set non-empty Ralph status at job start
+- [x] 1.8 [GREEN] Pass test: set non-empty Ralph status at job start
   - **Do**:
     1. Call safe status helper at coordinator startup.
     2. Include running phase/job label in non-empty status text.

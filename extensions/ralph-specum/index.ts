@@ -10327,6 +10327,8 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	function installRalphCoordinatorStartupUi(ctx: ExtensionCommandContext, label: string): void {
 		ensureRalphInteractiveSurfaces(pi, ctx);
 		maybeShowNativeTaskStartupWidget(ctx, label);
+		stopRalphStatusAnimation(ctx);
+		setRalphStatus(ctx, `Running Ralph ${label}`);
 		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
 	}
 
