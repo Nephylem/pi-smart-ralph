@@ -413,6 +413,58 @@ test('ralph-subagents widget renders completed row for bounded linger then prune
   }
 });
 
+test('ralph-subagents widget renders failed row with error indicator and metadata', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+
+    await pi.events.get('session_start')[0]({}, ctx);
+
+    const subagentWidgetInstall = ctx.widgets.find(
+      (entry) => entry.kind === 'widget' && entry.key === 'ralph-subagents',
+    );
+    assert.equal(typeof subagentWidgetInstall?.value, 'function');
+
+    const renderRequests = [];
+    const renderer = subagentWidgetInstall.value(
+      {
+        terminal: { columns: 120 },
+        requestRender() { renderRequests.push(Date.now()); },
+      },
+      {
+        fg(_color, text) { return text; },
+        bold(text) { return text; },
+      },
+    );
+
+    pi.emit('subagents:created', {
+      id: 'agent-failed-1',
+      type: 'ralph-implement',
+      description: 'Implementation phase agent',
+    });
+    pi.emit('subagents:failed', {
+      id: 'agent-failed-1',
+      status: 'failed',
+      error: 'Tool crashed while editing files',
+      toolUses: 3,
+      tokens: { total: 4567 },
+    });
+
+    const renderedText = renderer.render().join('\n');
+    assert.ok(renderRequests.length >= 2, 'expected created and failed events to request widget renders');
+    assert.match(renderedText, /Implement/);
+    assert.match(renderedText, /error|failed/i);
+    assert.match(renderedText, /Tool crashed while editing files/);
+    assert.doesNotMatch(renderedText, /running|queued|pending/i);
+
+    renderer.dispose?.();
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('phase command handler returns after startup before delegated coordinator work resolves', async () => {
   // BEFORE failure mode: there was no regression proof that /ralph-* command handlers
   // return after startup while coordinator/delegated work remains pending in the background.

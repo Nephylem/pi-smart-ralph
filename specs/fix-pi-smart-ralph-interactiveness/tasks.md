@@ -423,7 +423,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, NFR-5, FR-9_
   - _Design: Performance Considerations; Edge Cases many active agents_
 
-- [ ] Q3.3 [VERIFY] Quality check: completed lifecycle slice
+- [x] Q3.3 [VERIFY] Quality check: completed lifecycle slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -433,7 +433,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2, NFR-5_
   - _Design: Smoke test harness_
 
-- [ ] 3.10 [RED] Failing test: `subagents:failed` renders error indicator
+- [x] 3.10 [RED] Failing test: `subagents:failed` renders error indicator
   - **Do**:
     1. Emit `subagents:failed` with an error/failure value.
     2. Assert row shows failed/error state and identifying metadata.
