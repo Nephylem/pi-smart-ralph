@@ -5213,10 +5213,25 @@ function eventOn(events: unknown, channel: string, handler: (data: unknown) => v
 	const bus = events as { on?: (name: string, handler: (data: unknown) => void) => unknown; off?: (name: string, handler: (data: unknown) => void) => void; removeListener?: (name: string, handler: (data: unknown) => void) => void };
 	const result = bus.on?.(channel, handler);
 	if (typeof result === "function") return result as () => void;
-	return () => {
-		if (typeof bus.off === "function") bus.off(channel, handler);
-		else if (typeof bus.removeListener === "function") bus.removeListener(channel, handler);
-	};
+	if (typeof bus.on === "function") {
+		return () => {
+			if (typeof bus.off === "function") bus.off(channel, handler);
+			else if (typeof bus.removeListener === "function") bus.removeListener(channel, handler);
+		};
+	}
+	const mapBus = events as Map<string, Array<(data: unknown) => void>>;
+	if (typeof mapBus?.get === "function" && typeof mapBus.set === "function") {
+		const handlers = mapBus.get(channel) ?? [];
+		handlers.push(handler);
+		mapBus.set(channel, handlers);
+		return () => {
+			const current = mapBus.get(channel) ?? [];
+			const next = current.filter((candidate) => candidate !== handler);
+			if (next.length > 0) mapBus.set(channel, next);
+			else mapBus.delete(channel);
+		};
+	}
+	return () => {};
 }
 
 function rpcCall<T>(pi: ExtensionAPI, channel: string, payload: Record<string, unknown>, timeoutMs: number): Promise<T> {

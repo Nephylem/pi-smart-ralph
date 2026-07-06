@@ -310,7 +310,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, AC-3.1, NFR-1_
   - _Design: Ralph subagent lifecycle tracker; Data Flow steps 5-7_
 
-- [ ] 3.2 [GREEN] Pass test: upsert created events as queued
+- [x] 3.2 [GREEN] Pass test: upsert created events as queued
   - **Do**:
     1. Normalize `subagents:created` payloads into tracked entries.
     2. Render queued/pending state in widget rows.
