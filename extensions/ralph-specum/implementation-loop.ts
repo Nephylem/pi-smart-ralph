@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
-import { getRalphStatePath, type RalphState, type SpecStateReference } from "./state.ts";
+import { getRalphStatePath, mergeRalphState, readProgress, writeProgress, type RalphState, type SpecStateReference } from "./state.ts";
 import type { RalphPathOptions } from "./paths.ts";
 
 export type ImplementationNativeTaskLike = {
@@ -1577,10 +1577,8 @@ export function createImplementationResumeRepairStatePatch(
 		taskIndex: input.taskIndex,
 		totalTasks: input.totalTasks,
 		awaitingApproval: false,
-		blocked: false,
-		validationError: null,
-		activeTaskPendingEvidence: null,
 		...createImplementationStateDefaults(input.state),
+		...createRecoveredImplementationStatePatch(),
 	};
 }
 
@@ -2027,6 +2025,17 @@ export function describeImplementationOutstandingCompletionWork(
 	return [...new Set(blockers)];
 }
 
+function createImplementationCompletionArtifactState(): Record<string, unknown> {
+	return {
+		blockedAt: null,
+		validationError: null,
+		lastSubagentOutput: null,
+		currentTask: null,
+		activeTaskPendingEvidence: null,
+		note: "Retained completion artifact omits stale blocked or in-flight fields from the final state completion evidence.",
+	};
+}
+
 export function createImplementationFinalEvidence(
 	existing: unknown,
 	patch: Record<string, unknown>,
@@ -2037,21 +2046,28 @@ export function createImplementationFinalEvidence(
 		...evidence,
 		final: {
 			...currentFinal,
+			completionArtifact: createImplementationCompletionArtifactState(),
 			...patch,
 		},
 	};
 }
 
-export function createRecoveredImplementationStatePatch(): Record<string, unknown> {
+export function createRecoveredImplementationStatePatch(
+	_unusedState: RalphState | null = null,
+	patch: Record<string, unknown> = {},
+): Record<string, unknown> {
 	return {
 		// Clear stale failure metadata before the next task starts.
 		blocked: false,
 		blockedAt: null,
 		validationError: null,
-		lastSubagentOutput: null,
+		lastSubagentOutput: "",
 		currentTask: null,
 		activeTaskPendingEvidence: null,
 		recoveryMode: false,
+		finalizationError: null,
+		finalizationErrorAt: null,
+		...patch,
 	};
 }
 
@@ -2068,31 +2084,57 @@ export function createImplementationCompletionFinalizer(
 	return createImplementationFinalizerSuccessPatch(existing, taskCount, completedAt, indexSummary, deletedProgressFiles, prUrl);
 }
 
+function implementationProgressSection(progress: string, heading: string): string | null {
+	const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const match = progress.match(new RegExp(`## ${escapedHeading}\\n([\\s\\S]*?)(?=\\n## [^\\n]+\\n|$)`));
+	const section = match?.[1]?.trim();
+	return section && section.length > 0 ? section : null;
+}
+
 export function rewriteImplementationProgressTruthfully(
 	progress: string,
-	input: { specName: string; totalTasks: number; completedAt: string },
+	input: { specName: string; basePath: string; totalTasks: number; completedAt: string },
 ): string {
-	const taskText = `${input.totalTasks}/${input.totalTasks}`;
-	// Progress truth contract: phase: completed; task: totalTasks/totalTasks.
-	let next = progress;
-	if (/^---\n[\s\S]*?\n---/.test(next)) {
-		next = next.replace(/^---\n[\s\S]*?\n---/, (header) => {
-			const withPhase = /\nphase:/.test(header) ? header.replace(/\nphase:.*/, "\nphase: completed") : header.replace(/\n---$/, "\nphase: completed\n---");
-			const withTask = /\ntask:/.test(withPhase) ? withPhase.replace(/\ntask:.*/, `\ntask: ${taskText}`) : withPhase.replace(/\n---$/, `\ntask: ${taskText}\n---`);
-			return /\nupdated:/.test(withTask) ? withTask.replace(/\nupdated:.*/, `\nupdated: ${input.completedAt}`) : withTask.replace(/\n---$/, `\nupdated: ${input.completedAt}\n---`);
-		});
-	}
-	if (/## Current Task\n[\s\S]*?(?=\n## |$)/.test(next)) {
-		next = next.replace(/## Current Task\n[\s\S]*?(?=\n## |$)/, "## Current Task\n\nCompleted\n");
-	} else {
-		next += "\n## Current Task\n\nCompleted\n";
-	}
-	if (/## Next\n[\s\S]*?(?=\n## |$)/.test(next)) {
-		next = next.replace(/## Next\n[\s\S]*?(?=\n## |$)/, "## Next\n\nComplete. No next task\n");
-	} else {
-		next += "\n## Next\n\nComplete. No next task\n";
-	}
-	return next.endsWith("\n") ? next : `${next}\n`;
+	const originalGoal = implementationProgressSection(progress, "Original Goal") || "_No goal captured yet_";
+	const completedTasks = implementationProgressSection(progress, "Completed Tasks") || "_No tasks completed yet_";
+	const learnings = implementationProgressSection(progress, "Learnings") || "_Discoveries and insights will be captured here_";
+	const blockers = implementationProgressSection(progress, "Blockers") || "- None currently";
+	return [
+		"---",
+		`spec: ${input.specName}`,
+		`basePath: ${input.basePath}`,
+		"phase: completed",
+		`task: ${input.totalTasks}/${input.totalTasks}`,
+		`updated: ${input.completedAt}`,
+		"---",
+		"",
+		`# Progress: ${input.specName}`,
+		"",
+		"## Original Goal",
+		"",
+		originalGoal,
+		"",
+		"## Completed Tasks",
+		"",
+		completedTasks,
+		"",
+		"## Current Task",
+		"",
+		"Completed",
+		"",
+		"## Learnings",
+		"",
+		learnings,
+		"",
+		"## Blockers",
+		"",
+		blockers,
+		"",
+		"## Next",
+		"",
+		"Complete. No next task. Awaiting next task only if new work is added.",
+		"",
+	].join("\n");
 }
 
 export const syncImplementationProgressAfterCompletion = rewriteImplementationProgressTruthfully;
@@ -2116,9 +2158,7 @@ export function createImplementationFinalizerStartedPatch(
 		taskIndex: taskCount,
 		totalTasks: taskCount,
 		awaitingApproval: false,
-		blocked: false,
-		validationError: null,
-		activeTaskPendingEvidence: null,
+		...createRecoveredImplementationStatePatch(),
 		completedAt,
 		evidence: createImplementationFinalEvidence(existing, {
 			completedAt,
@@ -2139,9 +2179,7 @@ export function createImplementationFinalizerEpicUpdatedPatch(
 		taskIndex: taskCount,
 		totalTasks: taskCount,
 		awaitingApproval: false,
-		blocked: false,
-		validationError: null,
-		activeTaskPendingEvidence: null,
+		...createRecoveredImplementationStatePatch(),
 		evidence: createImplementationFinalEvidence(existing, {
 			completedAt,
 			epicUpdated: true,
@@ -2162,11 +2200,11 @@ export function createImplementationFinalizerIndexFailurePatch(
 		taskIndex: taskCount,
 		totalTasks: taskCount,
 		awaitingApproval: false,
+		...createRecoveredImplementationStatePatch(),
 		blocked: true,
 		validationError: `Implementation completion index finalization failed: ${indexError}`,
 		finalizationError: indexError,
 		finalizationErrorAt: new Date().toISOString(),
-		activeTaskPendingEvidence: null,
 		evidence: createImplementationFinalEvidence(existing, {
 			completedAt,
 			epicUpdated: true,
@@ -2190,13 +2228,7 @@ export function createImplementationFinalizerSuccessPatch(
 		taskIndex: taskCount,
 		totalTasks: taskCount,
 		awaitingApproval: false,
-		blocked: false,
-		blockedAt: null,
-		validationError: null,
-		lastSubagentOutput: null,
-		currentTask: null,
-		activeTaskPendingEvidence: null,
-		recoveryMode: false,
+		...createRecoveredImplementationStatePatch(),
 		completedAt,
 		lastCompletedTaskSignal: "TASK_COMPLETE",
 		lastCompletedTaskEvidence: indexSummary,
@@ -2212,6 +2244,54 @@ export function createImplementationFinalizerSuccessPatch(
 			// Retained completion artifact deliberately omits blockedAt/currentTask/in-flight activeTaskPendingEvidence residue.
 		}),
 	};
+}
+
+export type ImplementationCompletionArtifactWriteInput = {
+	spec: SpecStateReference;
+	basePath: string;
+	options?: RalphPathOptions;
+	existingEvidence: unknown;
+	taskCount: number;
+	completedAt: string;
+	indexSummary?: string;
+	deletedProgressFiles: readonly string[];
+	prUrl: string | null;
+};
+
+export type ImplementationCompletionArtifactWriteResult = {
+	state: RalphState;
+	progressPath: string;
+	statePath: string;
+	stateDeleted: boolean;
+};
+
+export function writeImplementationCompletionArtifacts(input: ImplementationCompletionArtifactWriteInput): ImplementationCompletionArtifactWriteResult {
+	const options = input.options ?? {};
+	const statePath = getRalphStatePath(input.spec, options);
+	const state = mergeRalphState(
+		input.spec,
+		createImplementationFinalizerSuccessPatch(
+			input.existingEvidence,
+			input.taskCount,
+			input.completedAt,
+			input.indexSummary,
+			input.deletedProgressFiles,
+			input.prUrl,
+		),
+		options,
+	);
+	const progressPath = writeProgress(
+		input.spec,
+		rewriteImplementationProgressTruthfully(readProgress(input.spec, options), {
+			specName: typeof input.spec === "string" ? input.spec : input.spec.name,
+			basePath: input.basePath,
+			totalTasks: input.taskCount,
+			completedAt: input.completedAt,
+		}),
+		options,
+	);
+	const stateDeleted = deleteImplementationStateFile(input.spec, options);
+	return { state, progressPath, statePath, stateDeleted };
 }
 
 export function formatImplementationFinalizerIndexFailureOutput(input: ImplementationFinalizerFailureOutputInput): string {

@@ -90,8 +90,6 @@ import {
 	createImplementationFinalizerEpicUpdatedPatch,
 	createImplementationFinalizerIndexFailurePatch,
 	createImplementationFinalizerStartedPatch,
-	createImplementationFinalizerSuccessPatch,
-	deleteImplementationStateFile,
 	createImplementationFixTaskPlan,
 	createImplementationRecoveryStopPlan,
 	createImplementationReviewCheckpoint,
@@ -107,7 +105,7 @@ import {
 	planImplementationVerificationRecovery,
 	rerunImplementationVerifierExactly,
 	runImplementationSharedSurfacePreflight,
-	rewriteImplementationProgressTruthfully,
+	writeImplementationCompletionArtifacts,
 	SHARED_SURFACE_PREFLIGHT_COMMANDS,
 	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
@@ -1050,8 +1048,8 @@ type RalphRuntimeConfigBootstrapResult = {
 
 const RALPH_SUBAGENTS_DEFAULT_CONFIG: Record<string, unknown> = {
 	toolDescriptionMode: "compact",
-	widgetMode: "off",
-	fleetView: false,
+	widgetMode: "background",
+	fleetView: true,
 	defaultJoinMode: "smart",
 	schedulingEnabled: false,
 	scopeModels: false,
@@ -1065,7 +1063,7 @@ const RALPH_TASKS_DEFAULT_CONFIG: Record<string, unknown> = {
 	taskScope: "session",
 	autoCascade: false,
 	autoClearCompleted: "never",
-	showAll: false,
+	showAll: true,
 	maxVisible: 20,
 	sortOrder: "status",
 	hiddenAt: "top",
@@ -1114,13 +1112,13 @@ function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string
 	}
 
 	if (relativePath === ".pi/subagents.json") {
-		if (nextConfig.widgetMode === "background" || nextConfig.widgetMode === "all") {
-			nextConfig.widgetMode = "off";
+		if (nextConfig.widgetMode === "off") {
+			nextConfig.widgetMode = "background";
 			if (!result.updatedKeys.includes("widgetMode")) result.updatedKeys.push("widgetMode");
 			result.preservedKeys = result.preservedKeys.filter((key) => key !== "widgetMode");
 		}
-		if (nextConfig.fleetView === true) {
-			nextConfig.fleetView = false;
+		if (nextConfig.fleetView !== true) {
+			nextConfig.fleetView = true;
 			if (!result.updatedKeys.includes("fleetView")) result.updatedKeys.push("fleetView");
 			result.preservedKeys = result.preservedKeys.filter((key) => key !== "fleetView");
 		}
@@ -1128,6 +1126,14 @@ function mergeRuntimeConfigFile(cwd: string, relativePath: string, label: string
 			nextConfig.disableDefaultAgents = true;
 			if (!result.updatedKeys.includes("disableDefaultAgents")) result.updatedKeys.push("disableDefaultAgents");
 			result.preservedKeys = result.preservedKeys.filter((key) => key !== "disableDefaultAgents");
+		}
+	}
+
+	if (relativePath === ".pi/tasks-config.json") {
+		if (nextConfig.showAll !== true) {
+			nextConfig.showAll = true;
+			if (!result.updatedKeys.includes("showAll")) result.updatedKeys.push("showAll");
+			result.preservedKeys = result.preservedKeys.filter((key) => key !== "showAll");
 		}
 	}
 
@@ -1444,7 +1450,7 @@ function renderAnimatedRalphStatus(message: string): string {
 
 function renderRalphStatus(): void {
 	const ctx = ralphStatusAnimation.ctx;
-	if (!ctx?.hasUI) return;
+	if (!ctx?.hasUI || typeof ctx.ui.setStatus !== "function") return;
 
 	const message = ralphStatusAnimation.currentMessage ?? ralphStatusAnimation.fallbackMessage;
 	if (!message) {
@@ -1463,7 +1469,7 @@ function setRalphStatus(ctx: ExtensionCommandContext, message?: string): void {
 		return;
 	}
 
-	if (ctx.hasUI) ctx.ui.setStatus("ralph", message);
+	if (ctx.hasUI && typeof ctx.ui.setStatus === "function") ctx.ui.setStatus("ralph", message);
 }
 
 function startRalphStatusAnimation(ctx: ExtensionCommandContext, fallbackMessage: string): void {
@@ -1493,7 +1499,7 @@ function stopRalphStatusAnimation(ctx?: ExtensionCommandContext): void {
 	ralphStatusAnimation.fallbackMessage = undefined;
 	ralphStatusAnimation.frameIndex = 0;
 	ralphStatusAnimation.startedAt = 0;
-	if (statusCtx?.hasUI) statusCtx.ui.setStatus("ralph", undefined);
+	if (statusCtx?.hasUI && typeof statusCtx.ui.setStatus === "function") statusCtx.ui.setStatus("ralph", undefined);
 }
 
 function footerThinkingColor(level: ReturnType<ExtensionAPI["getThinkingLevel"]>): "thinkingOff" | "thinkingMinimal" | "thinkingLow" | "thinkingMedium" | "thinkingHigh" | "thinkingXhigh" {
@@ -1729,12 +1735,13 @@ type TaskCounts = {
 	total: number;
 };
 
-const NATIVE_TASK_TOOLS = ["TaskCreate", "TaskUpdate"] as const;
+const NATIVE_TASK_TOOLS = ["TaskCreate", "TaskUpdate", "TaskExecute"] as const;
 const WEB_RESEARCH_TOOLS = ["web_search", "fetch_content", "get_search_content"] as const;
 const WEB_FETCH_TOOLS = ["fetch_content", "get_search_content"] as const;
 const MCP_PROXY_TOOL = "mcp";
 const NATIVE_TASK_LOCK_RETRY_MS = 50;
 const NATIVE_TASK_LOCK_MAX_RETRIES = 100;
+const RALPH_NATIVE_TASK_WIDGET_KEY = "ralph-tasks";
 const NATIVE_TASK_WIDGET_LIMIT = 10;
 
 type NativeTaskStatus = "pending" | "in_progress" | "completed";
@@ -2870,8 +2877,20 @@ function statusIcon(status: NativeTaskStatus): string {
 	return status === "completed" ? "✔" : status === "in_progress" ? "◼" : "◻";
 }
 
+function maybeShowNativeTaskStartupWidget(ctx: ExtensionCommandContext, label: string): void {
+	if (!ctx.hasUI || typeof ctx.ui.setWidget !== "function" || !/^(start|tasks|implement)$/.test(label)) return;
+	ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, [
+		`● Ralph ${label}: pi-tasks surface ready`,
+		"  ◻ Waiting for tasks.md mirroring or execution updates…",
+	], { placement: "aboveEditor" });
+}
+
 function showMirroredNativeTaskWidget(ctx: ExtensionCommandContext, cards: NativeTaskCard[]): void {
-	if (!ctx.hasUI || cards.length === 0) return;
+	if (!ctx.hasUI || typeof ctx.ui.setWidget !== "function") return;
+	if (cards.length === 0) {
+		ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
+		return;
+	}
 
 	const completed = cards.filter((task) => task.status === "completed").length;
 	const inProgress = cards.filter((task) => task.status === "in_progress").length;
@@ -2889,7 +2908,7 @@ function showMirroredNativeTaskWidget(ctx: ExtensionCommandContext, cards: Nativ
 		lines.push(`  ${statusIcon(task.status)} #${task.id} ${label}${blockers}`);
 	}
 	if (cards.length > visibleCards.length) lines.push(`    … and ${cards.length - visibleCards.length} more`);
-	ctx.ui.setWidget("tasks", lines, { placement: "aboveEditor" });
+	ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, lines, { placement: "aboveEditor" });
 }
 
 function mirrorTasksToNativeTaskCards(
@@ -4761,13 +4780,20 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 	}, { placement: "aboveEditor" });
 }
 
+function ensureRalphInteractiveSurfaces(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
+	if (!ctx.hasUI) return;
+	if (typeof ctx.ui.setFooter === "function") installRalphFooter(pi, ctx);
+	if (typeof ctx.ui.setWidget === "function") installRalphSubagentWidget(pi, ctx);
+}
+
 function setSubagentStatusSurfaces(ctx: ExtensionCommandContext, message: string): void {
 	setRalphStatus(ctx, message);
-	if (ctx.hasUI) ctx.ui.setStatus("subagents", message);
+	if (ctx.hasUI && typeof ctx.ui.setStatus === "function") ctx.ui.setStatus("subagents", message);
 }
 
 function clearSubagentStatusSurfaces(ctx: ExtensionCommandContext): void {
-	if (ctx.hasUI) ctx.ui.setStatus("subagents", undefined);
+	if (!ralphStatusAnimation.active) setRalphStatus(ctx);
+	if (ctx.hasUI && typeof ctx.ui.setStatus === "function") ctx.ui.setStatus("subagents", undefined);
 }
 
 function ralphSubagentStatusMessage(
@@ -6644,6 +6670,7 @@ function ensureNativeTaskCardsForImplementation(
 function setNativeTaskExecutionStatus(
 	ctx: ExtensionCommandContext,
 	state: RalphState | null,
+	spec: SpecEntry,
 	task: ParsedNativeTask,
 	status: NativeTaskStatus,
 	metadata: Record<string, unknown>,
@@ -6655,6 +6682,7 @@ function setNativeTaskExecutionStatus(
 	const storePath = resolveNativeTaskStorePath(ctx);
 	if (!storePath.path) throw new Error(storePath.error ?? "Unable to resolve pi-tasks store path.");
 
+	let visibleCards: NativeTaskCard[] = [];
 	withNativeTaskStore(storePath.path, (data) => {
 		const card = data.tasks.find((candidate) => candidate.id === taskId);
 		if (!card) throw new Error(`Native pi-task #${taskId} was not found in ${storePath.path}. Run /ralph-tasks to repair mappings.`);
@@ -6668,7 +6696,9 @@ function setNativeTaskExecutionStatus(
 			ralphExecutionUpdatedAt: new Date().toISOString(),
 		};
 		card.updatedAt = Date.now();
+		visibleCards = data.tasks.filter((candidate) => isNativeTaskOwnedBySpec(candidate, spec));
 	});
+	showMirroredNativeTaskWidget(ctx, visibleCards);
 
 	return { taskId, storePath: storePath.path };
 }
@@ -7221,9 +7251,8 @@ function implementationAttemptPatch(
 
 	return {
 		...executionPatch,
+		...createRecoveredImplementationStatePatch(state),
 		awaitingApproval: false,
-		blocked: false,
-		validationError: null,
 		activeTaskPendingEvidence: {
 			index: task.index,
 			key: task.stableKey,
@@ -7600,28 +7629,18 @@ async function runImplementCommand(
 				}
 				const deletedProgressFiles = cleanupStaleImplementationProgressFiles(spec);
 				const prUrl = readImplementationPrUrl(ctx.cwd);
-				state = mergeRalphState(
+				const completionArtifacts = writeImplementationCompletionArtifacts({
 					spec,
-					createImplementationFinalizerSuccessPatch(
-						state?.evidence,
-						tasks.length,
-						completedAt,
-						indexResult.message,
-						deletedProgressFiles,
-						prUrl,
-					),
+					basePath: spec.path,
 					options,
-				);
-				writeProgress(
-					spec,
-					rewriteImplementationProgressTruthfully(readProgress(spec, options), {
-						specName: spec.name,
-						totalTasks: tasks.length,
-						completedAt,
-					}),
-					options,
-				);
-				deleteImplementationStateFile(spec, options);
+					existingEvidence: state?.evidence,
+					taskCount: tasks.length,
+					completedAt,
+					indexSummary: indexResult.message,
+					deletedProgressFiles,
+					prUrl,
+				});
+				state = completionArtifacts.state;
 				// "ALL_TASKS_COMPLETE", plus optional "PR URL" terminal output is formatted by formatImplementationFinalizerSuccessOutput(...).
 				await notify(
 					ctx,
@@ -7672,7 +7691,7 @@ async function runImplementCommand(
 
 				let nativeUpdate: NativeExecutionUpdate;
 				try {
-					nativeUpdate = setNativeTaskExecutionStatus(ctx, state, task, "in_progress", {
+					nativeUpdate = setNativeTaskExecutionStatus(ctx, state, spec, task, "in_progress", {
 						ralphExecutionAgent: definition.agentName,
 						ralphExecutionSignalRequired: definition.completionSignal,
 					});
@@ -7944,7 +7963,7 @@ async function runImplementCommand(
 				setTaskCheckboxStatus(spec, task.index, true);
 				const coordinatorProgressCommit = appendImplementationProgress(spec, task, definition, validation.evidence ?? "", nativeUpdate.taskId, options);
 				try {
-					setNativeTaskExecutionStatus(ctx, state, task, "completed", {
+					setNativeTaskExecutionStatus(ctx, state, spec, task, "completed", {
 						ralphExecutionAgent: definition.agentName,
 						ralphExecutionSignal: definition.completionSignal,
 						ralphExecutionEvidence: validation.evidence,
@@ -8043,10 +8062,8 @@ async function runImplementCommand(
 							maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
 							maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
 						}),
+						...createRecoveredImplementationStatePatch(state),
 						awaitingApproval: false,
-						blocked: false,
-						validationError: null,
-						activeTaskPendingEvidence: null,
 						lastCompletedTaskIndex: task.index,
 						lastCompletedTaskSignal: definition.completionSignal,
 						lastCompletedTaskEvidence: validation.evidence,
@@ -10374,6 +10391,8 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 		const job: RalphCoordinatorJob = { label, startedAt: Date.now() };
 		activeRalphCoordinatorJob = job;
+		ensureRalphInteractiveSurfaces(pi, ctx);
+		maybeShowNativeTaskStartupWidget(ctx, label);
 		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
 		await notify(ctx, `Started Ralph ${label}. The coordinator will continue in the background; you can keep using Pi while its subagent runs.`);
 
@@ -10393,8 +10412,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		await bootstrapBundledRuntimes(pi);
-		installRalphFooter(pi, ctx);
-		installRalphSubagentWidget(pi, ctx);
+		ensureRalphInteractiveSurfaces(pi, ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -10403,8 +10421,11 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		ralphFooterState.subagent = null;
 		stopRalphStatusAnimation();
 		if (ctx.hasUI) {
-			ctx.ui.setFooter(undefined);
-			ctx.ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, undefined);
+			if (typeof ctx.ui.setFooter === "function") ctx.ui.setFooter(undefined);
+			if (typeof ctx.ui.setWidget === "function") {
+				ctx.ui.setWidget(RALPH_SUBAGENT_WIDGET_KEY, undefined);
+				ctx.ui.setWidget(RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
+			}
 		}
 	});
 
@@ -10754,6 +10775,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		getArgumentCompletions: refactorArgumentCompletions,
 		handler: async (args, ctx) => {
 			await ctx.waitForIdle();
+			ensureRalphInteractiveSurfaces(pi, ctx);
 			const tokenized = tokenizeCommandArgs(args);
 			if (tokenized.error) {
 				await notify(ctx, tokenized.error, "warning");
@@ -10788,6 +10810,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 							maxTurns: 50,
 						},
 						prompt,
+						(agentId) => startRalphSubagentStatusTicker(ctx, `refactor ${selectedKind}.md`, "ralph-refactor-specialist", agentId),
 					);
 					const completionOutput = subagentCompletionOutput(completion);
 					const completionValidation = parseRefactorCompletion(completionOutput);
