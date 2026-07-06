@@ -456,7 +456,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, AC-3.4, NFR-5_
   - _Design: Edge Cases failed/stopped/aborted statuses_
 
-- [ ] 3.12 [YELLOW] Refactor: unify terminal status labels
+- [x] 3.12 [YELLOW] Refactor: unify terminal status labels
   - **Do**:
     1. Keep completed and failed label mapping consistent.
     2. Avoid duplicated terminal-state checks.

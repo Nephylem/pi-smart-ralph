@@ -4798,10 +4798,44 @@ function readActiveSubagentRecords(): RalphSubagentRecord[] {
 		.sort((left, right) => left.startedAt - right.startedAt);
 }
 
+type RalphSubagentTerminalPresentation = {
+	icon: string;
+	label: string;
+	color: string;
+	lingerMs: number;
+	showErrorDetail: boolean;
+};
+
+const RALPH_SUBAGENT_TERMINAL_PRESENTATIONS: Record<string, RalphSubagentTerminalPresentation> = {
+	completed: {
+		icon: "✓",
+		label: "done",
+		color: "success",
+		lingerMs: RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS,
+		showErrorDetail: false,
+	},
+	steered: {
+		icon: "✓",
+		label: "turn limit",
+		color: "warning",
+		lingerMs: RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS,
+		showErrorDetail: false,
+	},
+	error: {
+		icon: "✕",
+		label: "failed",
+		color: "error",
+		lingerMs: RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS,
+		showErrorDetail: true,
+	},
+};
+
+function getRalphSubagentTerminalPresentation(status: string): RalphSubagentTerminalPresentation {
+	return RALPH_SUBAGENT_TERMINAL_PRESENTATIONS[status] ?? RALPH_SUBAGENT_TERMINAL_PRESENTATIONS.error;
+}
+
 function subagentWidgetLingerMs(status: string): number {
-	return status === "error" || status === "aborted" || status === "steered" || status === "stopped"
-		? RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS
-		: RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS;
+	return getRalphSubagentTerminalPresentation(status).lingerMs;
 }
 
 function selectVisibleSubagentWidgetRecords(active: RalphSubagentRecord[], lingering: RalphSubagentRecord[]): RalphSubagentRecord[] {
@@ -4839,20 +4873,14 @@ function readLingeringSubagentRecords(now = Date.now()): RalphSubagentRecord[] {
 function formatSubagentWidgetFinishedState(
 	record: RalphSubagentRecord,
 	theme: { fg(color: any, text: string): string; bold(text: string): string },
-): { icon: string; status: string; color: string } {
-	switch (record.status) {
-		case "completed":
-			return { icon: theme.fg("success", "✓"), status: "done", color: "success" };
-		case "steered":
-			return { icon: theme.fg("warning", "✓"), status: "turn limit", color: "warning" };
-		case "stopped":
-			return { icon: theme.fg("dim", "■"), status: "stopped", color: "dim" };
-		case "error":
-			return { icon: theme.fg("error", "✕"), status: "error", color: "error" };
-		case "aborted":
-		default:
-			return { icon: theme.fg("error", "✕"), status: "aborted", color: "warning" };
-	}
+): { icon: string; status: string; color: string; showErrorDetail: boolean } {
+	const presentation = getRalphSubagentTerminalPresentation(record.status);
+	return {
+		icon: theme.fg(presentation.color as any, presentation.icon),
+		status: presentation.label,
+		color: presentation.color,
+		showErrorDetail: presentation.showErrorDetail,
+	};
 }
 
 function formatSubagentToolCount(toolUses: number): string {
@@ -4878,7 +4906,7 @@ function formatSubagentWidgetLine(
 		const progress = formatSubagentWidgetProgress(record);
 		const tools = formatSubagentToolCount(record.toolUses ?? 0);
 		const elapsed = formatFooterElapsed(record.startedAt, record.completedAt);
-		const errorDetail = record.status === "error" ? formatSubagentWidgetErrorDetail(record) : "";
+		const errorDetail = finished.showErrorDetail ? formatSubagentWidgetErrorDetail(record) : "";
 		return `${theme.fg("dim", "[")} ${finished.icon} ${theme.fg("dim", formatSubagentWidgetName(record.type))} ${theme.fg("dim", "✕")} ${theme.fg(finished.color as any, finished.status)}${theme.fg(finished.color as any, errorDetail)} ${theme.fg("dim", "·")} ${theme.fg("syntaxFunction", tools)} ${theme.fg("dim", "·")} ${theme.fg("syntaxString", elapsed)} ${theme.fg("dim", "·")} ${theme.fg("dim", progress)} ${theme.fg("dim", "]")}`;
 	}
 	const icon = theme.fg("accent", frame);
