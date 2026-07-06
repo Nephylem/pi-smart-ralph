@@ -108,7 +108,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-1, FR-2, FR-9_
   - _Design: Error Handling workflow throws; Coordinator job guard_
 
-- [ ] Q1.2 [VERIFY] Quality check: overlap guard slice
+- [x] Q1.2 [VERIFY] Quality check: overlap guard slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -118,7 +118,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 1.7 [RED] Failing test: coordinator startup publishes Ralph status
+- [x] 1.7 [RED] Failing test: coordinator startup publishes Ralph status
   - **Do**:
     1. Add mocked `ctx.ui.setStatus` assertion during phase startup.
     2. Assert key `ralph` and non-empty message are passed.

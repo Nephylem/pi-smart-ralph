@@ -37,11 +37,13 @@ function createMockPi() {
 function createMockCtx(cwd) {
   const notifications = [];
   const widgets = [];
+  const statuses = [];
   return {
     cwd,
     hasUI: true,
     notifications,
     widgets,
+    statuses,
     async waitForIdle() {},
     async notify(message, type = 'info') {
       notifications.push({ message, type });
@@ -50,6 +52,7 @@ function createMockCtx(cwd) {
       async notify(message, type = 'info') { notifications.push({ message, type }); },
       setFooter(value) { widgets.push({ kind: 'footer', value }); },
       setWidget(key, value) { widgets.push({ kind: 'widget', key, value }); },
+      setStatus(key, message) { statuses.push({ key, message }); },
       async confirm() { return false; },
       async select(_title, options) { return options?.[0] ?? null; },
       async input() { return null; },
@@ -135,6 +138,24 @@ test('phase command handler returns after startup before delegated coordinator w
       false,
       'expected /ralph-* handler to return before pending delegated coordinator work starts or resolves',
     );
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('coordinator startup publishes a non-empty Ralph status', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+    ctx.waitForIdle = () => new Promise(() => {});
+
+    await pi.commands.get('ralph-research').handler('status-startup', ctx);
+
+    const ralphStatus = ctx.statuses.find((status) => status.key === 'ralph' && status.message);
+    assert.ok(ralphStatus, 'expected coordinator startup to publish a non-empty Ralph status');
+    assert.equal(ralphStatus.message, 'Running Ralph research');
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
