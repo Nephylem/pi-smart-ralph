@@ -34,6 +34,7 @@ const cases = new Map([
   ['edge-cases', verifyEdgeCases],
   ['verification-recovery-policy', verifyVerificationRecoveryPolicy],
   ['verify-auto-recovery', verifyVerifyAutoRecovery],
+  ['shared-surface-preflight', verifySharedSurfacePreflight],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -871,6 +872,122 @@ async function verifyVerifyAutoRecovery() {
   }
 }
 
+async function verifySharedSurfacePreflight() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('shared-surface preflight helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+  const combinedSource = `${helperSource}\n${indexSource}`;
+
+  const preflightExports = [
+    /export (?:const|function) (?:SHARED_SURFACE_PREFLIGHT_COMMANDS|sharedSurfacePreflightCommands|implementationSharedSurfacePreflightCommands)\b/,
+    /export function (?:createImplementationSharedSurfacePreflightPlan|planImplementationSharedSurfacePreflight|createSharedSurfacePreflightPlan)\(/,
+    /export function (?:runImplementationSharedSurfacePreflight|runSharedSurfacePreflightCommands|executeImplementationSharedSurfacePreflight)\(/,
+  ];
+  if (preflightExports.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('implementation-loop.ts does not yet export shared-surface preflight mapping, plan creation, and command execution helpers.');
+  }
+
+  const expectedMapping = new Map([
+    [
+      'extensions/ralph-specum/index.ts',
+      [
+        'node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist',
+        'node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist',
+      ],
+    ],
+    [
+      'extensions/ralph-specum/implementation-loop.ts',
+      ['node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist'],
+    ],
+    [
+      'extensions/ralph-specum/task-completion.ts',
+      ['node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist'],
+    ],
+    ['package.json', ['npm run verify:index', 'npm run verify:pack']],
+    [
+      'references/ralph-resource-manifest.v1.json',
+      ['node scripts/verify-publish-bundle.mjs', 'npm run verify:pack'],
+    ],
+    [
+      'schemas/spec.schema.json',
+      ['node scripts/verify-publish-bundle.mjs', 'npm run verify:index', 'npm run verify:pack'],
+    ],
+  ]);
+
+  const missingMappings = [];
+  for (const [surface, commands] of expectedMapping) {
+    if (!helperSource.includes(surface)) {
+      missingMappings.push(`${surface} -> <surface missing>`);
+      continue;
+    }
+
+    for (const command of commands) {
+      const mappedCommandPattern = new RegExp(
+        `${escapeRegExp(surface)}[\\s\\S]{0,900}${escapeRegExp(command)}`,
+      );
+      if (!mappedCommandPattern.test(helperSource)) {
+        missingMappings.push(`${surface} -> ${command}`);
+      }
+    }
+  }
+  if (missingMappings.length > 0) {
+    expectedFail(`shared-surface preflight mapping is missing required AC-3.1 entries: ${missingMappings.join('; ')}.`);
+  }
+
+  const planningBehaviorPatterns = [
+    /touchedFiles|changedFiles|changed-file|changed file/i,
+    /dedupe|deduplicat|Set<|new Set\(/,
+    /commands\s*:/,
+    /before.*package.*verify|preflight.*package.*verify|package.*verify.*preflight/i,
+  ];
+  if (planningBehaviorPatterns.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('shared-surface preflight planner does not yet derive a deduplicated command bundle from touched files before package verification.');
+  }
+
+  const packageVerifyMarkers = [
+    'npm run verify:index',
+    'npm run verify:pack',
+    'node scripts/verify-publish-bundle.mjs',
+  ];
+  const missingRunProof = [];
+  for (const command of new Set([...expectedMapping.values()].flat())) {
+    const commandRunPattern = new RegExp(
+      `(runImplementationSharedSurfacePreflight|runSharedSurfacePreflightCommands|executeImplementationSharedSurfacePreflight)[\\s\\S]{0,2000}${escapeRegExp(command)}`,
+    );
+    if (!commandRunPattern.test(combinedSource)) {
+      missingRunProof.push(command);
+    }
+  }
+  if (missingRunProof.length > 0) {
+    expectedFail(`shared-surface preflight does not yet prove every mapped command runs at least once before package verification tasks: ${missingRunProof.join('; ')}.`);
+  }
+
+  const preflightCallIndex = indexOfFirstMatch(combinedSource, [
+    /runImplementationSharedSurfacePreflight\(/,
+    /runSharedSurfacePreflightCommands\(/,
+    /executeImplementationSharedSurfacePreflight\(/,
+  ]);
+  if (preflightCallIndex < 0) {
+    expectedFail('runImplementCommand does not yet invoke shared-surface preflight before package VERIFY tasks.');
+  }
+
+  const firstPackageVerifyIndex = packageVerifyMarkers
+    .map((marker) => combinedSource.indexOf(marker))
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0] ?? -1;
+  if (firstPackageVerifyIndex < 0) {
+    expectedFail('shared-surface preflight verifier could not locate package verification commands for ordering proof.');
+  }
+  if (preflightCallIndex > firstPackageVerifyIndex) {
+    throw new Error('shared-surface preflight invocation appears after package verification commands.');
+  }
+}
+
 async function verifyAcceptanceChecklist() {
   for (const caseName of acceptanceChecklistCases) {
     const verifyCase = cases.get(caseName);
@@ -1003,6 +1120,16 @@ async function verifyContractWiring() {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function indexOfFirstMatch(source, patterns) {
+  return patterns
+    .map((pattern) => {
+      const match = source.match(pattern);
+      return match?.index ?? -1;
+    })
+    .filter((index) => index >= 0)
+    .sort((left, right) => left - right)[0] ?? -1;
 }
 
 function escapeRegExp(value) {

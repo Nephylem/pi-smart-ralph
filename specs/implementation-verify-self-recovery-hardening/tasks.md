@@ -109,7 +109,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
 
 ## Phase 3: Shared-surface preflight before package VERIFY tasks
 
-- [ ] 3.1 [RED] Failing test: shared runtime edits trigger targeted verifier preflight before VE/V tasks
+- [x] 3.1 [RED] Failing test: shared runtime edits trigger targeted verifier preflight before VE/V tasks
   - **Do**:
     1. Add a `shared-surface-preflight` case to `scripts/verify-implementation-loop-parity.mjs`.
     2. Cover edits to `extensions/ralph-specum/index.ts`, `extensions/ralph-specum/implementation-loop.ts`, `extensions/ralph-specum/task-completion.ts`, `package.json`, `references/ralph-resource-manifest.v1.json`, and `schemas/spec.schema.json`.
