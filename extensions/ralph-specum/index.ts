@@ -10330,12 +10330,6 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		startRalphStatusAnimation(ctx, `Ralph ${label}: coordinator running`);
 	}
 
-	function finishRalphCoordinatorJob(ctx: ExtensionCommandContext, job: RalphCoordinatorJob): void {
-		if (activeRalphCoordinatorJob !== job) return;
-		activeRalphCoordinatorJob = null;
-		stopRalphStatusAnimation(ctx);
-	}
-
 	function detachRalphCoordinatorWorkflow(
 		ctx: ExtensionCommandContext,
 		label: string,
@@ -10343,6 +10337,14 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		run: () => Promise<void>,
 	): void {
 		let workflowStarted = false;
+		let workflowFinalized = false;
+		const finalizeWorkflow = () => {
+			if (workflowFinalized) return;
+			workflowFinalized = true;
+			if (activeRalphCoordinatorJob !== job) return;
+			activeRalphCoordinatorJob = null;
+			stopRalphStatusAnimation(ctx);
+		};
 		job.startWorkflow = () => {
 			if (workflowStarted) return;
 			workflowStarted = true;
@@ -10352,7 +10354,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 				} catch (error) {
 					await notify(ctx, `Ralph ${label} failed: ${formatError(error)}`, "warning");
 				} finally {
-					finishRalphCoordinatorJob(ctx, job);
+					finalizeWorkflow();
 				}
 			})();
 		};

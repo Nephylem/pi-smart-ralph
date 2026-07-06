@@ -97,7 +97,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-2, FR-5, AC-1.2_
   - _Design: Coordinator job guard; Safe Ralph UI helpers_
 
-- [ ] 1.6 [YELLOW] Refactor: simplify active job cleanup
+- [x] 1.6 [YELLOW] Refactor: simplify active job cleanup
   - **Do**:
     1. Centralize active-job reset in detached promise finalization.
     2. Keep failure notification and status clearing intact.
