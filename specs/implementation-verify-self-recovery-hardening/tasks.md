@@ -181,7 +181,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-6, FR-7, AC-4.1, AC-4.2_
   - _Design: Failure envelope; State evidence_
 
-- [ ] 4.3 [YELLOW] Refactor: isolate verifier output parsers and evidence writers
+- [x] 4.3 [YELLOW] Refactor: isolate verifier output parsers and evidence writers
   - **Do**:
     1. Extract parser helpers for QA, verifier, and package outputs.
     2. Keep envelope schema stable for later verifier and cleanup tasks.

@@ -667,25 +667,50 @@ export function createImplementationVerificationRecoveryPolicy(
 	);
 }
 
-export function normalizeImplementationVerificationResultEnvelope(
+type ImplementationVerificationEnvelopeParserInput = {
+	output: string;
+	attemptCount: number;
+	sourceType: ImplementationVerificationResultSource;
+};
+
+type ImplementationVerificationEnvelopeParser = (
+	input: ImplementationVerificationEnvelopeParserInput,
+) => ImplementationVerificationResultEnvelope;
+
+function createImplementationPassedVerificationPolicy(
 	output: string,
-	attemptCount = 0,
-	sourceType: ImplementationVerificationResultSource = "verification_agent",
+	attemptCount: number,
+): ImplementationVerificationRecoveryPolicy {
+	return {
+		category: classifyImplementationVerificationFailure(output),
+		reasonCode: "VERIFY_OK",
+		recoverable: false,
+		recoveryAction: "block" as VerificationRecoveryAction,
+		attemptCount,
+		nextStep: "No recovery required.",
+	};
+}
+
+function resolveImplementationVerificationResultPolicy(
+	output: string,
+	attemptCount: number,
+	status: ImplementationVerificationResultStatus,
+	reasonCode: string | undefined,
+): ImplementationVerificationRecoveryPolicy {
+	return status === "VERIFICATION_PASS" || status === "TASK_COMPLETE"
+		? createImplementationPassedVerificationPolicy(output, attemptCount)
+		: resolveImplementationVerificationEnvelopePolicy(reasonCode, output, attemptCount);
+}
+
+function buildImplementationVerificationResultEnvelope(
+	input: ImplementationVerificationEnvelopeParserInput,
 ): ImplementationVerificationResultEnvelope {
+	const { output, attemptCount, sourceType } = input;
 	const status = extractImplementationVerificationStatus(output);
 	const reasonCode = status === "VERIFICATION_PASS" || status === "TASK_COMPLETE"
 		? "VERIFY_OK"
 		: extractImplementationReasonCode(output);
-	const policy = status === "VERIFICATION_PASS" || status === "TASK_COMPLETE"
-		? {
-			category: classifyImplementationVerificationFailure(output),
-			reasonCode: "VERIFY_OK",
-			recoverable: false,
-			recoveryAction: "block" as VerificationRecoveryAction,
-			attemptCount,
-			nextStep: "No recovery required.",
-		}
-		: resolveImplementationVerificationEnvelopePolicy(reasonCode, output, attemptCount);
+	const policy = resolveImplementationVerificationResultPolicy(output, attemptCount, status, reasonCode);
 	const failingCommand = extractImplementationFailingCommand(output, sourceType);
 	const evidence = normalizeImplementationVerificationEvidenceLines(output);
 	const rawSummary = evidence[0] ?? normalizeImplementationWhitespace(output);
@@ -706,25 +731,84 @@ export function normalizeImplementationVerificationResultEnvelope(
 	};
 }
 
+const IMPLEMENTATION_VERIFICATION_OUTPUT_PARSERS: Record<
+	ImplementationVerificationResultSource,
+	ImplementationVerificationEnvelopeParser
+> = {
+	verification_agent: buildImplementationVerificationResultEnvelope,
+	qa_agent: buildImplementationVerificationResultEnvelope,
+	package_script: buildImplementationVerificationResultEnvelope,
+	nested_parity_script: buildImplementationVerificationResultEnvelope,
+	unknown: buildImplementationVerificationResultEnvelope,
+};
+
+function parseImplementationVerificationOutputEnvelope(
+	output: string,
+	attemptCount: number,
+	sourceType: ImplementationVerificationResultSource,
+): ImplementationVerificationResultEnvelope {
+	return (IMPLEMENTATION_VERIFICATION_OUTPUT_PARSERS[sourceType] ?? IMPLEMENTATION_VERIFICATION_OUTPUT_PARSERS.unknown)({
+		output,
+		attemptCount,
+		sourceType,
+	});
+}
+
+export function parseImplementationVerifierOutputEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return parseImplementationVerificationOutputEnvelope(output, attemptCount, "verification_agent");
+}
+
+export function parseImplementationQaOutputEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return parseImplementationVerificationOutputEnvelope(output, attemptCount, "qa_agent");
+}
+
+export function parseImplementationPackageOutputEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return parseImplementationVerificationOutputEnvelope(output, attemptCount, "package_script");
+}
+
+export function parseNestedParityVerificationOutputEnvelope(
+	output: string,
+	attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+	return parseImplementationVerificationOutputEnvelope(output, attemptCount, "nested_parity_script");
+}
+
+export function normalizeImplementationVerificationResultEnvelope(
+	output: string,
+	attemptCount = 0,
+	sourceType: ImplementationVerificationResultSource = "verification_agent",
+): ImplementationVerificationResultEnvelope {
+	return parseImplementationVerificationOutputEnvelope(output, attemptCount, sourceType);
+}
+
 export function normalizeImplementationQaResultEnvelope(
 	output: string,
 	attemptCount = 0,
 ): ImplementationVerificationResultEnvelope {
-	return normalizeImplementationVerificationResultEnvelope(output, attemptCount, "qa_agent");
+	return parseImplementationQaOutputEnvelope(output, attemptCount);
 }
 
 export function normalizeImplementationPackageResultEnvelope(
 	output: string,
 	attemptCount = 0,
 ): ImplementationVerificationResultEnvelope {
-	return normalizeImplementationVerificationResultEnvelope(output, attemptCount, "package_script");
+	return parseImplementationPackageOutputEnvelope(output, attemptCount);
 }
 
 export function normalizeNestedParityVerificationResultEnvelope(
 	output: string,
 	attemptCount = 0,
 ): ImplementationVerificationResultEnvelope {
-	return normalizeImplementationVerificationResultEnvelope(output, attemptCount, "nested_parity_script");
+	return parseNestedParityVerificationOutputEnvelope(output, attemptCount);
 }
 
 export function createImplementationVerificationDecision(
@@ -1030,20 +1114,32 @@ export function getImplementationVerifierPassSignal(
 		: null;
 }
 
-export function recordImplementationVerificationEnvelopeEvidence(
-	existing: unknown,
-	taskKey: string,
-	envelope: ImplementationVerificationResultEnvelope,
+type ImplementationVerificationEnvelopeEvidenceWrite = {
+	existing: unknown;
+	taskKey: string;
+	envelope: ImplementationVerificationResultEnvelope;
+};
+
+function writeImplementationVerificationEnvelopeEvidence(
+	input: ImplementationVerificationEnvelopeEvidenceWrite,
 ): Record<string, unknown> {
-	const evidence = createImplementationEvidenceScaffold(existing);
+	const evidence = createImplementationEvidenceScaffold(input.existing);
 	const verificationEnvelopes = implementationStateRecord(evidence.verificationEnvelopes);
 	return {
 		...evidence,
 		verificationEnvelopes: {
 			...verificationEnvelopes,
-			[taskKey]: envelope,
+			[input.taskKey]: input.envelope,
 		},
 	};
+}
+
+export function recordImplementationVerificationEnvelopeEvidence(
+	existing: unknown,
+	taskKey: string,
+	envelope: ImplementationVerificationResultEnvelope,
+): Record<string, unknown> {
+	return writeImplementationVerificationEnvelopeEvidence({ existing, taskKey, envelope });
 }
 
 export function createImplementationVerificationEnvelopeStatePatch(
@@ -1052,7 +1148,11 @@ export function createImplementationVerificationEnvelopeStatePatch(
 	envelope: ImplementationVerificationResultEnvelope,
 ): Record<string, unknown> {
 	return {
-		evidence: recordImplementationVerificationEnvelopeEvidence(state?.evidence, taskKey, envelope),
+		evidence: writeImplementationVerificationEnvelopeEvidence({
+			existing: state?.evidence,
+			taskKey,
+			envelope,
+		}),
 	};
 }
 

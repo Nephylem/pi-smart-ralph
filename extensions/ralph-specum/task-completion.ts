@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { statSync } from 'node:fs';
 import {
-  normalizeImplementationQaResultEnvelope,
+  parseImplementationQaOutputEnvelope,
   type ImplementationVerificationResultEnvelope,
 } from './implementation-loop.ts';
 
@@ -69,7 +69,7 @@ export function normalizeVerificationAgentOutputEnvelope(
   output: string,
   attemptCount = 0,
 ): ImplementationVerificationResultEnvelope {
-  return normalizeImplementationQaResultEnvelope(output, attemptCount);
+  return parseImplementationQaOutputEnvelope(output, attemptCount);
 }
 
 export function formatTaskWorkspaceReport(report: TaskWorkspaceReport): string {
