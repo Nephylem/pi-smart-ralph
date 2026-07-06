@@ -204,7 +204,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
 
 ## Phase 5: State and progress cleanup after recovery and completion
 
-- [ ] 5.1 [RED] Failing test: successful recovery or completion clears stale blocked metadata and misleading progress text
+- [x] 5.1 [RED] Failing test: successful recovery or completion clears stale blocked metadata and misleading progress text
   - **Do**:
     1. Add a `state-cleanup` case to `scripts/verify-implementation-loop-parity.mjs`.
     2. Cover: stale `currentTask`, stale `blockedAt`, stale `validationError`, stale `lastSubagentOutput`, stale `.progress.md` header or next-step text, missing completion evidence, and undeleted `<basePath>/.ralph-state.json`.

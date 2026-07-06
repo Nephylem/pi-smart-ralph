@@ -36,6 +36,7 @@ const cases = new Map([
   ['verify-auto-recovery', verifyVerifyAutoRecovery],
   ['shared-surface-preflight', verifySharedSurfacePreflight],
   ['verification-envelope', verifyVerificationEnvelope],
+  ['state-cleanup', verifyStateCleanup],
   [acceptanceChecklistCaseKey, verifyAcceptanceChecklist],
   [cleanupCaseKey, verifyCleanup],
 ]);
@@ -1095,6 +1096,84 @@ async function verifyVerificationEnvelope() {
   ];
   if (decisionBridgePatterns.some((pattern) => !pattern.test(combinedSource))) {
     expectedFail('coordinator decision bridge is not yet provably consuming structured envelope fields instead of prose-only output parsing.');
+  }
+}
+
+async function verifyStateCleanup() {
+  const helperPath = join(root, 'extensions', 'ralph-specum', 'implementation-loop.ts');
+  if (!existsSync(helperPath)) {
+    expectedFail('state cleanup helper extensions/ralph-specum/implementation-loop.ts is not implemented yet.');
+  }
+
+  const helperSource = readFileSync(helperPath, 'utf8');
+  const indexPath = join(root, 'extensions', 'ralph-specum', 'index.ts');
+  const indexSource = readFileSync(indexPath, 'utf8');
+  const combinedSource = `${helperSource}\n${indexSource}`;
+
+  const cleanupExports = [
+    /export function (?:clearRecoveredImplementationState|clearStaleImplementationFailureMetadata|createRecoveredImplementationStatePatch)\(/,
+    /export function (?:finalizeCompletedImplementationState|createImplementationCompletionFinalizer|completeImplementationStateCleanup)\(/,
+    /export function (?:rewriteImplementationProgressTruthfully|syncImplementationProgressAfterCompletion|writeImplementationCompletionProgress)\(/,
+    /export function (?:deleteImplementationStateFile|removeCompletedImplementationStateFile|deleteRalphStateAfterCompletion)\(/,
+  ];
+  if (cleanupExports.some((pattern) => !pattern.test(helperSource))) {
+    expectedFail('implementation-loop.ts does not yet export recovered-state cleanup, completion finalizer, truthful progress sync, and .ralph-state.json deletion helpers.');
+  }
+
+  const staleFailureFields = ['blocked', 'blockedAt', 'validationError', 'lastSubagentOutput'];
+  const staleInflightFields = ['currentTask', 'activeTaskPendingEvidence', 'recoveryMode'];
+  const recoveredCleanupContracts = [
+    /blocked\s*:\s*false/,
+    /blockedAt\s*:\s*(?:null|undefined)/,
+    /validationError\s*:\s*(?:null|undefined)/,
+    /lastSubagentOutput\s*:\s*(?:["']{2}|null|undefined)/,
+    /currentTask\s*:\s*(?:null|undefined)/,
+  ];
+  if (recoveredCleanupContracts.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail(`successful recovery does not yet clear stale failure metadata before the next task starts: ${staleFailureFields.join(', ')}, currentTask.`);
+  }
+
+  const nextTaskOrderingPattern = /(clearRecoveredImplementationState|clearStaleImplementationFailureMetadata|createRecoveredImplementationStatePatch)[\s\S]{0,1600}(next task|before the next task|taskIndex\s*:\s*|currentTask\s*:\s*\{)/i;
+  if (!nextTaskOrderingPattern.test(combinedSource)) {
+    expectedFail('state cleanup verifier cannot prove recovered specs clear stale failure metadata before the next task starts.');
+  }
+
+  const progressTruthPatterns = [
+    /\.progress\.md/,
+    /phase\s*:\s*(?:["']completed["']|completed)/i,
+    /task\s*:\s*(?:totalTasks|tasks\.length|\$\{[^}]*total[^}]*\}\/\$\{[^}]*total[^}]*\})/,
+    /## Current Task[\s\S]{0,160}(?:Completed|Awaiting next task)/,
+    /## Next[\s\S]{0,240}(?:Complete|No next task|Awaiting next task)/i,
+  ];
+  if (progressTruthPatterns.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail('completed specs do not yet rewrite .progress.md header/current/next text to truthful completion state.');
+  }
+
+  const completionEvidencePatterns = [
+    /(lastCompletedTaskSignal|completionSignal)\s*:\s*(?:["']TASK_COMPLETE["']|["']VERIFICATION_PASS["'])/,
+    /(lastCompletedTaskEvidence|verifiedTaskEvidence|completionEvidence)\s*:/,
+    /(completedAt|commit|verify|evidence)\s*:/,
+  ];
+  if (completionEvidencePatterns.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail('completed specs do not yet write durable completion evidence before final cleanup.');
+  }
+
+  const stateDeletionPatterns = [
+    /\.ralph-state\.json/,
+    /(?:unlinkSync|rmSync|unlink|rm)\([^)]*(?:statePath|getStatePath|\.ralph-state\.json)/s,
+    /(deleteImplementationStateFile|removeCompletedImplementationStateFile|deleteRalphStateAfterCompletion)\(/,
+  ];
+  if (stateDeletionPatterns.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail('successful completion does not yet delete <basePath>/.ralph-state.json.');
+  }
+
+  const staleRetainedArtifactGuards = [
+    /(?:omit|delete|undefined|null)[\s\S]{0,220}(?:blockedAt|validationError|lastSubagentOutput)/,
+    /(?:omit|delete|undefined|null)[\s\S]{0,220}(?:currentTask|activeTaskPendingEvidence)/,
+    /(?:retained completion artifact|completion artifact|final state|completion evidence)[\s\S]{0,600}(?:blockedAt|currentTask|in-flight|in flight|activeTaskPendingEvidence)/i,
+  ];
+  if (staleRetainedArtifactGuards.some((pattern) => !pattern.test(combinedSource))) {
+    expectedFail(`completed specs do not yet prove retained completion artifacts omit stale blocked or in-flight fields: ${[...staleFailureFields, ...staleInflightFields].join(', ')}.`);
   }
 }
 
