@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { getRalphStatePath, type RalphState } from "./state.ts";
 
 export type ImplementationNativeTaskLike = {
@@ -9,6 +10,8 @@ export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK = 3;
 export const IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH = 2;
+export const IMPLEMENTATION_DEFAULT_MAX_VERIFICATION_RECOVERY_ATTEMPTS = 2;
+export const IMPLEMENTATION_DEFAULT_MAX_CLEANUP_RETRIES = 2;
 
 export type ImplementationCompletionSignal = "TASK_COMPLETE" | "VERIFICATION_PASS" | "REFACTOR_COMPLETE";
 
@@ -159,6 +162,83 @@ export type ImplementationVerificationFailureEnvelope = {
 	output: string;
 	normalizedOutput: string;
 	policy: ImplementationVerificationRecoveryPolicy;
+};
+
+export interface VerificationRecoveryAttempt {
+	taskId: string;
+	attempt: number;
+	category: VerificationFailureCategory;
+	action: VerificationRecoveryAction;
+	command?: string;
+	outcome: "recovered" | "still_failing" | "blocked";
+	timestamp: string;
+}
+
+export interface ImplementationVerificationRecoveryEntry {
+	attempts: number;
+	lastReasonCode?: string;
+	lastCategory?: VerificationFailureCategory;
+	history: VerificationRecoveryAttempt[];
+}
+
+export interface ImplementationVerificationRecoveryState {
+	maxVerificationRecoveryAttempts: number;
+	maxCleanupRetries: number;
+	verificationRecovery: Record<string, ImplementationVerificationRecoveryEntry>;
+}
+
+export type ImplementationVerificationRecoveryBudget = {
+	taskId: string;
+	attempts: number;
+	maxAttempts: number;
+	remaining: number;
+	exhausted: boolean;
+	maxVerificationRecoveryAttempts: number;
+	maxCleanupRetries: number;
+};
+
+export type ImplementationVerifierRerunResult = {
+	command: string;
+	ok: boolean;
+	status: number | null;
+	signal: "VERIFICATION_PASS" | null;
+	output: string;
+};
+
+export type ImplementationVerificationRecoveryPlan = {
+	taskId: string;
+	policy: ImplementationVerificationRecoveryPolicy;
+	command: string | null;
+	budget: ImplementationVerificationRecoveryBudget;
+	shouldRecover: boolean;
+	exhausted: boolean;
+	nextAttempt: number;
+};
+
+export type CreateImplementationVerificationRecoveryAttemptInput = {
+	taskId: string;
+	attempt: number;
+	category: VerificationFailureCategory;
+	action: VerificationRecoveryAction;
+	command?: string | null;
+	outcome: VerificationRecoveryAttempt["outcome"];
+	timestamp?: string;
+};
+
+export type CreateImplementationVerificationRecoveryStatePatchInput = {
+	state: RalphState | null;
+	taskId: string;
+	attempt: VerificationRecoveryAttempt;
+	maxVerificationRecoveryAttempts?: number;
+	maxCleanupRetries?: number;
+};
+
+export type PlanImplementationVerificationRecoveryInput = {
+	state: RalphState | null;
+	taskId: string;
+	output: string;
+	policy: ImplementationVerificationRecoveryPolicy;
+	command?: string | null;
 };
 
 export type ImplementationFinalizerTaskLike = {
@@ -427,6 +507,193 @@ export function formatImplementationVerificationRecoveryPolicy(
 	policy: ImplementationVerificationRecoveryPolicy,
 ): string {
 	return `${policy.reasonCode}: recoverable=${policy.recoverable}; recoveryAction=${policy.recoveryAction}; attemptCount=${policy.attemptCount}; nextStep=${policy.nextStep}`;
+}
+
+export function getImplementationVerificationRecoveryBudget(
+	state: RalphState | null,
+	taskId: string,
+	category?: VerificationFailureCategory,
+): ImplementationVerificationRecoveryBudget {
+	const current = getImplementationVerificationRecoveryEntry(state, taskId);
+	const limits = resolveImplementationVerificationRecoveryLimits(state);
+	const maxAttempts = getImplementationVerificationRecoveryMaxAttempts(limits, category);
+	return createImplementationVerificationRecoveryBudget(taskId, current.attempts, maxAttempts, limits);
+}
+
+export function resolveImplementationVerificationRecoveryLimits(
+	state: Pick<RalphState, "maxVerificationRecoveryAttempts" | "maxCleanupRetries"> | null,
+): Pick<ImplementationVerificationRecoveryBudget, "maxVerificationRecoveryAttempts" | "maxCleanupRetries"> {
+	return {
+		maxVerificationRecoveryAttempts: positiveInteger(state?.maxVerificationRecoveryAttempts)
+			?? IMPLEMENTATION_DEFAULT_MAX_VERIFICATION_RECOVERY_ATTEMPTS,
+		maxCleanupRetries: positiveInteger(state?.maxCleanupRetries)
+			?? IMPLEMENTATION_DEFAULT_MAX_CLEANUP_RETRIES,
+	};
+}
+
+export function getImplementationVerificationRecoveryEntry(
+	state: RalphState | null,
+	taskId: string,
+): ImplementationVerificationRecoveryEntry {
+	const verificationRecovery = implementationStateRecord(state?.verificationRecovery);
+	return implementationVerificationRecoveryEntryFromUnknown(verificationRecovery[taskId]);
+}
+
+export function getImplementationVerificationRecoveryMaxAttempts(
+	limits: Pick<ImplementationVerificationRecoveryBudget, "maxVerificationRecoveryAttempts" | "maxCleanupRetries">,
+	category?: VerificationFailureCategory,
+): number {
+	return category === "cleanup_artifact_failure"
+		? limits.maxCleanupRetries
+		: limits.maxVerificationRecoveryAttempts;
+}
+
+export function createImplementationVerificationRecoveryBudget(
+	taskId: string,
+	attempts: number,
+	maxAttempts: number,
+	limits: Pick<ImplementationVerificationRecoveryBudget, "maxVerificationRecoveryAttempts" | "maxCleanupRetries">,
+): ImplementationVerificationRecoveryBudget {
+	const normalizedAttempts = Math.max(0, attempts);
+	return {
+		taskId,
+		attempts: normalizedAttempts,
+		maxAttempts,
+		remaining: Math.max(0, maxAttempts - normalizedAttempts),
+		exhausted: normalizedAttempts >= maxAttempts,
+		...limits,
+	};
+}
+
+export function createImplementationVerificationRecoveryAttempt(
+	input: CreateImplementationVerificationRecoveryAttemptInput,
+): VerificationRecoveryAttempt {
+	return {
+		taskId: input.taskId,
+		attempt: input.attempt,
+		category: input.category,
+		action: input.action,
+		command: normalizeImplementationField(input.command ?? undefined) || undefined,
+		outcome: input.outcome,
+		timestamp: input.timestamp ?? new Date().toISOString(),
+	};
+}
+
+export function extractImplementationVerifierCommand(output: string): string | null {
+	const commands = [...output.matchAll(/`((?:node|npm|pnpm|yarn)\s+[^`]*(?:verify|prepack)[^`]*)`/gi)];
+	for (const match of commands) {
+		const command = normalizeImplementationWhitespace(match[1]);
+		if (command) return command;
+	}
+	return null;
+}
+
+export function rerunImplementationVerifierExactly(
+	command: string,
+	cwd = process.cwd(),
+): ImplementationVerifierRerunResult {
+	return createImplementationVerifierRerunResult(
+		command,
+		runImplementationVerifierCommand(command, cwd),
+	);
+}
+
+export function runImplementationVerifierCommand(
+	command: string,
+	cwd = process.cwd(),
+): ReturnType<typeof spawnSync> {
+	return spawnSync("bash", ["-lc", command], {
+		cwd,
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+		timeout: 120_000,
+		env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+	});
+}
+
+export function createImplementationVerifierRerunResult(
+	command: string,
+	result: ReturnType<typeof spawnSync>,
+): ImplementationVerifierRerunResult {
+	const output = formatImplementationVerifierProcessOutput(result);
+	const signal = getImplementationVerifierPassSignal(result.status, output);
+	return {
+		command,
+		ok: result.status === 0 && signal === "VERIFICATION_PASS",
+		status: result.status,
+		signal,
+		output,
+	};
+}
+
+export function formatImplementationVerifierProcessOutput(result: ReturnType<typeof spawnSync>): string {
+	const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
+	const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+	const spawnError = result.error instanceof Error ? result.error.message : "";
+	return [stdout, stderr, spawnError].filter(Boolean).join("\n").trim();
+}
+
+export function getImplementationVerifierPassSignal(
+	status: number | null,
+	output: string,
+): ImplementationVerifierRerunResult["signal"] {
+	return /(^|\n)VERIFICATION_PASS\b/m.test(output) || (status === 0 && /\bPASS\b/.test(output))
+		? "VERIFICATION_PASS"
+		: null;
+}
+
+export function createImplementationVerificationRecoveryStatePatch(
+	input: CreateImplementationVerificationRecoveryStatePatchInput,
+): Record<string, unknown> {
+	const verificationRecovery = implementationStateRecord(input.state?.verificationRecovery);
+	const existingEntry = implementationVerificationRecoveryEntryFromUnknown(verificationRecovery[input.taskId]);
+	const nextEntry: ImplementationVerificationRecoveryEntry = {
+		attempts: Math.max(existingEntry.attempts, input.attempt.attempt),
+		lastReasonCode: implementationStateRecord(input.state?.verificationRecovery)[input.taskId] && input.state?.validationError && typeof input.state.validationError === "string"
+			? normalizeImplementationField(input.state.validationError)
+			: existingEntry.lastReasonCode,
+		lastCategory: input.attempt.category,
+		history: [...existingEntry.history, input.attempt],
+	};
+	const evidence = createImplementationEvidenceScaffold(input.state?.evidence);
+	const verificationEvidence = implementationStateRecord(evidence.verificationRecovery);
+	const limits = resolveImplementationVerificationRecoveryLimits(input.state);
+	return {
+		maxVerificationRecoveryAttempts: input.maxVerificationRecoveryAttempts ?? limits.maxVerificationRecoveryAttempts,
+		maxCleanupRetries: input.maxCleanupRetries ?? limits.maxCleanupRetries,
+		verificationRecovery: {
+			...verificationRecovery,
+			[input.taskId]: nextEntry,
+		},
+		evidence: {
+			...evidence,
+			verificationRecovery: {
+				...verificationEvidence,
+				[input.taskId]: nextEntry,
+			},
+		},
+	};
+}
+
+export function planImplementationVerificationRecovery(
+	input: PlanImplementationVerificationRecoveryInput,
+): ImplementationVerificationRecoveryPlan {
+	const command = normalizeImplementationField(input.command) || extractImplementationVerifierCommand(input.output);
+	const budget = getImplementationVerificationRecoveryBudget(input.state, input.taskId, input.policy.category);
+	const nextAttempt = budget.attempts + 1;
+	const shouldRecover = input.policy.recoverable && !budget.exhausted && Boolean(command);
+	// cleanup_artifact_failure -> cleanup_artifacts -> expect VERIFICATION_PASS after exact verifier rerun.
+	// transient_tool_failure -> retry_verifier -> expect VERIFICATION_PASS from the same failing verifier command.
+	// shared_contract_drift -> repair_shared_contract -> expect VERIFICATION_PASS after rerun of the exact verifier.
+	return {
+		taskId: input.taskId,
+		policy: input.policy,
+		command,
+		budget,
+		shouldRecover,
+		exhausted: budget.exhausted,
+		nextAttempt,
+	};
 }
 
 export function hasImplementationCompletionSignal(output: string, signal: ImplementationCompletionSignal): boolean {
@@ -1323,6 +1590,13 @@ export function createImplementationStateDefaults(
 		maxFixTaskDepth: positiveInteger(overrides.maxFixTaskDepth)
 			?? positiveInteger(state?.maxFixTaskDepth)
 			?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+		maxVerificationRecoveryAttempts: positiveInteger(overrides.maxVerificationRecoveryAttempts)
+			?? positiveInteger(state?.maxVerificationRecoveryAttempts)
+			?? IMPLEMENTATION_DEFAULT_MAX_VERIFICATION_RECOVERY_ATTEMPTS,
+		maxCleanupRetries: positiveInteger(overrides.maxCleanupRetries)
+			?? positiveInteger(state?.maxCleanupRetries)
+			?? IMPLEMENTATION_DEFAULT_MAX_CLEANUP_RETRIES,
+		verificationRecovery: implementationStateRecord(overrides.verificationRecovery ?? state?.verificationRecovery),
 		fixTaskMap: implementationStateRecord(overrides.fixTaskMap ?? state?.fixTaskMap),
 		modificationMap: implementationStateRecord(overrides.modificationMap ?? state?.modificationMap),
 		nativeTaskMap: implementationStateRecord(overrides.nativeTaskMap ?? state?.nativeTaskMap),
@@ -1560,6 +1834,57 @@ function getImplementationFixTaskDepth(task: ImplementationRecoveryTaskLike, ori
 
 function formatImplementationFixTaskIds(fixTaskIds: readonly string[]): string {
 	return fixTaskIds.length > 0 ? fixTaskIds.join(", ") : "none";
+}
+
+function isVerificationFailureCategory(value: unknown): value is VerificationFailureCategory {
+	return value === "transient_tool_failure"
+		|| value === "cleanup_artifact_failure"
+		|| value === "shared_contract_drift"
+		|| value === "stale_state_failure"
+		|| value === "publish_bundle_failure"
+		|| value === "real_product_failure"
+		|| value === "fatal_runtime_failure";
+}
+
+function verificationRecoveryAttemptFromUnknown(value: unknown): VerificationRecoveryAttempt | null {
+	if (!isRecord(value)) return null;
+	const taskId = normalizeImplementationField(value.taskId);
+	const attempt = isNonNegativeInteger(value.attempt) ? value.attempt : null;
+	if (!taskId || attempt === null || !isVerificationFailureCategory(value.category)) return null;
+	const action = value.action;
+	const outcome = value.outcome;
+	if (
+		action !== "retry_verifier"
+		&& action !== "cleanup_artifacts"
+		&& action !== "repair_shared_contract"
+		&& action !== "repair_state"
+		&& action !== "repair_publish_bundle"
+		&& action !== "delegate_fix_task"
+		&& action !== "block"
+	) return null;
+	if (outcome !== "recovered" && outcome !== "still_failing" && outcome !== "blocked") return null;
+	return {
+		taskId,
+		attempt,
+		category: value.category,
+		action,
+		command: normalizeImplementationField(value.command) || undefined,
+		outcome,
+		timestamp: normalizeImplementationField(value.timestamp) || new Date(0).toISOString(),
+	};
+}
+
+function implementationVerificationRecoveryEntryFromUnknown(value: unknown): ImplementationVerificationRecoveryEntry {
+	const record = isRecord(value) ? value : {};
+	const history = Array.isArray(record.history)
+		? record.history.map(verificationRecoveryAttemptFromUnknown).filter((entry): entry is VerificationRecoveryAttempt => Boolean(entry))
+		: [];
+	return {
+		attempts: isNonNegativeInteger(record.attempts) ? record.attempts : history.length,
+		lastReasonCode: normalizeImplementationField(record.lastReasonCode) || undefined,
+		lastCategory: isVerificationFailureCategory(record.lastCategory) ? record.lastCategory : undefined,
+		history,
+	};
 }
 
 function compareImplementationFixTaskIds(left: string, right: string): number {

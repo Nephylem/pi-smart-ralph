@@ -73,7 +73,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-3, FR-4, AC-2.1, AC-2.2_
   - _Design: Verify retry loop; Failure envelope_
 
-- [ ] 2.2 [GREEN] Pass test: auto-recover recoverable `[VERIFY]` failures before blocking
+- [x] 2.2 [GREEN] Pass test: auto-recover recoverable `[VERIFY]` failures before blocking
   - **Do**:
     1. Add bounded recovery attempts for verification tasks.
     2. On recoverable failure: capture evidence, run recovery action, rerun verifier, continue on pass.
@@ -86,7 +86,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-3, FR-4, AC-2.1, AC-2.2_
   - _Design: Verify retry loop; State evidence_
 
-- [ ] 2.3 [YELLOW] Refactor: isolate verify-retry budgets and rerun helpers
+- [x] 2.3 [YELLOW] Refactor: isolate verify-retry budgets and rerun helpers
   - **Do**:
     1. Extract retry-budget helpers and exact-verifier rerun helpers.
     2. Keep recovery sequencing deterministic for fixtures.

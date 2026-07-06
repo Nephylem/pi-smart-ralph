@@ -137,6 +137,84 @@
           "default": 3,
           "description": "Max nesting depth allowed for recovery-generated fix task IDs"
         },
+        "maxVerificationRecoveryAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2,
+          "description": "Max bounded in-loop verification recovery attempts per task"
+        },
+        "maxCleanupRetries": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2,
+          "description": "Max cleanup retries allowed for recoverable verification cleanup failures"
+        },
+        "verificationRecovery": {
+          "type": "object",
+          "description": "Tracks bounded verification recovery attempts and history per task",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "attempts": { "type": "integer", "minimum": 0 },
+              "lastReasonCode": { "type": "string" },
+              "lastCategory": {
+                "type": "string",
+                "enum": [
+                  "transient_tool_failure",
+                  "cleanup_artifact_failure",
+                  "shared_contract_drift",
+                  "stale_state_failure",
+                  "publish_bundle_failure",
+                  "real_product_failure",
+                  "fatal_runtime_failure"
+                ]
+              },
+              "history": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "taskId": { "type": "string" },
+                    "attempt": { "type": "integer", "minimum": 1 },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "transient_tool_failure",
+                        "cleanup_artifact_failure",
+                        "shared_contract_drift",
+                        "stale_state_failure",
+                        "publish_bundle_failure",
+                        "real_product_failure",
+                        "fatal_runtime_failure"
+                      ]
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "retry_verifier",
+                        "cleanup_artifacts",
+                        "repair_shared_contract",
+                        "repair_state",
+                        "repair_publish_bundle",
+                        "delegate_fix_task",
+                        "block"
+                      ]
+                    },
+                    "command": { "type": "string" },
+                    "outcome": {
+                      "type": "string",
+                      "enum": ["recovered", "still_failing", "blocked"]
+                    },
+                    "timestamp": { "type": "string" }
+                  },
+                  "required": ["taskId", "attempt", "category", "action", "outcome", "timestamp"]
+                }
+              }
+            },
+            "required": ["attempts", "history"]
+          }
+        },
         "fixTaskMap": {
           "type": "object",
           "description": "Tracks fix attempts per original task",
