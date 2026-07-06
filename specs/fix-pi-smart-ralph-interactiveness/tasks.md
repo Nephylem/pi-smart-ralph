@@ -557,7 +557,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-10, FR-9_
   - _Design: Runtime bootstrap defaults_
 
-- [ ] Q4.1 [VERIFY] Quality check: subagents defaults slice
+- [x] Q4.1 [VERIFY] Quality check: subagents defaults slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -567,7 +567,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 4.4 [RED] Failing test: native task widget remains phase-scoped
+- [x] 4.4 [RED] Failing test: native task widget remains phase-scoped
   - **Do**:
     1. Add tests for `/ralph-start`, `/ralph-tasks`, `/ralph-implement` showing native task widget.
     2. Add tests for `/ralph-research`, `/ralph-requirements` showing no native task widget.

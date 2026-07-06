@@ -582,6 +582,41 @@ test('coordinator startup publishes a non-empty Ralph status', async () => {
   }
 });
 
+test('native task startup widget appears only for task-oriented Ralph commands', async () => {
+  const cases = [
+    { command: 'ralph-start', args: 'phase-scope-start -- goal', label: 'start', shouldShowNativeTasks: true },
+    { command: 'ralph-tasks', args: 'phase-scope-tasks', label: 'tasks', shouldShowNativeTasks: true },
+    { command: 'ralph-implement', args: 'phase-scope-implement', label: 'implement', shouldShowNativeTasks: true },
+    { command: 'ralph-research', args: 'phase-scope-research', label: 'research', shouldShowNativeTasks: false },
+    { command: 'ralph-requirements', args: 'phase-scope-requirements', label: 'requirements', shouldShowNativeTasks: false },
+  ];
+
+  for (const { command, args, label, shouldShowNativeTasks } of cases) {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+    try {
+      const pi = createMockPi();
+      ralphSpecumExtension(pi);
+      const ctx = createMockCtx(projectRoot);
+      ctx.waitForIdle = () => new Promise(() => {});
+
+      await pi.commands.get(command).handler(args, ctx);
+
+      const nativeTaskWidgets = ctx.widgets.filter(
+        (entry) => entry.kind === 'widget' && entry.key === 'ralph-tasks',
+      );
+      if (shouldShowNativeTasks) {
+        assert.equal(nativeTaskWidgets.length, 1, `expected /${command} to show the native task startup widget`);
+        assert.match(nativeTaskWidgets[0].value.join('\n'), new RegExp(`Ralph ${label}: pi-tasks surface ready`));
+        assert.equal(nativeTaskWidgets[0].options?.placement, 'aboveEditor');
+      } else {
+        assert.deepEqual(nativeTaskWidgets, [], `expected /${command} not to show the native task startup widget`);
+      }
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  }
+});
+
 test('concurrent Ralph phase command is rejected while one coordinator job is active', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   try {
