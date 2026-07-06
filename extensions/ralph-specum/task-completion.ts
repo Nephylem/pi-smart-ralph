@@ -3,6 +3,9 @@ import { dirname, resolve } from 'node:path';
 import { statSync } from 'node:fs';
 import {
   parseImplementationQaOutputEnvelope,
+  parseImplementationPackageOutputEnvelope,
+  parseImplementationVerifierOutputEnvelope,
+  parseNestedParityVerificationOutputEnvelope,
   type ImplementationVerificationResultEnvelope,
 } from './implementation-loop.ts';
 
@@ -65,11 +68,43 @@ export function analyzeTaskWorkspace(input: TaskWorkspaceInput = {}): TaskWorksp
   });
 }
 
+function createTaskCompletionEnvelopeNormalizer(
+  parser: (output: string, attemptCount?: number) => ImplementationVerificationResultEnvelope,
+) {
+  return (output: string, attemptCount = 0): ImplementationVerificationResultEnvelope => parser(output, attemptCount);
+}
+
+const normalizeQaVerificationOutputEnvelope = createTaskCompletionEnvelopeNormalizer(parseImplementationQaOutputEnvelope);
+const normalizeVerificationAgentEnvelope = createTaskCompletionEnvelopeNormalizer(parseImplementationVerifierOutputEnvelope);
+const normalizePackageScriptEnvelope = createTaskCompletionEnvelopeNormalizer(parseImplementationPackageOutputEnvelope);
+const normalizeNestedParityEnvelope = createTaskCompletionEnvelopeNormalizer(parseNestedParityVerificationOutputEnvelope);
+
 export function normalizeVerificationAgentOutputEnvelope(
   output: string,
   attemptCount = 0,
 ): ImplementationVerificationResultEnvelope {
-  return parseImplementationQaOutputEnvelope(output, attemptCount);
+  return normalizeVerificationAgentEnvelope(output, attemptCount);
+}
+
+export function normalizeQaVerificationResultEnvelope(
+  output: string,
+  attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+  return normalizeQaVerificationOutputEnvelope(output, attemptCount);
+}
+
+export function normalizePackageScriptOutputEnvelope(
+  output: string,
+  attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+  return normalizePackageScriptEnvelope(output, attemptCount);
+}
+
+export function normalizeNestedVerifierResultEnvelope(
+  output: string,
+  attemptCount = 0,
+): ImplementationVerificationResultEnvelope {
+  return normalizeNestedParityEnvelope(output, attemptCount);
 }
 
 export function formatTaskWorkspaceReport(report: TaskWorkspaceReport): string {

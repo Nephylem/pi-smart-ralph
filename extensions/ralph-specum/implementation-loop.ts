@@ -677,6 +677,15 @@ type ImplementationVerificationEnvelopeParser = (
 	input: ImplementationVerificationEnvelopeParserInput,
 ) => ImplementationVerificationResultEnvelope;
 
+type ImplementationVerificationEnvelopeDetails = {
+	status: ImplementationVerificationResultStatus;
+	reasonCode: string;
+	policy: ImplementationVerificationRecoveryPolicy;
+	failingCommand?: string;
+	evidence: string[];
+	rawSummary: string;
+};
+
 function createImplementationPassedVerificationPolicy(
 	output: string,
 	attemptCount: number,
@@ -702,36 +711,49 @@ function resolveImplementationVerificationResultPolicy(
 		: resolveImplementationVerificationEnvelopePolicy(reasonCode, output, attemptCount);
 }
 
-function buildImplementationVerificationResultEnvelope(
+function createImplementationVerificationEnvelopeDetails(
 	input: ImplementationVerificationEnvelopeParserInput,
-): ImplementationVerificationResultEnvelope {
+): ImplementationVerificationEnvelopeDetails {
 	const { output, attemptCount, sourceType } = input;
 	const status = extractImplementationVerificationStatus(output);
 	const reasonCode = status === "VERIFICATION_PASS" || status === "TASK_COMPLETE"
 		? "VERIFY_OK"
 		: extractImplementationReasonCode(output);
 	const policy = resolveImplementationVerificationResultPolicy(output, attemptCount, status, reasonCode);
-	const failingCommand = extractImplementationFailingCommand(output, sourceType);
 	const evidence = normalizeImplementationVerificationEvidenceLines(output);
-	const rawSummary = evidence[0] ?? normalizeImplementationWhitespace(output);
 	return {
 		status,
 		reasonCode: reasonCode ?? policy.reasonCode,
-		category: status === "VERIFICATION_FAIL" ? policy.category : undefined,
-		failingCommand,
-		recoverable: status === "VERIFICATION_FAIL" ? policy.recoverable : false,
-		suggestedRecovery: status === "VERIFICATION_FAIL" ? policy.recoveryAction : undefined,
-		evidence,
-		rawSummary,
-		rawOutput: output,
-		output,
-		normalizedOutput: normalizeImplementationVerificationFailureOutput(output),
-		sourceType,
 		policy,
+		failingCommand: extractImplementationFailingCommand(output, sourceType),
+		evidence,
+		rawSummary: evidence[0] ?? normalizeImplementationWhitespace(output),
 	};
 }
 
-const IMPLEMENTATION_VERIFICATION_OUTPUT_PARSERS: Record<
+function buildImplementationVerificationResultEnvelope(
+	input: ImplementationVerificationEnvelopeParserInput,
+): ImplementationVerificationResultEnvelope {
+	const details = createImplementationVerificationEnvelopeDetails(input);
+	const isFailure = details.status === "VERIFICATION_FAIL";
+	return {
+		status: details.status,
+		reasonCode: details.reasonCode,
+		category: isFailure ? details.policy.category : undefined,
+		failingCommand: details.failingCommand,
+		recoverable: isFailure ? details.policy.recoverable : false,
+		suggestedRecovery: isFailure ? details.policy.recoveryAction : undefined,
+		evidence: details.evidence,
+		rawSummary: details.rawSummary,
+		rawOutput: input.output,
+		output: input.output,
+		normalizedOutput: normalizeImplementationVerificationFailureOutput(input.output),
+		sourceType: input.sourceType,
+		policy: details.policy,
+	};
+}
+
+export const IMPLEMENTATION_VERIFICATION_OUTPUT_PARSERS: Record<
 	ImplementationVerificationResultSource,
 	ImplementationVerificationEnvelopeParser
 > = {
@@ -1120,17 +1142,29 @@ type ImplementationVerificationEnvelopeEvidenceWrite = {
 	envelope: ImplementationVerificationResultEnvelope;
 };
 
-function writeImplementationVerificationEnvelopeEvidence(
+function createImplementationVerificationEnvelopeEvidenceMap(
+	existing: Record<string, unknown>,
+	taskKey: string,
+	envelope: ImplementationVerificationResultEnvelope,
+): Record<string, unknown> {
+	const verificationEnvelopes = implementationStateRecord(existing.verificationEnvelopes);
+	return {
+		...verificationEnvelopes,
+		[taskKey]: envelope,
+	};
+}
+
+export function writeImplementationVerificationEnvelopeEvidence(
 	input: ImplementationVerificationEnvelopeEvidenceWrite,
 ): Record<string, unknown> {
 	const evidence = createImplementationEvidenceScaffold(input.existing);
-	const verificationEnvelopes = implementationStateRecord(evidence.verificationEnvelopes);
 	return {
 		...evidence,
-		verificationEnvelopes: {
-			...verificationEnvelopes,
-			[input.taskKey]: input.envelope,
-		},
+		verificationEnvelopes: createImplementationVerificationEnvelopeEvidenceMap(
+			evidence,
+			input.taskKey,
+			input.envelope,
+		),
 	};
 }
 
