@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate as waitImmediate } from 'node:timers/promises';
 
 import ralphSpecumExtension from '../extensions/ralph-specum/index.ts';
 
@@ -107,6 +108,33 @@ test('core command handlers work with a minimal Pi context', async () => {
     await pi.commands.get('ralph-index').handler('--bad-option', ctx);
     assert.equal(ctx.notifications.at(-1).type, 'warning');
     assert.match(ctx.notifications.at(-1).message, /Unsupported \/ralph-index option/);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('phase command handler returns before delegated coordinator work resolves', async () => {
+  // BEFORE failure mode: there was no regression proof that /ralph-* command handlers
+  // return while coordinator/delegated work remains pending in the background.
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+    let delegatedWorkStarted = false;
+    ctx.waitForIdle = () => {
+      delegatedWorkStarted = true;
+      return new Promise(() => {});
+    };
+
+    await pi.commands.get('ralph-research').handler('pending-delegated-work', ctx);
+    await waitImmediate();
+
+    assert.equal(
+      delegatedWorkStarted,
+      false,
+      'expected /ralph-* handler to return before pending delegated coordinator work starts or resolves',
+    );
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
