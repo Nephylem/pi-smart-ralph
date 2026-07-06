@@ -4523,6 +4523,8 @@ const RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS = 8_000;
 const RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const ralphSubagentWidgetState: {
 	tracked: Map<string, RalphTrackedSubagentEntry>;
+	registeredUi?: Partial<ExtensionCommandContext["ui"]>;
+	requestRender?: () => void;
 } = {
 	tracked: new Map(),
 };
@@ -4716,9 +4718,18 @@ function isActiveTrackedSubagentStatus(status: string): boolean {
 	return status === "running" || status === "queued";
 }
 
-function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
+function requestRalphSubagentWidgetRender(): void {
+	ralphSubagentWidgetState.requestRender?.();
+}
+
+function clearRalphSubagentWidgetRegistration(): void {
+	delete ralphSubagentWidgetState.registeredUi;
+	delete ralphSubagentWidgetState.requestRender;
+}
+
+function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): boolean {
 	const event = normalizeRalphSubagentLifecycleEvent(raw, fallbackStatus);
-	if (!event) return;
+	if (!event) return false;
 	const existing = ralphSubagentWidgetState.tracked.get(event.id);
 	const now = Date.now();
 	const next: RalphTrackedSubagentEntry = {
@@ -4733,6 +4744,11 @@ function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): void {
 	};
 	if (!isActiveTrackedSubagentStatus(event.status)) next.completedAt = now;
 	ralphSubagentWidgetState.tracked.set(event.id, next);
+	return true;
+}
+
+function handleRalphSubagentLifecycleEvent(raw: unknown, fallbackStatus: string): void {
+	if (upsertTrackedSubagent(raw, fallbackStatus)) requestRalphSubagentWidgetRender();
 }
 
 function resolveTrackedSubagentRecord(entry: RalphTrackedSubagentEntry): RalphSubagentRecord {
@@ -4851,29 +4867,21 @@ function formatSubagentWidgetLine(
 }
 
 function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
+	const ui = getRalphOptionalUi(ctx);
+	if (typeof ui?.setWidget !== "function") return;
+	if (ralphSubagentWidgetState.registeredUi === ui) return;
 	const installed = setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, (tui, theme) => {
 		let hadVisible = false;
-		const request = () => tui.requestRender();
-		const unsubscribeCreated = eventOn(pi.events, "subagents:created", (raw) => {
-			upsertTrackedSubagent(raw, "queued");
-			request();
-		});
-		const unsubscribeStarted = eventOn(pi.events, "subagents:started", (raw) => {
-			upsertTrackedSubagent(raw, "running");
-			request();
-		});
-		const unsubscribeCompleted = eventOn(pi.events, "subagents:completed", (raw) => {
-			upsertTrackedSubagent(raw, "completed");
-			request();
-		});
-		const unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => {
-			upsertTrackedSubagent(raw, "error");
-			request();
-		});
+		const renderRequest = () => tui.requestRender();
+		ralphSubagentWidgetState.requestRender = renderRequest;
+		const unsubscribeCreated = eventOn(pi.events, "subagents:created", (raw) => handleRalphSubagentLifecycleEvent(raw, "queued"));
+		const unsubscribeStarted = eventOn(pi.events, "subagents:started", (raw) => handleRalphSubagentLifecycleEvent(raw, "running"));
+		const unsubscribeCompleted = eventOn(pi.events, "subagents:completed", (raw) => handleRalphSubagentLifecycleEvent(raw, "completed"));
+		const unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => handleRalphSubagentLifecycleEvent(raw, "error"));
 		const timer = setInterval(() => {
 			const now = Date.now();
 			const hasVisible = readActiveSubagentRecords().length > 0 || readLingeringSubagentRecords(now).length > 0;
-			if (hasVisible || hadVisible) tui.requestRender();
+			if (hasVisible || hadVisible) requestRalphSubagentWidgetRender();
 			hadVisible = hasVisible;
 		}, RALPH_SUBAGENT_STATUS_INTERVAL_MS);
 		(timer as { unref?: () => void }).unref?.();
@@ -4883,6 +4891,7 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 				unsubscribeStarted();
 				unsubscribeCompleted();
 				unsubscribeFailed();
+				if (ralphSubagentWidgetState.requestRender === renderRequest) delete ralphSubagentWidgetState.requestRender;
 				clearInterval(timer);
 			},
 			invalidate() {},
@@ -4901,7 +4910,10 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 			},
 		};
 	}, { placement: "aboveEditor" });
-	if (installed) ralphSubagentWidgetState.tracked.clear();
+	if (installed) {
+		ralphSubagentWidgetState.registeredUi = ui;
+		ralphSubagentWidgetState.tracked.clear();
+	}
 }
 
 function ensureRalphInteractiveSurfaces(pi: ExtensionAPI, ctx: ExtensionCommandContext): void {
@@ -10547,6 +10559,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		stopRalphStatusAnimation();
 		setRalphUiFooter(ctx, undefined);
 		setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, undefined);
+		clearRalphSubagentWidgetRegistration();
 		setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
 	});
 

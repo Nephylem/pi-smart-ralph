@@ -367,7 +367,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-6, FR-11, AC-3.2_
   - _Design: Edge Cases repeated started; Callback setWidget pattern_
 
-- [ ] 3.6 [YELLOW] Refactor: separate render request from widget registration
+- [x] 3.6 [YELLOW] Refactor: separate render request from widget registration
   - **Do**:
     1. Keep render request separate from `setWidget` registration.
     2. Ensure lifecycle events only mutate data and request render.
