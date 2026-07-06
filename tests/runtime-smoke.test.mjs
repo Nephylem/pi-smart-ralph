@@ -116,6 +116,33 @@ test('core command handlers work with a minimal Pi context', async () => {
   }
 });
 
+test('UI contexts route Ralph notifications through ctx.ui.notify with message and type', async () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
+  try {
+    const pi = createMockPi();
+    ralphSpecumExtension(pi);
+    const ctx = createMockCtx(projectRoot);
+    const legacyNotifications = [];
+    const uiNotifications = [];
+    ctx.notify = async (message, type = 'info') => {
+      legacyNotifications.push({ message, type });
+    };
+    ctx.ui.notify = async (message, type = 'info') => {
+      await waitImmediate();
+      uiNotifications.push({ message, type });
+    };
+
+    await pi.commands.get('ralph-index').handler('--bad-option', ctx);
+
+    assert.deepEqual(legacyNotifications, [], 'expected UI contexts not to use legacy ctx.notify');
+    assert.equal(uiNotifications.length, 1, 'expected Ralph notification to be delivered through ctx.ui.notify');
+    assert.equal(uiNotifications[0].type, 'warning');
+    assert.match(uiNotifications[0].message, /Unsupported \/ralph-index option/);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('session_start installs Ralph footer and ralph-subagents widget surfaces', async () => {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ralph-runtime-smoke-'));
   try {

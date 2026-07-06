@@ -198,7 +198,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: FR-8, FR-9_
   - _Design: Safe Ralph UI helpers_
 
-- [ ] Q2.1 [VERIFY] Quality check: session surfaces slice
+- [x] Q2.1 [VERIFY] Quality check: session surfaces slice
   - **Do**:
     1. Run discovered typecheck and smoke test commands from research.md.
   - **Files**: None
@@ -208,7 +208,7 @@ _Assumption: BUG_FIX workflow inferred from goal keyword “fix”. Repro source
   - _Requirements: NFR-1, NFR-2_
   - _Design: Smoke test harness_
 
-- [ ] 2.4 [RED] Failing test: UI notifications route through `ctx.ui.notify`
+- [x] 2.4 [RED] Failing test: UI notifications route through `ctx.ui.notify`
   - **Do**:
     1. Add a mocked UI test that triggers a Ralph notification.
     2. Assert `ctx.ui.notify(message, type)` receives message and type.
