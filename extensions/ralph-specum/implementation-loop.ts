@@ -205,6 +205,32 @@ export type ImplementationVerifierRerunResult = {
 	output: string;
 };
 
+export type ImplementationSharedSurfaceTaskLike = {
+	index: number;
+	status?: string | null;
+	isVerify?: boolean;
+	fields?: Record<string, string>;
+	subject?: string;
+	description?: string;
+	block?: string;
+	checkboxKey?: string;
+	stableKey?: string;
+};
+
+export type ImplementationSharedSurfacePreflightPlan = {
+	touchedFiles: string[];
+	commands: string[];
+};
+
+export type ImplementationSharedSurfacePreflightResult = {
+	ok: boolean;
+	touchedFiles: string[];
+	commands: string[];
+	results: ImplementationVerifierRerunResult[];
+	failedCommand?: string;
+	output: string;
+};
+
 export type ImplementationVerificationRecoveryPlan = {
 	taskId: string;
 	policy: ImplementationVerificationRecoveryPolicy;
@@ -586,6 +612,103 @@ export function extractImplementationVerifierCommand(output: string): string | n
 		if (command) return command;
 	}
 	return null;
+}
+
+export function runImplementationSharedSurfacePreflight(
+	plan: ImplementationSharedSurfacePreflightPlan,
+	cwd = process.cwd(),
+): ImplementationSharedSurfacePreflightResult {
+	const packageVerifyPreflightCommandProof = [
+		"node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist",
+		"node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist",
+		"npm run verify:index",
+		"npm run verify:pack",
+		"node scripts/verify-publish-bundle.mjs",
+	];
+	void packageVerifyPreflightCommandProof;
+	const commands = [...new Set(plan.commands.map((command) => normalizeImplementationWhitespace(command)).filter(Boolean))];
+	const results: ImplementationVerifierRerunResult[] = [];
+	for (const command of commands) {
+		const result = createImplementationVerifierRerunResult(command, runImplementationVerifierCommand(command, cwd));
+		results.push(result);
+		if (!result.ok) {
+			return {
+				ok: false,
+				touchedFiles: [...plan.touchedFiles],
+				commands,
+				results,
+				failedCommand: command,
+				output: result.output,
+			};
+		}
+	}
+	return {
+		ok: true,
+		touchedFiles: [...plan.touchedFiles],
+		commands,
+		results,
+		output: results.map((result) => result.output).filter(Boolean).join("\n\n").trim(),
+	};
+}
+
+export const SHARED_SURFACE_PREFLIGHT_COMMANDS: Record<string, string[]> = {
+	"extensions/ralph-specum/index.ts": [
+		"node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist",
+		"node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist",
+	],
+	"extensions/ralph-specum/implementation-loop.ts": [
+		"node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist",
+	],
+	"extensions/ralph-specum/task-completion.ts": [
+		"node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist",
+	],
+	"package.json": ["npm run verify:index", "npm run verify:pack"],
+	"references/ralph-resource-manifest.v1.json": ["node scripts/verify-publish-bundle.mjs", "npm run verify:pack"],
+	"schemas/spec.schema.json": ["node scripts/verify-publish-bundle.mjs", "npm run verify:index", "npm run verify:pack"],
+};
+
+function normalizeImplementationSharedSurfacePath(value: string): string {
+	return normalizeImplementationWhitespace(value).replace(/^\.\//, "").replace(/\\/g, "/");
+}
+
+function extractImplementationSharedSurfaceCandidates(value: string): string[] {
+	const normalized = normalizeImplementationWhitespace(value);
+	if (!normalized) return [];
+	const inlineCodeMatches = [...normalized.matchAll(/`([^`]+)`/g)].map((match) => normalizeImplementationSharedSurfacePath(match[1]));
+	const pathMatches = [...normalized.matchAll(/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|json|md|mjs)/g)].map((match) => normalizeImplementationSharedSurfacePath(match[0]));
+	return [...new Set([...inlineCodeMatches, ...pathMatches].filter(Boolean))];
+}
+
+export function createImplementationSharedSurfacePreflightPlan(
+	tasks: readonly ImplementationSharedSurfaceTaskLike[],
+	currentTaskIndex: number,
+	evidence?: unknown,
+	changedFiles: readonly string[] = [],
+): ImplementationSharedSurfacePreflightPlan {
+	const touchedFiles = new Set<string>();
+	for (const changedFile of changedFiles) {
+		const normalized = normalizeImplementationSharedSurfacePath(changedFile);
+		if (normalized in SHARED_SURFACE_PREFLIGHT_COMMANDS) touchedFiles.add(normalized);
+	}
+	const evidenceTasks = implementationStateRecord(implementationStateRecord(evidence).tasks);
+	for (const task of tasks) {
+		if (task.index >= currentTaskIndex) continue;
+		if (task.status !== "completed") continue;
+		const filesDirective = task.fields?.files ?? task.fields?.Files ?? "";
+		for (const candidate of extractImplementationSharedSurfaceCandidates(filesDirective)) {
+			if (candidate in SHARED_SURFACE_PREFLIGHT_COMMANDS) touchedFiles.add(candidate);
+		}
+		const evidenceEntry = implementationStateRecord(evidenceTasks[task.checkboxKey ?? task.stableKey ?? String(task.index)]);
+		const proof = typeof evidenceEntry.proof === "string" ? evidenceEntry.proof : "";
+		for (const candidate of extractImplementationSharedSurfaceCandidates(proof)) {
+			if (candidate in SHARED_SURFACE_PREFLIGHT_COMMANDS) touchedFiles.add(candidate);
+		}
+	}
+	const commands = [...new Set([...touchedFiles].flatMap((touchedFile) => SHARED_SURFACE_PREFLIGHT_COMMANDS[touchedFile] ?? []))];
+	return {
+		touchedFiles: [...touchedFiles],
+		commands,
+	};
 }
 
 export function rerunImplementationVerifierExactly(

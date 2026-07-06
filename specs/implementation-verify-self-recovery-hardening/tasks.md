@@ -97,7 +97,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-3, FR-4, AC-2.1, AC-2.2_
   - _Design: Verify retry loop_
 
-- [ ] Q2 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for auto-recovery
+- [x] Q2 [VERIFY] Quality check: discovered implementation-loop node verifier entrypoint for auto-recovery
   - **Do**:
     1. Run the research.md `Verification Tooling` node-verifier entrypoint for `scripts/verify-implementation-loop-parity.mjs` against the new `verify-auto-recovery` case.
   - **Files**: None
@@ -122,7 +122,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-5, AC-3.1_
   - _Design: Shared-surface preflight planner_
 
-- [ ] 3.2 [GREEN] Pass test: run targeted preflight bundles from touched shared surfaces
+- [x] 3.2 [GREEN] Pass test: run targeted preflight bundles from touched shared surfaces
   - **Do**:
     1. Detect touched shared-surface files from task evidence or changed-files reports.
     2. Implement this exact minimum AC-3.1 mapping in the planner: `extensions/ralph-specum/index.ts` -> `node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist`, `node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist`; `extensions/ralph-specum/implementation-loop.ts` -> `node scripts/verify-implementation-loop-parity.mjs --case acceptance-checklist`; `extensions/ralph-specum/task-completion.ts` -> `node scripts/verify-task-blockers-parity.mjs --case acceptance-checklist`; `package.json` -> `npm run verify:index`, `npm run verify:pack`; `references/ralph-resource-manifest.v1.json` -> `node scripts/verify-publish-bundle.mjs`, `npm run verify:pack`; `schemas/spec.schema.json` -> `node scripts/verify-publish-bundle.mjs`, `npm run verify:index`, `npm run verify:pack`.

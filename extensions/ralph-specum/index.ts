@@ -81,8 +81,11 @@ import {
 	applyImplementationTaskModification,
 	createImplementationCompletionBridgeInput,
 	createImplementationExecutionBatch,
+	createImplementationSharedSurfacePreflightPlan,
 	createImplementationVerificationFailureEnvelope,
+	createImplementationVerificationRecoveryAttempt,
 	createImplementationVerificationRecoveryPolicy,
+	createImplementationVerificationRecoveryStatePatch,
 	createImplementationFinalizerEpicUpdatedPatch,
 	createImplementationFinalizerIndexFailurePatch,
 	createImplementationFinalizerStartedPatch,
@@ -97,7 +100,12 @@ import {
 	formatImplementationFinalizerSuccessOutput,
 	formatImplementationSubagentCompletionOutput,
 	formatImplementationVerificationRecoveryPolicy,
+	getImplementationVerificationRecoveryBudget,
 	extractImplementationCompletionEvidence as implementationExtractCompletionEvidence,
+	planImplementationVerificationRecovery,
+	rerunImplementationVerifierExactly,
+	runImplementationSharedSurfacePreflight,
+	SHARED_SURFACE_PREFLIGHT_COMMANDS,
 	getImplementationNativeTaskRepairReason,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
 	IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
@@ -115,6 +123,7 @@ import {
 	type ImplementationCompletionSignal,
 	type ImplementationCompletionValidation,
 	type ImplementationReviewStatus,
+	type ImplementationSharedSurfaceTaskLike,
 } from "./implementation-loop.ts";
 import {
 	buildApprovedRefactorCascadeRequest,
@@ -6918,6 +6927,53 @@ function validateSubagentCompletion(
 	return validateImplementationTaskCompletion(bridgeInput);
 }
 
+function isPackageVerificationTask(task: ParsedNativeTask): boolean {
+	if (!task.isVerify) return false;
+	const verifyDirective = task.fields["verify"] ?? "";
+	const packageVerifyPattern = /\bQC-verify(?:-index|-pack)?\b|\bverify:index\b|\bverify:pack\b|\bprepack\b|package verification/i;
+	return packageVerifyPattern.test(`${task.subject}\n${task.description}\n${verifyDirective}`);
+}
+
+function createSharedSurfaceTaskSnapshot(tasks: readonly ParsedNativeTask[]): ImplementationSharedSurfaceTaskLike[] {
+	return tasks.map((task) => ({
+		index: task.index,
+		status: task.status,
+		isVerify: task.isVerify,
+		fields: task.fields,
+		subject: task.subject,
+		description: task.description,
+		block: task.block,
+		checkboxKey: task.checkboxKey,
+		stableKey: task.stableKey,
+	}));
+}
+
+async function runSharedSurfacePreflightIfNeeded(
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	task: ParsedNativeTask,
+	tasks: readonly ParsedNativeTask[],
+	state: RalphState | null,
+	options: RalphPathOptions,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+	void spec;
+	void options;
+	if (!isPackageVerificationTask(task)) return { ok: true };
+	const preflightPlan = createImplementationSharedSurfacePreflightPlan(
+		createSharedSurfaceTaskSnapshot(tasks),
+		task.index,
+		state?.evidence,
+	);
+	if (preflightPlan.commands.length === 0) return { ok: true };
+	const preflight = runImplementationSharedSurfacePreflight(preflightPlan, ctx.cwd);
+	if (preflight.ok) return { ok: true };
+	const touchedFiles = preflight.touchedFiles.join(", ") || Object.keys(SHARED_SURFACE_PREFLIGHT_COMMANDS).join(", ");
+	return {
+		ok: false,
+		reason: `Shared-surface preflight failed before package verification for ${touchedFiles}: ${preflight.failedCommand ?? "unknown command"}\n${preflight.output}`,
+	};
+}
+
 function runGitCommand(cwd: string, args: string[]): GitCommandResult {
 	const result = spawnSync("git", args, {
 		cwd,
@@ -7626,6 +7682,17 @@ async function runImplementCommand(
 					progressPath: getProgressPath(spec, options),
 					commitDirective: task.fields["commit"],
 				});
+				const sharedSurfacePreflight = await runSharedSurfacePreflightIfNeeded(ctx, spec, task, tasks, state, options);
+				if (!sharedSurfacePreflight.ok) {
+					await blockImplementation(ctx, spec, task, sharedSurfacePreflight.reason, options, {
+						taskIndex: task.index,
+						totalTasks: tasks.length,
+						taskIteration,
+						globalIteration: globalIteration + 1,
+						lastSubagentOutput: truncateForPrompt(sharedSurfacePreflight.reason, 6000),
+					});
+					return;
+				}
 				pendingImplementationPromptWorkspaceReport = workspaceReport;
 				const prompt = buildImplementationPrompt(task, definition, spec, state, options);
 				let validation: CompletionValidation;
@@ -7669,23 +7736,102 @@ async function runImplementCommand(
 					}
 
 					setTaskCheckboxStatus(spec, task.index, false);
+					const verificationFailureOutput = completionOutput || validation.output || validation.error || "";
 					const verificationFailureEnvelope = definition.completionSignal === "VERIFICATION_PASS"
-						? createImplementationVerificationFailureEnvelope(completionOutput || validation.output || validation.error || "")
+						? createImplementationVerificationFailureEnvelope(verificationFailureOutput)
 						: null;
-					const verificationPolicy = verificationFailureEnvelope?.policy
+					let verificationPolicy = verificationFailureEnvelope?.policy
 						?? (definition.completionSignal === "VERIFICATION_PASS"
-							? createImplementationVerificationRecoveryPolicy(completionOutput || validation.output || validation.error || "")
+							? createImplementationVerificationRecoveryPolicy(verificationFailureOutput)
 							: null);
-					const { reasonCode, recoverable, recoveryAction } = verificationPolicy ?? {};
-					const reason = verificationPolicy
-						? formatImplementationVerificationRecoveryPolicy({
-							...verificationPolicy,
-							reasonCode: reasonCode ?? verificationPolicy.reasonCode,
-							recoverable: recoverable ?? verificationPolicy.recoverable,
-							recoveryAction: recoveryAction ?? verificationPolicy.recoveryAction,
-						})
+					let reason = verificationPolicy
+						? formatImplementationVerificationRecoveryPolicy(verificationPolicy)
 						: validation.error ?? "Subagent completion did not pass coordinator validation.";
-					const exhausted = taskIteration >= parsed.maxTaskIterations || /USER_INPUT_REQUIRED/.test(validation.output);
+					if (definition.completionSignal === "VERIFICATION_PASS" && verificationPolicy?.recoverable) {
+						const verificationRecoveryPlan = planImplementationVerificationRecovery({
+							state,
+							taskId: task.checkboxKey,
+							output: verificationFailureOutput,
+							policy: verificationPolicy,
+						});
+						const verificationRecoveryBudget = getImplementationVerificationRecoveryBudget(
+							state,
+							task.checkboxKey,
+							verificationPolicy.category,
+						);
+						if (verificationRecoveryPlan.shouldRecover && verificationRecoveryPlan.command) {
+							if (verificationRecoveryPlan.policy.recoveryAction === "cleanup_artifacts") {
+								cleanupStaleImplementationProgressFiles(spec);
+							}
+							const rerun = rerunImplementationVerifierExactly(verificationRecoveryPlan.command, ctx.cwd);
+							const verificationRecoveryAttempt = createImplementationVerificationRecoveryAttempt({
+								taskId: task.checkboxKey,
+								attempt: verificationRecoveryPlan.nextAttempt,
+								category: verificationRecoveryPlan.policy.category,
+								action: verificationRecoveryPlan.policy.recoveryAction,
+								command: verificationRecoveryPlan.command,
+								outcome: rerun.ok
+									? "recovered"
+									: verificationRecoveryPlan.nextAttempt >= verificationRecoveryBudget.maxAttempts
+										? "blocked"
+										: "still_failing",
+							});
+							state = mergeRalphState(
+								spec,
+								{
+									phase: "execution",
+									taskIndex: task.index,
+									totalTasks: tasks.length,
+									taskIteration,
+									globalIteration: globalIteration + 1,
+									blocked: false,
+									validationError: rerun.ok ? null : reason,
+									lastSubagentOutput: truncateForPrompt(rerun.output || verificationFailureOutput, 6000),
+									...createImplementationStateDefaults(state, {
+										...createImplementationVerificationRecoveryStatePatch({
+											state,
+											taskId: task.checkboxKey,
+											attempt: verificationRecoveryAttempt,
+											maxVerificationRecoveryAttempts: verificationRecoveryBudget.maxVerificationRecoveryAttempts,
+											maxCleanupRetries: verificationRecoveryBudget.maxCleanupRetries,
+										}),
+										fixTaskMap: stateRecordField(state, "fixTaskMap"),
+										maxFixTasksPerOriginal: numberField(state, "maxFixTasksPerOriginal") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASKS_PER_ORIGINAL,
+										maxFixTaskDepth: numberField(state, "maxFixTaskDepth") ?? IMPLEMENTATION_DEFAULT_MAX_FIX_TASK_DEPTH,
+										modificationMap: stateRecordField(state, "modificationMap"),
+										nativeTaskMap: stateRecordField(state, "nativeTaskMap"),
+										maxModificationsPerTask: numberField(state, "maxModificationsPerTask") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATIONS_PER_TASK,
+										maxModificationDepth: numberField(state, "maxModificationDepth") ?? IMPLEMENTATION_DEFAULT_MAX_MODIFICATION_DEPTH,
+									}),
+								},
+								options,
+							);
+							if (rerun.ok) {
+								completionOutput = rerun.output;
+								validation = validateImplementationTaskCompletion(createImplementationCompletionBridgeInput({
+									output: rerun.output,
+									signal: definition.completionSignal,
+									task,
+									hasExpectedFailureProof,
+									assessCompletionOutput: (candidateOutput) => assessTaskCompletionOutput(candidateOutput, workspaceReport),
+									detectFailureReason: () => detectExplicitFailureReason(rerun.output, definition, workspaceReport)
+										?? `Workspace completion output is invalid for ${workspaceReport?.commitMode ?? "unknown"}.`,
+								}));
+								reason = `verificationRecovery recovered ${task.checkboxKey}: VERIFICATION_PASS after exact verifier rerun ${verificationRecoveryPlan.command}`;
+							} else {
+								verificationPolicy = createImplementationVerificationRecoveryPolicy(
+									rerun.output || verificationFailureOutput,
+									verificationRecoveryPlan.nextAttempt,
+								);
+								reason = formatImplementationVerificationRecoveryPolicy(verificationPolicy);
+							}
+						}
+					}
+					const exhausted = taskIteration >= parsed.maxTaskIterations
+						|| /USER_INPUT_REQUIRED/.test(validation.output)
+						|| (definition.completionSignal === "VERIFICATION_PASS"
+							&& verificationPolicy?.recoverable === true
+							&& getImplementationVerificationRecoveryBudget(state, task.checkboxKey, verificationPolicy.category).exhausted);
 					if (recoveryMode && !exhausted && definition.completionSignal === "TASK_COMPLETE") {
 						const recoveryStop = createImplementationRecoveryStopPlan(state, task, completionOutput || validation.output || reason);
 						const maxFixTasksPerOriginal = recoveryStop.maxFixTasksPerOriginal;
