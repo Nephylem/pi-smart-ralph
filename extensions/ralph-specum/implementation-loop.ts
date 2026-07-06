@@ -181,6 +181,7 @@ export interface ImplementationVerificationResultEnvelope {
 	recoverable: boolean;
 	suggestedRecovery?: VerificationRecoveryAction;
 	evidence: string[];
+	cleanupArtifactList?: string[];
 	rawSummary: string;
 	rawOutput?: string;
 	output: string;
@@ -577,6 +578,27 @@ function normalizeImplementationVerificationEvidenceLines(output: string): strin
 	return evidence.length > 0 ? [...new Set(evidence)] : [normalizeImplementationWhitespace(output)].filter(Boolean);
 }
 
+export function normalizeImplementationCleanupArtifactList(output: string): string[] {
+	const normalizedArtifacts = new Set<string>();
+	const artifactListMatch = output.match(/(?:artifactList|leftoverArtifacts|cleanupArtifacts)\s*[:=]\s*(\[[^\n\]]*\])/i);
+	if (artifactListMatch?.[1]) {
+		try {
+			const parsed = JSON.parse(artifactListMatch[1]);
+			if (Array.isArray(parsed)) {
+				for (const artifact of parsed) {
+					if (typeof artifact === "string" && artifact.trim()) normalizedArtifacts.add(artifact.trim());
+				}
+			}
+		} catch {
+			// Fall through to token extraction below.
+		}
+	}
+	for (const match of output.matchAll(/(?:\.progress-task-[\w.-]+\.md|ralph-[\w.-]+|[^\s:]+\.tmp)/g)) {
+		normalizedArtifacts.add(match[0]);
+	}
+	return [...normalizedArtifacts].sort();
+}
+
 function extractImplementationVerifierCaseName(output: string): string | null {
 	const explicitCase = output.match(/\b(?:PASS|FAIL|EXPECTED_FAIL)\s+([a-z0-9-]+)/i);
 	if (explicitCase?.[1]) return explicitCase[1].trim();
@@ -746,6 +768,9 @@ function buildImplementationVerificationResultEnvelope(
 		recoverable: isFailure ? details.policy.recoverable : false,
 		suggestedRecovery: isFailure ? details.policy.recoveryAction : undefined,
 		evidence: details.evidence,
+		cleanupArtifactList: details.policy.category === "cleanup_artifact_failure"
+			? normalizeImplementationCleanupArtifactList(input.output)
+			: undefined,
 		rawSummary: details.rawSummary,
 		rawOutput: input.output,
 		output: input.output,

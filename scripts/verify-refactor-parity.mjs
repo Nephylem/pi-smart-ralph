@@ -878,6 +878,7 @@ async function verifyAcceptanceChecklist() {
 }
 
 async function verifyCleanupCase() {
+  const repairedBefore = cleanupVerifierTempArtifacts(listVerifierTempEntries());
   const beforeEntries = new Set(listVerifierTempEntries());
   let caseError = null;
 
@@ -888,8 +889,14 @@ async function verifyCleanupCase() {
   }
 
   const remainingEntries = listVerifierTempEntries().filter((entry) => !beforeEntries.has(entry));
-  if (remainingEntries.length > 0) {
-    expectedFail(`verifier cleanup must remove temporary artifacts; found ${JSON.stringify(remainingEntries)}`);
+  const repairedAfter = cleanupVerifierTempArtifacts(remainingEntries);
+  const stillRemainingEntries = listVerifierTempEntries().filter((entry) => !beforeEntries.has(entry));
+  if (stillRemainingEntries.length > 0) {
+    expectedFail(`verifier cleanup must remove temporary artifacts; artifactList=${JSON.stringify(stillRemainingEntries)}`);
+  }
+
+  if (repairedBefore.length > 0 || repairedAfter.length > 0) {
+    console.log(`Recovered cleanup artifacts artifactList=${JSON.stringify([...repairedBefore, ...repairedAfter].sort())}`);
   }
 
   if (caseError) {
@@ -1386,6 +1393,16 @@ function listVerifierTempEntries() {
     .map((entry) => entry.name)
     .filter((entryName) => verifierTempPrefixes.some((prefix) => entryName.startsWith(prefix)))
     .sort();
+}
+
+function cleanupVerifierTempArtifacts(entryNames) {
+  const normalizedEntries = [...new Set(entryNames)]
+    .filter((entryName) => verifierTempPrefixes.some((prefix) => entryName.startsWith(prefix)))
+    .sort();
+  for (const entryName of normalizedEntries) {
+    rmSync(join(tmpdir(), entryName), { recursive: true, force: true });
+  }
+  return normalizedEntries;
 }
 
 function hashDirectory(directoryPath) {

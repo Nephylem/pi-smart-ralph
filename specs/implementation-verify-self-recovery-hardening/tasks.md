@@ -323,7 +323,7 @@ Harden `/ralph-implement` so `[VERIFY]` failures classify cleanly, self-recover 
   - _Requirements: FR-12, FR-13, AC-7.1, AC-7.2_
   - _Design: Package verification diagnostics; Cleanup recovery_
 
-- [ ] 7.2 [GREEN] Pass test: package verify flow repairs temp artifacts and reports portable failures
+- [x] 7.2 [GREEN] Pass test: package verify flow repairs temp artifacts and reports portable failures
   - **Do**:
     1. Normalize temporary-artifact cleanup before package verification reruns.
     2. Make publish verifier original-root and dependency-path diagnostics explicit and portable.

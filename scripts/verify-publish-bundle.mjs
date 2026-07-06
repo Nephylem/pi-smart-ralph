@@ -27,6 +27,45 @@ const ORIGINAL_RESOURCE_ROOT_AVAILABLE = existsSync(ORIGINAL_RESOURCE_ROOT);
 const SHOULD_VERIFY_ORIGINAL_RESOURCES = ORIGINAL_RESOURCE_ROOT_AVAILABLE;
 const ORIGINAL_RESOURCE_DIRECTORIES = ['commands', 'templates', 'references', 'skills', 'schemas'];
 const packagePathFailureCaseKey = 'package-path-failure';
+const diagnosticFixture = typeof process.env.RALPH_PUBLISH_DIAGNOSTIC_FIXTURE === 'string'
+  ? process.env.RALPH_PUBLISH_DIAGNOSTIC_FIXTURE.trim()
+  : '';
+const portableDiagnostics = [];
+
+function addPortablePublishDiagnostic({ reasonCode = 'VERIFY_PUBLISH_BUNDLE_FAILURE', checkedPath, missingPathType, message }) {
+  const diagnostic = {
+    reasonCode,
+    failingCommand: 'node scripts/verify-publish-bundle.mjs',
+    originalRoot: normalizePosixPath(ORIGINAL_RESOURCE_ROOT),
+    checkedPath: normalizePosixPath(checkedPath),
+    missingPathType,
+    message,
+  };
+  portableDiagnostics.push(diagnostic);
+  failures.push(`${reasonCode}: ${message}`);
+  return diagnostic;
+}
+
+function applyDiagnosticFixture() {
+  if (!diagnosticFixture) return;
+  if (diagnosticFixture === 'missing-file') {
+    addPortablePublishDiagnostic({
+      checkedPath: join(root, 'schemas', '__missing_fixture__.json'),
+      missingPathType: 'file',
+      message: 'Fixture package resource file is missing from the publish bundle.',
+    });
+    return;
+  }
+  if (diagnosticFixture === 'missing-dependency-entrypoint') {
+    addPortablePublishDiagnostic({
+      checkedPath: join(root, 'node_modules', '__missing_fixture__', 'index.ts'),
+      missingPathType: 'dependency_entrypoint',
+      message: 'Fixture bundled dependency entrypoint is missing from the publish bundle.',
+    });
+    return;
+  }
+  failures.push(`unknown diagnostic fixture: ${diagnosticFixture}`);
+}
 
 function parseJsonFile(filePath, label) {
   try {
@@ -91,7 +130,11 @@ function validateExactChecksumMatch(label, status, originalPath, piPath, piHash)
 
   const originalFullPath = resolveOriginalResourcePath(originalPath);
   if (!existsSync(originalFullPath)) {
-    failures.push(`${label}.originalPath must point to an existing original file for ${status} comparison: ${originalPath}`);
+    addPortablePublishDiagnostic({
+      checkedPath: originalFullPath,
+      missingPathType: 'file',
+      message: `${label}.originalPath must point to an existing original file for ${status} comparison: ${originalPath}`,
+    });
     return;
   }
 
@@ -333,11 +376,24 @@ const requiredFiles = [
 ];
 
 for (const file of requiredFiles) {
-  if (!existsSync(join(root, file))) failures.push(`missing package resource: ${file}`);
+  const fullPath = join(root, file);
+  if (!existsSync(fullPath)) {
+    addPortablePublishDiagnostic({
+      checkedPath: fullPath,
+      missingPathType: 'file',
+      message: `missing package resource: ${file}`,
+    });
+  }
 }
 
+applyDiagnosticFixture();
+
 if (EXPLICIT_ORIGINAL_RESOURCE_ROOT && !ORIGINAL_RESOURCE_ROOT_AVAILABLE) {
-  failures.push(`explicit original resource root does not exist: ${ORIGINAL_RESOURCE_ROOT}`);
+  addPortablePublishDiagnostic({
+    checkedPath: ORIGINAL_RESOURCE_ROOT,
+    missingPathType: 'root',
+    message: `explicit original resource root does not exist: ${ORIGINAL_RESOURCE_ROOT}`,
+  });
 }
 
 validateResourceManifest();
@@ -371,7 +427,11 @@ const requiredBundledEntrypoints = [
 
 for (const file of requiredBundledEntrypoints) {
   if (!existsSync(join(root, file))) {
-    failures.push(`missing bundled dependency entrypoint: ${file} (run npm install before npm pack/publish)`);
+    addPortablePublishDiagnostic({
+      checkedPath: join(root, file),
+      missingPathType: 'dependency_entrypoint',
+      message: `missing bundled dependency entrypoint: ${file} (run npm install before npm pack/publish)`,
+    });
   }
 }
 
@@ -412,40 +472,53 @@ function extractMachineReadableDiagnostic(output) {
 }
 
 function verifyPackagePathFailureCase() {
-  const missingRoot = join(root, '__missing_publish_bundle_root__');
-  const result = spawnSync(process.execPath, [new URL(import.meta.url).pathname], {
-    cwd: root,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      RALPH_ORIGINAL_RESOURCE_ROOT: missingRoot,
+  const fixtures = [
+    {
+      label: 'missing original-root',
+      expectedMissingPathType: 'root',
+      env: { RALPH_ORIGINAL_RESOURCE_ROOT: join(root, '__missing_publish_bundle_root__') },
     },
-  });
+    {
+      label: 'missing bundled file',
+      expectedMissingPathType: 'file',
+      env: { RALPH_PUBLISH_DIAGNOSTIC_FIXTURE: 'missing-file' },
+    },
+    {
+      label: 'missing dependency entrypoint',
+      expectedMissingPathType: 'dependency_entrypoint',
+      env: { RALPH_PUBLISH_DIAGNOSTIC_FIXTURE: 'missing-dependency-entrypoint' },
+    },
+  ];
 
-  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
-  if (result.status === 0) {
-    throw new Error('package-path-failure fixture must fail when the original resource root is missing.');
-  }
+  for (const fixture of fixtures) {
+    const result = spawnSync(process.execPath, [new URL(import.meta.url).pathname], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...fixture.env,
+      },
+    });
 
-  const diagnostic = extractMachineReadableDiagnostic(output);
-  if (!diagnostic) {
-    expectedFail(packagePathFailureCaseKey, `publish-bundle failure output is missing a machine-readable diagnostic block for missing original-root assumptions. Output: ${output}`);
-  }
+    const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim();
+    if (result.status === 0) {
+      throw new Error(`${fixture.label} fixture must fail before publish.`);
+    }
 
-  const requiredFields = ['reasonCode', 'failingCommand', 'originalRoot', 'checkedPath', 'missingPathType', 'message'];
-  const missingFields = requiredFields.filter((field) => diagnostic?.[field] === undefined || diagnostic?.[field] === null || diagnostic?.[field] === '');
-  if (missingFields.length > 0) {
-    expectedFail(packagePathFailureCaseKey, `publish-bundle diagnostic is missing required fields ${missingFields.join(', ')}. Diagnostic: ${JSON.stringify(diagnostic)}`);
-  }
+    const diagnostic = extractMachineReadableDiagnostic(output);
+    if (!diagnostic) {
+      expectedFail(packagePathFailureCaseKey, `publish-bundle failure output is missing a machine-readable diagnostic block for ${fixture.label}. Output: ${output}`);
+    }
 
-  const source = readFileSync(new URL(import.meta.url), 'utf8');
-  const missingFixtureContracts = ['root', 'file', 'dependency_entrypoint'].filter((value) => !source.includes(`'${value}'`) && !source.includes(`"${value}"`));
-  if (missingFixtureContracts.length > 0) {
-    expectedFail(packagePathFailureCaseKey, `publish-bundle verifier does not yet cover portable missingPathType fixtures for ${missingFixtureContracts.join(', ')}.`);
-  }
+    const requiredFields = ['reasonCode', 'failingCommand', 'originalRoot', 'checkedPath', 'missingPathType', 'message'];
+    const missingFields = requiredFields.filter((field) => diagnostic?.[field] === undefined || diagnostic?.[field] === null || diagnostic?.[field] === '');
+    if (missingFields.length > 0) {
+      expectedFail(packagePathFailureCaseKey, `publish-bundle diagnostic for ${fixture.label} is missing required fields ${missingFields.join(', ')}. Diagnostic: ${JSON.stringify(diagnostic)}`);
+    }
 
-  if (diagnostic.missingPathType !== 'root') {
-    expectedFail(packagePathFailureCaseKey, `missing original-root fixture must classify as missingPathType=root; got ${JSON.stringify(diagnostic.missingPathType)}`);
+    if (diagnostic.missingPathType !== fixture.expectedMissingPathType) {
+      expectedFail(packagePathFailureCaseKey, `${fixture.label} fixture must classify as missingPathType=${fixture.expectedMissingPathType}; got ${JSON.stringify(diagnostic.missingPathType)}`);
+    }
   }
 }
 
@@ -475,6 +548,12 @@ function main() {
 
   if (failures.length > 0) {
     console.error('Smart Ralph package verification failed:');
+    if (portableDiagnostics.length > 0) {
+      console.error(JSON.stringify(portableDiagnostics[0], null, 2));
+      if (portableDiagnostics.length > 1) {
+        console.error(`Additional portable diagnostics: ${JSON.stringify(portableDiagnostics.slice(1))}`);
+      }
+    }
     for (const failure of failures) console.error(`- ${failure}`);
     process.exit(1);
   }
