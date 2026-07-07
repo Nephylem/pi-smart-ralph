@@ -41,18 +41,37 @@ Pi Smart Ralph adds a full `/ralph-*` workflow to Pi for spec-driven delivery:
 - require explicit completion signals and verification evidence
 - support epic decomposition and optional GitHub issue output
 
-In short: it gives Pi a durable coordinator for planning, implementation, verification, recovery, and resumable execution state.
+In short: it gives Pi a durable coordinator for planning, implementation, verification, recovery, resumable execution state, and foreground orchestration.
+
+## Overall key features
+
+- **Spec-driven workflow**: drive delivery through `specs/<spec>/research.md`, `requirements.md`, `design.md`, `tasks.md`, `.progress.md`, and `.ralph-state.json`.
+- **Foreground orchestration mode**: use `/ralph-foreground-start`, `/ralph-foreground-continue`, and `/ralph-foreground-status` to keep the main session lightweight while delegated subagents do the repo work.
+- **Background Ralph coordinator**: run the classic `/ralph-research` → `/ralph-tasks` → `/ralph-implement` flow with resumable state, approvals, blockers, and retries.
+- **Task-planning Q&A loop**: `/ralph-tasks --clarify auto|on|off` supports clarification rounds, TUI review, partial-answer confirmation, and headless handoff into the main session.
+- **Pi-native task mirroring**: keep `tasks.md` canonical while syncing native Pi task cards for execution visibility.
+- **Custom Ralph UI surfaces**: ship a Ralph footer, a custom `ralph-subagents` widget, a task summary widget, and pinned attention rows for blockers or pending user input.
+- **Main-session handoff path**: escalate implementation blockers, triage questions, and task clarification requests into the main Pi session with resume guidance.
+- **Epic decomposition and optional GitHub output**: break large goals into child specs and optionally sync structured issue output.
+- **Verification and recovery guardrails**: require explicit completion markers, verification evidence, review passes, and bounded recovery behavior before final success.
 
 ## Recent patch notes
 
-### 0.1.13
+### 0.1.15
+
+- added foreground orchestration commands for brainstorm → plan → tasks → implement → verify while keeping the main session in a control-plane-only role
+- added the `/ralph-tasks --clarify auto|on|off` clarification loop with TUI review, partial-answer confirmation, persisted answers, and headless main-session handoff
+- expanded the existing Ralph UI with workflow-aware footer badges, subagent/task summaries, and pinned blocker or needs-input attention rows in the custom subagent widget
+- added main-session blocker escalation through `sendUserMessage` and strengthened runtime smoke coverage for foreground orchestration, handoffs, widgets, and clarification flows
+
+### 0.1.14
 
 - enabled real semantic TypeScript checking with `tsc -p tsconfig.json` and removed the temporary `--noCheck` guardrail
 - added TypeScript project guardrails, CI quality gates, runtime smoke tests, and stronger package verification checks
 - extracted core and spec lifecycle command registration into focused command modules while keeping the `/ralph-*` command surface stable
 - added state-shape validation, bootstrap diagnostics, architecture docs, contribution guidance, and a production-readiness scorecard
 
-### 0.1.12
+### 0.1.13
 
 - hardened `/ralph-implement` verification recovery so recoverable `[VERIFY]` failures can rerun inside the same implementation session
 - added bounded verification-recovery state, structured verification envelopes, and shared-surface preflight checks
@@ -151,7 +170,7 @@ Pi task cards and footer/status UI are synchronized views over that spec state, 
 ## Current status
 
 This package is currently in beta.
-Current release in this repository: `0.1.12`.
+Current release in this repository: `0.1.15`.
 
 Recommended install:
 
@@ -333,10 +352,13 @@ For a small smoke test:
 | `/ralph-start --quick <spec> <goal>` | Start a quick flow that minimizes approval pauses. |
 | `/ralph-start --autonomous <spec> <goal>` | Start an autonomous-style quick flow. |
 | `/ralph-new --quick <spec> <goal>` | Run the same quick start flow through the compatibility command. |
+| `/ralph-foreground-start <spec> -- <goal>` | Run a foreground orchestration workflow. The main session stays lightweight and delegates brainstorm, plan, tasks, implement, and verify to subagents. |
+| `/ralph-foreground-continue [spec]` | Resume the next foreground stage for the active or selected spec. |
+| `/ralph-foreground-status [spec]` | Show foreground workflow stage, status, and verification state. |
 | `/ralph-research [spec]` | Generate `research.md`. |
 | `/ralph-requirements [spec]` | Generate `requirements.md`. |
 | `/ralph-design [spec]` | Generate `design.md`. |
-| `/ralph-tasks [spec]` | Generate `tasks.md` and mirror tasks into Pi task cards. |
+| `/ralph-tasks [spec]` | Generate `tasks.md` and mirror tasks into Pi task cards; supports `--clarify auto|on|off` for task-planning Q&A. |
 | `/ralph-implement [spec]` | Execute open tasks through Ralph subagents; coordinator progress auto-commits default off. Use `--commit-progress summary` or `--commit-progress per-task` to opt in. |
 | `/ralph-feedback [message]` | Prepare a feedback draft for `Nephylem/pi-smart-ralph`, requiring confirmation or `--yes` before any GitHub write. |
 | `/ralph-status` | Show known specs and progress. |
@@ -447,7 +469,7 @@ After running `/ralph-init`, they should be visible in Pi’s `/agents` menu.
 
 ## How Pi tasks are used
 
-`/ralph-tasks` keeps `tasks.md` as the canonical plan, then mirrors checkbox tasks into Pi task cards.
+`/ralph-tasks` keeps `tasks.md` as the canonical plan, then mirrors checkbox tasks into Pi task cards. When `--clarify auto|on|off` allows it, Ralph can ask focused task-planning questions in Pi before finalizing `tasks.md`.
 
 During `/ralph-implement`, Ralph updates the mirrored task cards as work moves through:
 
@@ -469,6 +491,7 @@ Examples:
 - `/ralph-tasks` delegates to `ralph-task-planner`
 - `/ralph-implement` delegates individual tasks to `ralph-spec-executor`, `ralph-qa-engineer`, or `ralph-refactor-specialist`
 - `/ralph-triage` delegates epic planning to `ralph-triage-analyst`
+- `/ralph-foreground-start` keeps orchestration in the foreground session, but still delegates repo work and verification to the same Ralph subagents
 
 Smart Ralph uses Pi subagent runtime events/RPC internally, so subagent runs may not always look like manual `Agent(...)` tool calls in the transcript.
 

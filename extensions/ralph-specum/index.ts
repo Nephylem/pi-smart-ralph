@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionWidgetOptions } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Editor, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
 	findSpec,
 	getCurrentSpecFilePath,
@@ -77,9 +77,15 @@ import { discoverRelatedSpecs, discoverSkills, mergeDiscoveredSkillsByName, merg
 import { formatRalphIndexCommandResult, runRalphIndex } from "./indexing.ts";
 import { createFeedbackCommandHandler } from "./feedback.ts";
 import { registerCoreRalphCommands } from "./commands/core.ts";
+import { registerForegroundRalphCommands } from "./commands/foreground.ts";
 import { registerSpecLifecycleCommands } from "./commands/spec.ts";
 import { validatePhaseArtifactContent } from "./phase-runner.ts";
 import { createBootstrapStatusDiagnostics, runRalphInitCommand } from "./services/bootstrap-diagnostics.ts";
+import {
+	runForegroundContinueCommand,
+	runForegroundStartCommand,
+	runForegroundStatusCommand,
+} from "./services/foreground-runner.ts";
 import { analyzeTaskWorkspace, formatTaskWorkspaceReport } from "./task-completion.ts";
 import {
 	applyImplementationTaskModification,
@@ -1391,6 +1397,19 @@ function parseInitArgs(args: string): InitArguments {
 
 type RalphUiNotificationType = "info" | "warning";
 type RalphUiNotify = (message: string, type: RalphUiNotificationType) => void | Promise<void>;
+type RalphHandoffKind = "triage_user_input" | "implementation_blocker" | "implementation_user_input" | "task_clarification";
+type RalphHandoffPayload = {
+	kind: RalphHandoffKind;
+	specName?: string;
+	specPath?: string;
+	taskLabel?: string;
+	reason: string;
+	questions?: string[];
+	resumeCommand?: string;
+};
+
+const RALPH_HANDOFF_DEDUPE_MS = 60_000;
+const recentRalphHandoffs = new Map<string, number>();
 
 function getRalphUiNotify(ctx: RalphOptionalUiContext): RalphUiNotify | undefined {
 	const notify = getRalphOptionalUi(ctx)?.notify;
@@ -1410,6 +1429,418 @@ async function notify(ctx: ExtensionCommandContext, message: string, type: Ralph
 	}
 
 	writeNotificationConsoleFallback(message, type);
+}
+
+function normalizeQuestionLines(text: string): string[] {
+	return text
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean)
+		.filter((line) => /^(?:questions?:|\d+\.|[-*])\s*/i.test(line))
+		.map((line) => line.replace(/^(?:questions?:|\d+\.|[-*])\s*/i, "").trim())
+		.filter(Boolean);
+}
+
+type TaskClarificationRequest = {
+	questions: string[];
+	rawOutput: string;
+};
+
+type TaskClarificationAnswer = {
+	question: string;
+	answer: string;
+};
+
+type TaskClarificationPanelResult =
+	| { action: "submit"; answers: TaskClarificationAnswer[] }
+	| { action: "cancel" };
+
+const TASK_CLARIFICATION_SIGNAL = "TASKS_USER_INPUT_REQUIRED";
+const TASK_CLARIFICATION_MAX_QUESTIONS = 7;
+const TASK_CLARIFICATION_MAX_ROUNDS = 2;
+const TASK_CLARIFICATION_WIDGET_KEY = "ralph-task-clarification";
+
+function parseTaskClarificationRequest(output: string): TaskClarificationRequest | null {
+	if (!/(?:TASKS_USER_INPUT_REQUIRED|USER_INPUT_REQUIRED)/i.test(output)) return null;
+	const normalized = output.trim();
+	let questions = normalizeQuestionLines(normalized);
+	if (questions.length === 0) {
+		questions = normalized
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.filter((line) => !/^(?:TASKS_USER_INPUT_REQUIRED|USER_INPUT_REQUIRED|questions?:)\b/i.test(line));
+	}
+	questions = questions.slice(0, TASK_CLARIFICATION_MAX_QUESTIONS);
+	return questions.length > 0 ? { questions, rawOutput: normalized } : null;
+}
+
+function formatTaskClarificationQuestions(questions: readonly string[]): string {
+	return questions.map((question, index) => `${index + 1}. ${question}`).join("\n");
+}
+
+function formatTaskClarificationAnswers(answers: readonly TaskClarificationAnswer[]): string[] {
+	return answers.flatMap((entry, index) => [`${index + 1}. Q: ${entry.question}`, `   A: ${entry.answer}`]);
+}
+
+function formatTaskClarificationPrompt(question: string, index: number, total: number): { title: string; placeholder: string } {
+	return {
+		title: `Ralph task clarification ${index + 1}/${total}`,
+		placeholder: question,
+	};
+}
+
+function taskClarificationAnsweredCount(answers: readonly TaskClarificationAnswer[]): number {
+	return answers.filter((entry) => entry.answer.trim().length > 0 && entry.answer !== "Skipped by user.").length;
+}
+
+function taskClarificationAnswerPreview(answer: string, maxLength = 80): string {
+	const normalized = normalizeWhitespace(answer);
+	return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function taskClarificationWidgetLines(spec: SpecEntry, questions: readonly string[], answers: readonly TaskClarificationAnswer[]): string[] {
+	const answeredCount = taskClarificationAnsweredCount(answers);
+	return [
+		`Ralph clarification: ${spec.name}`,
+		`${answeredCount}/${questions.length} answered`,
+		...questions.slice(0, 5).map((question, index) => {
+			const answer = answers[index]?.answer?.trim();
+			return `${answer ? "✓" : "○"} Q${index + 1}: ${taskClarificationAnswerPreview(answer || question, 60)}`;
+		}),
+		...(questions.length > 5 ? [`… ${questions.length - 5} more question(s)`] : []),
+	];
+}
+
+function setTaskClarificationWidget(ctx: ExtensionCommandContext, spec: SpecEntry, questions: readonly string[], answers: readonly TaskClarificationAnswer[]): void {
+	setRalphUiWidget(ctx, TASK_CLARIFICATION_WIDGET_KEY, taskClarificationWidgetLines(spec, questions, answers));
+}
+
+function clearTaskClarificationWidget(ctx: ExtensionCommandContext): void {
+	setRalphUiWidget(ctx, TASK_CLARIFICATION_WIDGET_KEY, undefined);
+}
+
+async function showTaskClarificationPanel(
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	questions: readonly string[],
+	initialAnswers: readonly TaskClarificationAnswer[],
+): Promise<TaskClarificationPanelResult | null> {
+	const ui = getRalphOptionalUi(ctx) as (Partial<ExtensionCommandContext["ui"]> & { custom?: Function }) | undefined;
+	if ((ctx as { mode?: string }).mode !== "tui" || typeof ui?.custom !== "function") return null;
+
+	return await ui.custom((tui: any, theme: any, _kb: unknown, done: (value: TaskClarificationPanelResult) => void) => {
+		const answers = initialAnswers.map((entry) => ({ ...entry }));
+		let cursor = 0;
+		let editIndex: number | null = null;
+		let cachedLines: string[] | undefined;
+		const editor = new Editor(tui, {
+			borderColor: (s: string) => theme.fg("accent", s),
+			selectList: {
+				selectedPrefix: (t: string) => theme.fg("accent", t),
+				selectedText: (t: string) => theme.fg("accent", t),
+				description: (t: string) => theme.fg("muted", t),
+				scrollInfo: (t: string) => theme.fg("dim", t),
+				noMatch: (t: string) => theme.fg("warning", t),
+			},
+		} as any);
+
+		const refresh = () => {
+			cachedLines = undefined;
+			setTaskClarificationWidget(ctx, spec, questions, answers);
+			tui.requestRender();
+		};
+
+		const totalItems = questions.length + 2;
+		const submitIndex = questions.length;
+		const cancelIndex = questions.length + 1;
+		const finalizeAnswers = () => answers.map((entry) => ({
+			question: entry.question,
+			answer: entry.answer.trim() || "Skipped by user.",
+		}));
+
+		editor.onSubmit = (value: string) => {
+			if (editIndex === null) return;
+			answers[editIndex] = {
+				question: questions[editIndex] ?? answers[editIndex]?.question ?? "",
+				answer: value.trim() || "Skipped by user.",
+			};
+			editIndex = null;
+			editor.setText("");
+			refresh();
+		};
+
+		const addWrapped = (target: string[], text: string, width: number) => {
+			target.push(...wrapTextWithAnsi(text, Math.max(1, width)));
+		};
+		const addWrappedWithPrefix = (target: string[], prefix: string, text: string, width: number) => {
+			const prefixWidth = visibleWidth(prefix);
+			if (prefixWidth >= width) {
+				addWrapped(target, `${prefix}${text}`, width);
+				return;
+			}
+			const wrapped = wrapTextWithAnsi(text, Math.max(1, width - prefixWidth));
+			const continuationPrefix = " ".repeat(prefixWidth);
+			for (let i = 0; i < wrapped.length; i += 1) {
+				target.push(`${i === 0 ? prefix : continuationPrefix}${wrapped[i]}`);
+			}
+		};
+
+		refresh();
+		return {
+			render(width: number): string[] {
+				if (cachedLines) return cachedLines;
+				const renderWidth = Math.max(40, width);
+				const lines: string[] = [];
+				const border = theme.fg("accent", "─".repeat(renderWidth));
+				lines.push(border);
+				addWrappedWithPrefix(lines, " ", theme.fg("accent", theme.bold(`Ralph task clarification · ${spec.name}`)), renderWidth);
+				addWrappedWithPrefix(lines, " ", theme.fg("muted", `Answer the questions below to improve tasks.md. ${taskClarificationAnsweredCount(answers)}/${questions.length} answered.`), renderWidth);
+				lines.push("");
+
+				for (let index = 0; index < questions.length; index += 1) {
+					const answer = answers[index]?.answer?.trim();
+					const selected = cursor === index && editIndex === null;
+					const prefix = selected ? theme.fg("accent", "> ") : "  ";
+					const questionLabel = `${answer ? "✓" : "○"} Q${index + 1}: ${questions[index]}`;
+					addWrappedWithPrefix(lines, prefix, selected ? theme.fg("accent", questionLabel) : questionLabel, renderWidth);
+					addWrappedWithPrefix(lines, "    ", theme.fg(answer ? "muted" : "dim", `Answer: ${answer ? taskClarificationAnswerPreview(answer, 100) : "<unanswered>"}`), renderWidth);
+				}
+
+				const submitSelected = cursor === submitIndex && editIndex === null;
+				const cancelSelected = cursor === cancelIndex && editIndex === null;
+				lines.push("");
+				addWrappedWithPrefix(lines, submitSelected ? theme.fg("accent", "> ") : "  ", submitSelected ? theme.fg("accent", `Submit answers (${taskClarificationAnsweredCount(answers)}/${questions.length})`) : `Submit answers (${taskClarificationAnsweredCount(answers)}/${questions.length})`, renderWidth);
+				addWrappedWithPrefix(lines, cancelSelected ? theme.fg("accent", "> ") : "  ", cancelSelected ? theme.fg("accent", "Cancel clarification") : "Cancel clarification", renderWidth);
+
+				if (editIndex !== null) {
+					lines.push("");
+					addWrappedWithPrefix(lines, " ", theme.fg("accent", `Editing Q${editIndex + 1}`), renderWidth);
+					addWrappedWithPrefix(lines, " ", questions[editIndex] ?? "", renderWidth);
+					for (const line of editor.render(Math.max(1, renderWidth - 2))) lines.push(` ${truncateToWidth(line, Math.max(1, renderWidth - 1), "")}`);
+				}
+
+				lines.push("");
+				addWrappedWithPrefix(lines, " ", theme.fg("dim", editIndex === null ? "↑↓ navigate • Enter edit/select • Esc cancel" : "Type answer • Enter save • Esc back"), renderWidth);
+				lines.push(border);
+				cachedLines = lines;
+				return lines;
+			},
+			invalidate() {
+				cachedLines = undefined;
+			},
+			handleInput(data: string) {
+				if (editIndex !== null) {
+					if (matchesKey(data, Key.escape)) {
+						editIndex = null;
+						editor.setText("");
+						refresh();
+						return;
+					}
+					editor.handleInput(data);
+					refresh();
+					return;
+				}
+				if (matchesKey(data, Key.up)) {
+					cursor = Math.max(0, cursor - 1);
+					refresh();
+					return;
+				}
+				if (matchesKey(data, Key.down) || matchesKey(data, Key.tab)) {
+					cursor = Math.min(totalItems - 1, cursor + 1);
+					refresh();
+					return;
+				}
+				if (matchesKey(data, Key.enter)) {
+					if (cursor < questions.length) {
+						editIndex = cursor;
+						editor.setText(answers[cursor]?.answer === "Skipped by user." ? "" : (answers[cursor]?.answer ?? ""));
+						refresh();
+						return;
+					}
+					if (cursor === submitIndex) {
+						done({ action: "submit", answers: finalizeAnswers() });
+						return;
+					}
+					done({ action: "cancel" });
+					return;
+				}
+				if (matchesKey(data, Key.escape)) {
+					done({ action: "cancel" });
+				}
+			},
+		};
+	}, {
+		overlay: true,
+		overlayOptions: { width: "75%", maxHeight: "85%", anchor: "center", margin: 1 },
+	});
+}
+
+function unansweredTaskClarificationQuestions(answers: readonly TaskClarificationAnswer[]): string[] {
+	return answers
+		.filter((entry) => {
+			const answer = entry.answer.trim();
+			return !answer || answer === "Skipped by user.";
+		})
+		.map((entry) => entry.question);
+}
+
+function hasPartialTaskClarificationAnswers(answers: readonly TaskClarificationAnswer[]): boolean {
+	const answered = taskClarificationAnsweredCount(answers);
+	return answered > 0 && answered < answers.length;
+}
+
+function formatTaskClarificationReview(spec: SpecEntry, answers: readonly TaskClarificationAnswer[]): string {
+	const unanswered = unansweredTaskClarificationQuestions(answers);
+	const lines = [
+		`Use these clarification answers for ${spec.name}?`,
+		"",
+		"Answered clarifications:",
+		...formatTaskClarificationAnswers(answers),
+	];
+	if (unanswered.length > 0) {
+		lines.push(
+			"",
+			"Unanswered items: Ralph will use best judgment for these unless you go back and answer them:",
+			...unanswered.map((question, index) => `${index + 1}. ${question}`),
+		);
+	}
+	return lines.join("\n");
+}
+
+async function confirmTaskClarificationSubmission(
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	answers: readonly TaskClarificationAnswer[],
+): Promise<boolean> {
+	const review = formatTaskClarificationReview(spec, answers);
+	if (hasPartialTaskClarificationAnswers(answers)) {
+		return await ctx.ui.confirm("Submit partial Ralph clarification answers?", review);
+	}
+	return await ctx.ui.confirm("Apply Ralph task clarification answers?", review);
+}
+
+async function promptForTaskClarificationAnswer(
+	ctx: ExtensionCommandContext,
+	question: string,
+	index: number,
+	total: number,
+	existingAnswer = "",
+): Promise<string | null | undefined> {
+	const ui = getRalphOptionalUi(ctx) as (Partial<ExtensionCommandContext["ui"]> & { editor?: Function; input?: Function }) | undefined;
+	const prompt = formatTaskClarificationPrompt(question, index, total);
+	if (typeof ui?.editor === "function") {
+		return await ui.editor([prompt.title, "", question, "", "Answer below:"].join("\n"), existingAnswer);
+	}
+	if (typeof ui?.input === "function") {
+		return await ui.input(prompt.title, existingAnswer || prompt.placeholder);
+	}
+	return null;
+}
+
+function formatTaskClarificationHeadlessError(spec: SpecEntry, questions: readonly string[]): string {
+	return [
+		`Ralph task planning needs clarification for ${spec.name}, but no Pi UI is available.`,
+		"",
+		`Re-run /ralph-tasks ${spec.name} --clarify off to let the planner use best judgment, or answer these questions in an interactive Pi session:`,
+		formatTaskClarificationQuestions(questions),
+	].join("\n");
+}
+
+function formatTaskClarificationHandoffPause(spec: SpecEntry): string {
+	return [
+		`Ralph task planning paused for ${spec.name}: clarification questions were handed off to the main session.`,
+		`Resume with /ralph-tasks ${spec.name} --clarify on after answering them, or rerun with --clarify off to use best judgment.`,
+	].join(" ");
+}
+
+function formatTaskClarificationCancelled(spec: SpecEntry): string {
+	return `Task planning clarification was cancelled for ${spec.name}; tasks.md was not regenerated.`;
+}
+
+function formatTaskClarificationExhausted(spec: SpecEntry): string {
+	return `Ralph task planning still needs clarification after ${TASK_CLARIFICATION_MAX_ROUNDS} rounds for ${spec.name}. Refine the spec artifacts or rerun /ralph-tasks with updated context.`;
+}
+
+function formatRalphHandoffMessage(payload: RalphHandoffPayload): string {
+	const lines = [
+		`Smart Ralph needs help (${payload.kind}).`,
+		payload.specName ? `Spec: ${payload.specName}` : null,
+		payload.specPath ? `Location: ${payload.specPath}` : null,
+		payload.taskLabel ? `Task: ${payload.taskLabel}` : null,
+		"",
+		`Reason: ${payload.reason}`,
+	];
+
+	if (payload.questions && payload.questions.length > 0) {
+		lines.push("", "Questions:");
+		for (const question of payload.questions.slice(0, 5)) lines.push(`- ${question}`);
+	}
+
+	lines.push(
+		"",
+		"Please resolve this blocker in the main session.",
+		payload.resumeCommand ? `When ready, resume with: ${payload.resumeCommand}` : null,
+	);
+
+	return lines.filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function shouldSendRalphHandoff(key: string): boolean {
+	const now = Date.now();
+	const last = recentRalphHandoffs.get(key) ?? 0;
+	if (now - last < RALPH_HANDOFF_DEDUPE_MS) return false;
+	recentRalphHandoffs.set(key, now);
+	return true;
+}
+
+function safeCtxIsIdle(ctx: ExtensionCommandContext): boolean {
+	try {
+		return typeof (ctx as { isIdle?: () => boolean }).isIdle === "function"
+			? ((ctx as { isIdle: () => boolean }).isIdle())
+			: true;
+	} catch {
+		return true;
+	}
+}
+
+async function escalateRalphBlockerToMainSession(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	payload: RalphHandoffPayload,
+): Promise<void> {
+	upsertRalphAttention(payload);
+	const message = formatRalphHandoffMessage(payload);
+	const key = JSON.stringify({
+		kind: payload.kind,
+		specName: payload.specName,
+		taskLabel: payload.taskLabel,
+		reason: payload.reason,
+	});
+	if (!shouldSendRalphHandoff(key)) return;
+
+	const sendUserMessage = (pi as unknown as { sendUserMessage?: (content: string, options?: { deliverAs?: "steer" | "followUp" | "nextTurn" }) => void }).sendUserMessage;
+	if (typeof sendUserMessage !== "function") {
+		await notify(ctx, ["Pi does not expose sendUserMessage(); Ralph cannot hand this blocker into the main session.", "", message].join("\n"), "warning");
+		return;
+	}
+
+	try {
+		if (safeCtxIsIdle(ctx)) sendUserMessage.call(pi, message);
+		else sendUserMessage.call(pi, message, { deliverAs: "followUp" });
+	} catch (error) {
+		await notify(
+			ctx,
+			[
+				"Ralph could not inject a main-session handoff message.",
+				"",
+				message,
+				"",
+				`Delivery error: ${formatError(error)}`,
+			].join("\n"),
+			"warning",
+		);
+	}
 }
 
 const RALPH_STATUS_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
@@ -1657,6 +2088,142 @@ function readRalphFooterSpecSummary(ctx: ExtensionCommandContext): {
 	return { epicName, specName: spec?.name ?? currentSpecValue ?? "no spec" };
 }
 
+function footerWorkflowPhaseLabel(value: string | undefined): string {
+	switch ((value ?? "").trim().toLowerCase()) {
+		case "brainstorm":
+		case "research":
+			return "research";
+		case "plan":
+			return "plan";
+		case "requirements":
+			return "requirements";
+		case "design":
+			return "design";
+		case "tasks":
+			return "tasks";
+		case "execution":
+		case "implement":
+			return "implement";
+		case "verify":
+		case "completed":
+			return "verify";
+		case "blocked":
+			return "blocked";
+		case "cancelled":
+			return "cancelled";
+		default:
+			return value && value.trim() ? value.trim().toLowerCase() : "idle";
+	}
+}
+
+function footerWorkflowStatusColor(status: string): string {
+	switch (status) {
+		case "completed":
+		case "done":
+			return "success";
+		case "blocked":
+			return "error";
+		case "waiting-input":
+		case "paused":
+		case "approval":
+			return "warning";
+		case "running":
+		case "active":
+			return "text";
+		default:
+			return "dim";
+	}
+}
+
+function readFooterWorkflowSummary(ctx: ExtensionCommandContext): {
+	mode: "FG" | "BG";
+	phase: string;
+	status: string;
+	color: string;
+	taskCounts: TaskCounts;
+	taskIndex?: number;
+	totalTasks?: number;
+	activeSubagents: number;
+	attentionSubagents: number;
+	pendingClarification: boolean;
+} {
+	const options = pathOptions(ctx);
+	const currentSpecValue = readCurrentSpecValue(options);
+	const spec = currentSpecValue ? resolveCurrentSpec(options) : null;
+	const activeSubagents = readActiveSubagentRecords().length;
+	const attentionSubagents = pinnedRalphAttentionCount() + readLingeringSubagentRecords(Date.now()).filter((record) => record.status !== "completed").length;
+	if (!spec) {
+		return {
+			mode: "BG",
+			phase: "idle",
+			status: "idle",
+			color: "dim",
+			taskCounts: { completed: 0, pending: 0, total: 0 },
+			activeSubagents,
+			attentionSubagents,
+			pendingClarification: false,
+		};
+	}
+
+	const stateRead = safeReadSpecState(spec, options);
+	const state = stateRead.state;
+	const foreground = isRecordValue(state?.foreground) ? state.foreground : null;
+	const taskClarification = isRecordValue(state?.taskClarification) ? state.taskClarification : null;
+	const mode = state?.workflowMode === "foreground" ? "FG" : "BG";
+	const pendingClarification = taskClarification?.pending === true;
+	const verificationStatus = typeof foreground?.verificationStatus === "string" ? foreground.verificationStatus : null;
+	let status = "idle";
+	if (pendingClarification) status = "waiting-input";
+	else if (booleanField(state, "blocked") || stringField(state, "phase") === "blocked") status = "blocked";
+	else if (typeof state?.validationError === "string" && state.validationError.trim()) status = "blocked";
+	else if (verificationStatus === "failed") status = "blocked";
+	else if (typeof foreground?.status === "string" && foreground.status.trim()) status = foreground.status.trim().toLowerCase();
+	else if (booleanField(state, "awaitingApproval")) status = "approval";
+	else if (verificationStatus === "passed" || stringField(state, "phase") === "completed") status = "completed";
+	else if (stringField(state, "phase")) status = "running";
+
+	const phase = footerWorkflowPhaseLabel(
+		typeof foreground?.currentStage === "string" && foreground.currentStage.trim()
+			? foreground.currentStage
+			: stringField(state, "phase"),
+	);
+
+	return {
+		mode,
+		phase,
+		status,
+		color: footerWorkflowStatusColor(status),
+		taskCounts: countTasks(spec),
+		taskIndex: numberField(state, "taskIndex"),
+		totalTasks: numberField(state, "totalTasks"),
+		activeSubagents,
+		attentionSubagents,
+		pendingClarification,
+	};
+}
+
+function formatFooterWorkflowBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, summary: ReturnType<typeof readFooterWorkflowSummary>): string {
+	return formatFooterBadge(theme, `🧭 ${summary.mode} ${summary.phase} · ${summary.status}`, summary.color);
+}
+
+function formatFooterTaskSummaryBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, summary: ReturnType<typeof readFooterWorkflowSummary>): string {
+	const parts: string[] = [];
+	if (summary.totalTasks !== undefined || summary.taskIndex !== undefined) parts.push(`${summary.taskIndex ?? 0}/${summary.totalTasks ?? summary.taskCounts.total} exec`);
+	if (summary.taskCounts.total > 0) parts.push(`${summary.taskCounts.completed}/${summary.taskCounts.total} done`);
+	if (summary.pendingClarification) parts.push("clarify");
+	const content = parts.length > 0 ? `☑ ${parts.join(" · ")}` : "☑ no tasks";
+	const color = summary.pendingClarification ? "warning" : summary.taskCounts.total > 0 ? "text" : "dim";
+	return formatFooterBadge(theme, content, color);
+}
+
+function formatFooterSubagentSummaryBadge(theme: { fg(color: any, text: string): string; bold(text: string): string }, summary: ReturnType<typeof readFooterWorkflowSummary>): string {
+	if (summary.activeSubagents <= 0 && summary.attentionSubagents <= 0) return formatFooterBadge(theme, "🤖 idle", "dim");
+	const parts: string[] = [];
+	if (summary.activeSubagents > 0) parts.push(`${summary.activeSubagents} active`);
+	if (summary.attentionSubagents > 0) parts.push(`${summary.attentionSubagents} attention`);
+	return formatFooterBadge(theme, `🤖 ${parts.join(" · ")}`, summary.attentionSubagents > 0 ? "warning" : "text");
+}
+
 function readFooterConversationUsage(ctx: ExtensionCommandContext): { input: number; output: number; cost: number } {
 	let input = 0;
 	let output = 0;
@@ -1739,6 +2306,7 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 				const thinking = pi.getThinkingLevel();
 				const thinkingColor = footerThinkingColor(thinking);
 				const modelLabel = ctx.model?.id ?? "no-model";
+				const workflowSummary = readFooterWorkflowSummary(ctx);
 				const topParts = [
 					formatFooterBadge(theme, `${theme.fg("muted", "📁 ")}${theme.fg("syntaxFunction", ralphFooterProjectDirectory(ctx))}`),
 					formatFooterBadge(theme, `${theme.fg("muted", "𖦥 ")}${theme.fg("syntaxString", branch)}`),
@@ -1751,6 +2319,7 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 						? `${theme.fg("muted", "🎯 no spec")}`
 						: `${theme.fg("muted", "🎯 ")}${theme.fg("success", summary.specName)}`,
 						summary.specName === "no spec" ? "dim" : "text"),
+					formatFooterWorkflowBadge(theme, workflowSummary),
 				];
 				const topLine = topParts.join(" ");
 				const registry = getToolRegistryState(pi);
@@ -1760,6 +2329,8 @@ function installRalphFooter(pi: ExtensionAPI, ctx: ExtensionCommandContext): voi
 					(mainUsage.input > 0 || mainUsage.output > 0 || mainUsage.cost > 0)
 						? formatFooterIoBadge(theme, mainUsage)
 						: formatFooterBadge(theme, theme.fg("muted", "📊 idle"), "dim"),
+					formatFooterTaskSummaryBadge(theme, workflowSummary),
+					formatFooterSubagentSummaryBadge(theme, workflowSummary),
 					formatFooterMcpBadge(theme, registry, ctx.cwd),
 				].join(" ");
 				return [truncateToWidth(topLine, width, "…"), truncateToWidth(bottomParts, width, "…")];
@@ -2185,6 +2756,12 @@ const TASK_SIZE_COMPLETIONS: RalphCompletionItem[] = [
 	{ value: "coarse", label: "coarse", description: "10-20 larger tasks" },
 ];
 
+const TASK_CLARIFY_COMPLETIONS: RalphCompletionItem[] = [
+	{ value: "auto", label: "auto", description: "Ask only when ambiguity would materially change tasks.md" },
+	{ value: "on", label: "on", description: "Allow the planner to pause for clarification questions" },
+	{ value: "off", label: "off", description: "Use best judgment and do not enter the clarification loop" },
+];
+
 const INDEX_TYPE_COMPLETIONS: RalphCompletionItem[] = [
 	{ value: "controllers", label: "controllers", description: "Index controller/route entrypoints" },
 	{ value: "services", label: "services", description: "Index service and use-case modules" },
@@ -2238,11 +2815,15 @@ function startArgumentCompletions(prefix: string) {
 function phaseArgumentCompletions(prefix: string, includeTasksSize = false) {
 	try {
 		const taskSizeCompletions = includeTasksSize ? completeOptionValues(prefix, "--tasks-size", TASK_SIZE_COMPLETIONS) : null;
-		return taskSizeCompletions ?? completeArgumentToken(prefix, [
+		const clarifyCompletions = includeTasksSize ? completeOptionValues(prefix, "--clarify", TASK_CLARIFY_COMPLETIONS) : null;
+		return taskSizeCompletions ?? clarifyCompletions ?? completeArgumentToken(prefix, [
 			flagItem("--quick", "Skip approval prompts for this artifact"),
 			flagItem("--autonomous", "Alias for quick artifact flow"),
 			flagItem("--auto", "Alias for quick artifact flow"),
-			...(includeTasksSize ? [flagItem("--tasks-size", "Set generated task granularity")] : []),
+			...(includeTasksSize ? [
+				flagItem("--tasks-size", "Set generated task granularity"),
+				flagItem("--clarify", "Control task-planner clarification questions: auto|on|off"),
+			] : []),
 			...specCompletionCandidates(),
 		]);
 	} catch {
@@ -2978,28 +3559,66 @@ function maybeShowNativeTaskStartupWidget(ctx: ExtensionCommandContext, label: s
 	], { placement: "aboveEditor" });
 }
 
+function isNativeTaskBlockedForWidget(task: NativeTaskCard, cardsById: Map<string, NativeTaskCard>): boolean {
+	return task.blockedBy.some((id) => cardsById.get(id)?.status !== "completed");
+}
+
+function nativeTaskWidgetBucket(task: NativeTaskCard, cardsById: Map<string, NativeTaskCard>): "running" | "blocked" | "ready" | "done" {
+	if (task.status === "completed") return "done";
+	if (task.status === "in_progress") return "running";
+	if (isNativeTaskBlockedForWidget(task, cardsById)) return "blocked";
+	return "ready";
+}
+
+function nativeTaskWidgetPriority(task: NativeTaskCard, cardsById: Map<string, NativeTaskCard>): number {
+	switch (nativeTaskWidgetBucket(task, cardsById)) {
+		case "running":
+			return 0;
+		case "blocked":
+			return 1;
+		case "ready":
+			return 2;
+		case "done":
+		default:
+			return 3;
+	}
+}
+
 function showMirroredNativeTaskWidget(ctx: ExtensionCommandContext, cards: NativeTaskCard[]): void {
 	if (cards.length === 0) {
 		setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
 		return;
 	}
 
-	const completed = cards.filter((task) => task.status === "completed").length;
-	const inProgress = cards.filter((task) => task.status === "in_progress").length;
-	const pending = cards.filter((task) => task.status === "pending").length;
+	const cardsById = new Map(cards.map((task) => [task.id, task]));
+	const running = cards.filter((task) => nativeTaskWidgetBucket(task, cardsById) === "running").length;
+	const blocked = cards.filter((task) => nativeTaskWidgetBucket(task, cardsById) === "blocked").length;
+	const ready = cards.filter((task) => nativeTaskWidgetBucket(task, cardsById) === "ready").length;
+	const completed = cards.filter((task) => nativeTaskWidgetBucket(task, cardsById) === "done").length;
+	const verifyOpen = cards.filter((task) => task.metadata.ralphTaskVerify === true && task.status !== "completed").length;
 	const parts: string[] = [];
+	if (running > 0) parts.push(`${running} running`);
+	if (blocked > 0) parts.push(`${blocked} blocked`);
+	if (ready > 0) parts.push(`${ready} ready`);
 	if (completed > 0) parts.push(`${completed} done`);
-	if (inProgress > 0) parts.push(`${inProgress} in progress`);
-	if (pending > 0) parts.push(`${pending} open`);
+	if (verifyOpen > 0) parts.push(`${verifyOpen} verify open`);
 
-	const visibleCards = cards.slice(0, NATIVE_TASK_WIDGET_LIMIT);
-	const lines = [`● ${cards.length} tasks (${parts.join(", ") || "0 open"})`];
+	const sortedCards = [...cards].sort((left, right) => {
+		const priority = nativeTaskWidgetPriority(left, cardsById) - nativeTaskWidgetPriority(right, cardsById);
+		if (priority !== 0) return priority;
+		return Number(left.id) - Number(right.id);
+	});
+	const cardLimit = Math.max(1, NATIVE_TASK_WIDGET_LIMIT - 2);
+	const visibleCards = sortedCards.slice(0, cardLimit);
+	const lines = [`● ${cards.length} tasks · ${parts.join(" · ") || "0 ready"}`];
 	for (const task of visibleCards) {
-		const blockers = task.blockedBy.length > 0 ? ` › blocked by ${task.blockedBy.map((id) => `#${id}`).join(", ")}` : "";
+		const unresolvedBlockers = task.blockedBy.filter((id) => cardsById.get(id)?.status !== "completed");
+		const blockers = unresolvedBlockers.length > 0 ? ` › blocked by ${unresolvedBlockers.map((id) => `#${id}`).join(", ")}` : "";
+		const owner = task.owner ? ` · ${task.owner}` : "";
 		const label = task.status === "in_progress" ? `${task.activeForm ?? task.subject}…` : task.subject;
-		lines.push(`  ${statusIcon(task.status)} #${task.id} ${label}${blockers}`);
+		lines.push(`  ${statusIcon(task.status)} #${task.id} ${label}${owner}${blockers}`);
 	}
-	if (cards.length > visibleCards.length) lines.push(`    … and ${cards.length - visibleCards.length} more`);
+	if (sortedCards.length > visibleCards.length) lines.push(`    … and ${sortedCards.length - visibleCards.length} more`);
 	setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, lines, { placement: "aboveEditor" });
 }
 
@@ -3234,10 +3853,13 @@ function formatRalphSpecStatus(pi: ExtensionAPI, ctx: ExtensionCommandContext): 
 		"- /ralph-epic-next [--peek] [--switch] [--start] [epic]  Preview/select next unblocked child spec",
 		"- /ralph-epic-cancel [--delete-child-specs] [epic]  Cancel active epic execution state safely",
 		"- /ralph-start [--fresh] [--quick|--autonomous] [--skip-research] [--tasks-size fine|coarse] [--next-epic-spec] [spec-name] [-- goal]  Create/resume a spec; use `--` before markdown goals containing flag-like text",
+		"- /ralph-foreground-start [--through brainstorm|plan|tasks|implement|verify] [--clarify auto|on|off] [--tasks-size fine|coarse] [spec-name] [-- goal]  Run foreground orchestration with subagents only",
+		"- /ralph-foreground-continue [--through brainstorm|plan|tasks|implement|verify] [--clarify auto|on|off] [--tasks-size fine|coarse] [spec]  Resume foreground orchestration",
+		"- /ralph-foreground-status [spec]              Show foreground orchestration stage",
 		"- /ralph-research [spec]                        Generate research.md",
 		"- /ralph-requirements [spec]                    Generate requirements.md",
 		"- /ralph-design [spec]                          Generate design.md",
-		"- /ralph-tasks [--quick|--autonomous] [--tasks-size fine|coarse] [spec]  Generate canonical tasks.md",
+		"- /ralph-tasks [--quick|--autonomous] [--tasks-size fine|coarse] [--clarify auto|on|off] [spec]  Generate canonical tasks.md",
 		"- /ralph-implement [--recovery-mode] [--max-task-iterations N] [--max-global-iterations N] [--commit-progress off|summary|per-task] [spec]  Execute tasks.md through Ralph subagents",
 		"- /ralph-refactor [spec] [--file requirements|design|tasks]  Update one existing spec artifact with bounded scope",
 		"- /ralph-index [--path <dir>] [--type controllers,services,models,helpers,migrations,other] [--exclude <pattern>] [--dry-run] [--force] [--changed] [--quick]  Generate searchable component/external index artifacts",
@@ -4446,11 +5068,14 @@ type ReviewedPhaseResult = {
 	iterations: number;
 };
 
+type TaskClarifyMode = "auto" | "on" | "off";
+
 type PhaseArguments = {
 	reference: string | null;
 	quickMode: boolean;
 	autonomousMode: boolean;
 	tasksSize?: "fine" | "coarse";
+	clarifyMode?: TaskClarifyMode;
 	warnings: string[];
 	error?: string;
 };
@@ -4531,6 +5156,20 @@ type RalphTrackedSubagentEntry = {
 	totalTokens?: number;
 };
 
+type RalphAttentionEntry = {
+	key: string;
+	kind: RalphHandoffKind;
+	status: "blocked" | "needs-input";
+	specName?: string;
+	specPath?: string;
+	taskLabel?: string;
+	reason: string;
+	questions: string[];
+	resumeCommand?: string;
+	createdAt: number;
+	updatedAt: number;
+};
+
 type RalphSubagentLifecycleEvent = {
 	id: string;
 	type?: string;
@@ -4545,16 +5184,19 @@ const RALPH_SUBAGENT_STATUS_INTERVAL_MS = 250;
 const RALPH_TOKEN_BAR_WIDTH = 16;
 const RALPH_SUBAGENT_WIDGET_BAR_WIDTH = 10;
 const RALPH_SUBAGENT_WIDGET_MAX_LINES = 6;
+const RALPH_SUBAGENT_WIDGET_MAX_ATTENTION_LINES = 2;
 const RALPH_SUBAGENT_WIDGET_SUCCESS_LINGER_MS = 4_000;
 const RALPH_SUBAGENT_WIDGET_ERROR_LINGER_MS = 8_000;
 const RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const RALPH_SUBAGENT_MANAGER_SYMBOL = Symbol.for("pi-subagents:manager");
 const ralphSubagentWidgetState: {
 	tracked: Map<string, RalphTrackedSubagentEntry>;
+	attentions: Map<string, RalphAttentionEntry>;
 	registeredUi?: Partial<ExtensionCommandContext["ui"]>;
 	requestRender?: () => void;
 } = {
 	tracked: new Map(),
+	attentions: new Map(),
 };
 
 function readGlobalSymbolValue(key: symbol): unknown {
@@ -4767,6 +5409,67 @@ function clearRalphSubagentWidgetRegistration(): void {
 	delete ralphSubagentWidgetState.requestRender;
 }
 
+function pinnedRalphAttentionCount(): number {
+	return ralphSubagentWidgetState.attentions.size;
+}
+
+function ralphAttentionStatus(kind: RalphHandoffKind): "blocked" | "needs-input" {
+	return kind === "implementation_blocker" ? "blocked" : "needs-input";
+}
+
+function buildRalphAttentionKey(payload: RalphHandoffPayload): string {
+	return JSON.stringify({
+		kind: payload.kind,
+		specName: payload.specName ?? "",
+		specPath: payload.specPath ?? "",
+		taskLabel: payload.taskLabel ?? "",
+	});
+}
+
+function upsertRalphAttention(payload: RalphHandoffPayload): void {
+	const key = buildRalphAttentionKey(payload);
+	const now = Date.now();
+	const existing = ralphSubagentWidgetState.attentions.get(key);
+	ralphSubagentWidgetState.attentions.set(key, {
+		key,
+		kind: payload.kind,
+		status: ralphAttentionStatus(payload.kind),
+		specName: payload.specName,
+		specPath: payload.specPath,
+		taskLabel: payload.taskLabel,
+		reason: payload.reason,
+		questions: [...(payload.questions ?? [])],
+		resumeCommand: payload.resumeCommand,
+		createdAt: existing?.createdAt ?? now,
+		updatedAt: now,
+	});
+	requestRalphSubagentWidgetRender();
+}
+
+function clearRalphAttention(match: { specName?: string; specPaths?: string[]; kinds?: RalphHandoffKind[] }): void {
+	const kinds = match.kinds ? new Set(match.kinds) : null;
+	const specPaths = new Set((match.specPaths ?? []).filter(Boolean));
+	let changed = false;
+	for (const [key, entry] of ralphSubagentWidgetState.attentions.entries()) {
+		if (kinds && !kinds.has(entry.kind)) continue;
+		const specNameMatch = match.specName && entry.specName === match.specName;
+		const specPathMatch = entry.specPath ? specPaths.has(entry.specPath) : false;
+		if (!specNameMatch && !specPathMatch) continue;
+		ralphSubagentWidgetState.attentions.delete(key);
+		changed = true;
+	}
+	if (changed) requestRalphSubagentWidgetRender();
+}
+
+function readPinnedRalphAttentionEntries(): RalphAttentionEntry[] {
+	return [...ralphSubagentWidgetState.attentions.values()].sort((left, right) => {
+		const leftPriority = left.status === "blocked" ? 0 : 1;
+		const rightPriority = right.status === "blocked" ? 0 : 1;
+		if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+		return right.updatedAt - left.updatedAt;
+	});
+}
+
 function upsertTrackedSubagent(raw: unknown, fallbackStatus: string): boolean {
 	const event = normalizeRalphSubagentLifecycleEvent(raw, fallbackStatus);
 	if (!event) return false;
@@ -4878,10 +5581,11 @@ function subagentWidgetLingerMs(status: string): number {
 	return getRalphSubagentTerminalPresentation(status).lingerMs;
 }
 
-function selectVisibleSubagentWidgetRecords(active: RalphSubagentRecord[], lingering: RalphSubagentRecord[]): RalphSubagentRecord[] {
-	const visibleActive = active.slice(-RALPH_SUBAGENT_WIDGET_MAX_LINES);
-	const remainingLines = Math.max(0, RALPH_SUBAGENT_WIDGET_MAX_LINES - visibleActive.length);
-	return [...lingering.slice(0, remainingLines), ...visibleActive].slice(0, RALPH_SUBAGENT_WIDGET_MAX_LINES);
+function selectVisibleSubagentWidgetRecords(active: RalphSubagentRecord[], lingering: RalphSubagentRecord[], reservedLines = 0): RalphSubagentRecord[] {
+	const recordLimit = Math.max(0, RALPH_SUBAGENT_WIDGET_MAX_LINES - 1 - reservedLines);
+	const visibleActive = active.slice(-recordLimit);
+	const remainingLines = Math.max(0, recordLimit - visibleActive.length);
+	return [...lingering.slice(0, remainingLines), ...visibleActive].slice(0, recordLimit);
 }
 
 function pruneExpiredTrackedSubagents(now = Date.now()): void {
@@ -4907,7 +5611,12 @@ function readLingeringSubagentRecords(now = Date.now()): RalphSubagentRecord[] {
 		if (!record.completedAt) continue;
 		finished.push(record);
 	}
-	return finished.sort((left, right) => (right.completedAt ?? 0) - (left.completedAt ?? 0));
+	return finished.sort((left, right) => {
+		const leftAttention = left.status === "completed" ? 0 : 1;
+		const rightAttention = right.status === "completed" ? 0 : 1;
+		if (leftAttention !== rightAttention) return rightAttention - leftAttention;
+		return (right.completedAt ?? 0) - (left.completedAt ?? 0);
+	});
 }
 
 function formatSubagentWidgetFinishedState(
@@ -4935,6 +5644,39 @@ function formatSubagentWidgetErrorDetail(record: RalphSubagentRecord): string {
 function formatSubagentWidgetDescription(record: RalphSubagentRecord): string {
 	const description = record.description?.trim();
 	return description ? ` ${description}` : "";
+}
+
+function formatSubagentWidgetHeader(
+	active: RalphSubagentRecord[],
+	lingering: RalphSubagentRecord[],
+	theme: { fg(color: any, text: string): string; bold(text: string): string },
+): string {
+	const queued = active.filter((record) => record.status === "queued").length;
+	const running = active.filter((record) => record.status === "running").length;
+	const attention = pinnedRalphAttentionCount() + lingering.filter((record) => record.status !== "completed").length;
+	const completed = lingering.filter((record) => record.status === "completed").length;
+	const parts: string[] = [];
+	if (queued > 0) parts.push(`${queued} queued`);
+	if (running > 0) parts.push(`${running} running`);
+	if (attention > 0) parts.push(`${attention} attention`);
+	if (completed > 0) parts.push(`${completed} done`);
+	return `${theme.fg("accent", "[")} ${theme.fg("accent", theme.bold(`Ralph workers · ${parts.join(" · ") || "idle"}`))} ${theme.fg("accent", "]")}`;
+}
+
+function formatRalphAttentionLine(
+	entry: RalphAttentionEntry,
+	theme: { fg(color: any, text: string): string; bold(text: string): string },
+): string {
+	const isBlocked = entry.status === "blocked";
+	const icon = theme.fg(isBlocked ? "error" : "warning", isBlocked ? "!" : "?");
+	const label = theme.fg(isBlocked ? "error" : "warning", isBlocked ? "blocked" : "needs input");
+	const subject = entry.specName ?? entry.specPath ?? "Ralph";
+	const task = entry.taskLabel ? ` ${theme.fg("dim", `· ${entry.taskLabel}`)}` : "";
+	const questionCount = entry.questions.length > 0 ? ` ${theme.fg("dim", `· ${entry.questions.length} q`)}` : "";
+	const resume = entry.resumeCommand ? ` ${theme.fg("dim", `· ↺ ${entry.resumeCommand}`)}` : "";
+	const reason = normalizeWhitespace(entry.reason || "Ralph requires follow-up.");
+	const preview = reason.length <= 72 ? reason : `${reason.slice(0, 71).trimEnd()}…`;
+	return `${theme.fg("dim", "[")} ${icon} ${theme.bold(theme.fg("text", subject))}${task} ${label} ${theme.fg("dim", "·")} ${theme.fg("dim", preview)}${questionCount}${resume} ${theme.fg("dim", "]")}`;
 }
 
 function formatSubagentWidgetLine(
@@ -4976,7 +5718,7 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 		const unsubscribeFailed = eventOn(pi.events, "subagents:failed", (raw) => handleRalphSubagentLifecycleEvent(raw, "error"));
 		const timer = setInterval(() => {
 			const now = Date.now();
-			const hasVisible = readActiveSubagentRecords().length > 0 || readLingeringSubagentRecords(now).length > 0;
+			const hasVisible = readPinnedRalphAttentionEntries().length > 0 || readActiveSubagentRecords().length > 0 || readLingeringSubagentRecords(now).length > 0;
 			if (hasVisible || hadVisible) requestRalphSubagentWidgetRender();
 			hadVisible = hasVisible;
 		}, RALPH_SUBAGENT_STATUS_INTERVAL_MS);
@@ -4995,18 +5737,24 @@ function installRalphSubagentWidget(pi: ExtensionAPI, ctx: ExtensionCommandConte
 				const now = Date.now();
 				const lingering = readLingeringSubagentRecords(now);
 				const active = readActiveSubagentRecords();
-				const records = selectVisibleSubagentWidgetRecords(active, lingering);
-				hadVisible = records.length > 0;
-				if (records.length === 0) return [];
+				const attentions = readPinnedRalphAttentionEntries().slice(0, RALPH_SUBAGENT_WIDGET_MAX_ATTENTION_LINES);
+				const records = selectVisibleSubagentWidgetRecords(active, lingering, attentions.length);
+				hadVisible = attentions.length > 0 || records.length > 0;
+				if (attentions.length === 0 && records.length === 0) return [];
 				const width = tui.terminal.columns;
 				const frame = RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES[Math.floor(now / RALPH_SUBAGENT_STATUS_INTERVAL_MS) % RALPH_SUBAGENT_WIDGET_SPINNER_FRAMES.length] ?? "⠋";
-				return records.map((record) => truncateToWidth(formatSubagentWidgetLine(record, frame, theme), width, "…"));
+				return [
+					truncateToWidth(formatSubagentWidgetHeader(active, lingering, theme), width, "…"),
+					...attentions.map((entry) => truncateToWidth(formatRalphAttentionLine(entry, theme), width, "…")),
+					...records.map((record) => truncateToWidth(formatSubagentWidgetLine(record, frame, theme), width, "…")),
+				];
 			},
 		};
 	}, { placement: "aboveEditor" });
 	if (installed) {
 		ralphSubagentWidgetState.registeredUi = ui;
 		ralphSubagentWidgetState.tracked.clear();
+		ralphSubagentWidgetState.attentions.clear();
 	}
 }
 
@@ -5135,6 +5883,7 @@ function parsePhaseArgs(args: string, phase: ArtifactPhase): PhaseArguments {
 	let quickMode = false;
 	let autonomousMode = false;
 	let tasksSize: PhaseArguments["tasksSize"];
+	let clarifyMode: PhaseArguments["clarifyMode"];
 
 	for (let index = 0; index < tokenized.tokens.length; index += 1) {
 		const token = tokenized.tokens[index];
@@ -5157,6 +5906,17 @@ function parsePhaseArgs(args: string, phase: ArtifactPhase): PhaseArguments {
 			}
 			continue;
 		}
+		if (phase === "tasks" && (token === "--clarify" || token.startsWith("--clarify="))) {
+			const value = token.includes("=") ? token.slice(token.indexOf("=") + 1) : tokenized.tokens[++index];
+			if (!value || value.startsWith("--")) return emptyPhaseArguments("--clarify requires auto, on, or off.");
+			if (value === "auto" || value === "on" || value === "off") {
+				clarifyMode = value;
+			} else {
+				clarifyMode = "auto";
+				warnings.push(`Invalid --clarify value "${value}"; defaulting to auto.`);
+			}
+			continue;
+		}
 		if (token.startsWith("--")) {
 			return emptyPhaseArguments(`Unknown option: ${token}`);
 		}
@@ -5172,6 +5932,7 @@ function parsePhaseArgs(args: string, phase: ArtifactPhase): PhaseArguments {
 		quickMode,
 		autonomousMode,
 		tasksSize,
+		clarifyMode,
 		warnings,
 	};
 }
@@ -5181,6 +5942,7 @@ function emptyPhaseArguments(error: string): PhaseArguments {
 		reference: null,
 		quickMode: false,
 		autonomousMode: false,
+		clarifyMode: undefined,
 		warnings: [],
 		error,
 	};
@@ -5282,6 +6044,35 @@ function buildResearchVerificationContext(spec: SpecEntry): string {
 	return extracted.join("\n\n");
 }
 
+function taskClarifyMode(state: RalphState | null, parsed: PhaseArguments): TaskClarifyMode {
+	if (parsed.clarifyMode) return parsed.clarifyMode;
+	const nestedMode = isRecordValue(state?.taskClarification) && typeof state.taskClarification.mode === "string" ? state.taskClarification.mode : null;
+	return nestedMode === "auto" || nestedMode === "on" || nestedMode === "off" ? nestedMode : "auto";
+}
+
+function taskClarificationPromptLines(state: RalphState | null, parsed: PhaseArguments): string[] {
+	const mode = taskClarifyMode(state, parsed);
+	const raw = isRecordValue(state?.taskClarification) ? state.taskClarification : null;
+	const answers = Array.isArray(raw?.answers) ? raw.answers : [];
+	const lines = [
+		`- Clarification mode: ${mode}.`,
+		mode === "off"
+			? "- Use best judgment and produce tasks.md without asking clarification questions. If assumptions are needed, make the narrowest reasonable assumptions and mention them in your completion summary."
+			: "- If ambiguity would materially change task scope, ordering, dependencies, or verification, return TASKS_USER_INPUT_REQUIRED, then a 'Questions:' section with 1-7 numbered questions, and do not write final tasks.md yet.",
+	];
+	if (answers.length > 0) {
+		lines.push("- Prior clarification answers are authoritative unless the spec files explicitly supersede them.", "- Clarification answers:");
+		for (const entry of answers.slice(0, 12)) {
+			if (!isRecordValue(entry)) continue;
+			const question = typeof entry.question === "string" ? entry.question.trim() : "";
+			const answer = typeof entry.answer === "string" ? entry.answer.trim() : "";
+			if (!question || !answer) continue;
+			lines.push(`  - Q: ${question}`, `    A: ${answer}`);
+		}
+	}
+	return lines;
+}
+
 function phaseSpecificInstructions(definition: PhaseDefinition, state: RalphState | null, parsed: PhaseArguments): string[] {
 	if (definition.phase === "research") {
 		return [
@@ -5305,6 +6096,7 @@ function phaseSpecificInstructions(definition: PhaseDefinition, state: RalphStat
 			"- Verify lines must be automated commands or exact MCP proxy calls. Do not use manual, manually, visually, or ask user in Verify lines.",
 			"- Use research.md Quality Commands and Verification Tooling rows. VE tasks must name the discovered command/tool source they rely on; never hardcode npm/playwright/curl/server commands that research did not discover.",
 			"- For browser/devtools/database MCP E2E, keep MCP lazy and low-token: reference focused mcp search/describe results from research, then call only the selected proxy tool with exact args.",
+			...taskClarificationPromptLines(state, parsed),
 		];
 	}
 
@@ -5802,6 +6594,10 @@ function finalPhasePatch(
 		const taskCounts = countTasks(spec);
 		patch.totalTasks = taskCounts.total;
 		if (parsed.tasksSize) patch.granularity = parsed.tasksSize;
+		patch.taskClarification = {
+			mode: taskClarifyMode(state ?? null, parsed),
+			pending: false,
+		};
 	}
 	if (definition.phase === "research") {
 		patch.relatedSpecs = parseRelatedSpecsFromResearch(spec);
@@ -5855,6 +6651,7 @@ async function runPhaseCommand(pi: ExtensionAPI, definition: PhaseDefinition, ar
 	}
 
 	const spec = resolved.target.spec;
+	clearRalphAttention({ specName: spec.name, specPaths: [spec.path, spec.absolutePath] });
 	const prerequisiteError = validatePhasePrerequisites(definition, spec);
 	if (prerequisiteError) {
 		await notify(ctx, prerequisiteError, "warning");
@@ -5956,52 +6753,85 @@ async function generatePhaseArtifact(
 	options: RalphPathOptions,
 	reviewContext?: PhaseReviewContext,
 ): Promise<RalphState> {
-	let updatedState: RalphState;
-	try {
-		const startPatch: Record<string, unknown> = {
-			source: state?.source ?? "spec",
-			name: spec.name,
-			basePath: spec.path,
-			phase: definition.phase,
-			awaitingApproval: false,
-			lastApprovalDecision: null,
-			validationError: null,
-		};
-		if (parsed.tasksSize) startPatch.granularity = parsed.tasksSize;
-		if (parsed.quickMode) startPatch.quickMode = true;
-		if (parsed.autonomousMode) startPatch.autonomousMode = true;
-		if (reviewContext) {
-			startPatch.artifactReview = {
-				phase: definition.phase,
-				iteration: reviewContext.iteration,
-				maxIterations: ARTIFACT_REVIEW_MAX_ITERATIONS,
-			};
-		}
-		updatedState = mergeRalphState(spec, startPatch, options);
-	} catch (error) {
-		throw new Error(`Failed to update Ralph state before ${definition.phase}: ${formatError(error)}`);
-	}
+	let updatedState: RalphState | null = state;
+	let clarificationRound = 0;
 
-	const prompt = buildPhasePrompt(definition, spec, updatedState, parsed, options, reviewContext);
-	setRalphStatus(ctx, `Ralph ${definition.phase}: running ${definition.agentName}`);
-	try {
-		const iterationSuffix = reviewContext ? ` (${reviewContext.iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})` : "";
-		await notify(ctx, `Running ${definition.agentName} for ${spec.name}${iterationSuffix}...`);
-		await runRalphSubagent(pi, definition, prompt, (agentId) => {
-			return startRalphSubagentStatusTicker(ctx, definition.phase, definition.agentName, agentId);
-		});
-	} catch (error) {
+	while (true) {
 		try {
-			mergeRalphState(spec, { phase: definition.phase, awaitingApproval: false, validationError: formatError(error) }, options);
-		} catch {
-			// Preserve original subagent error; state write failure is secondary here.
+			const startPatch: Record<string, unknown> = {
+				source: updatedState?.source ?? "spec",
+				name: spec.name,
+				basePath: spec.path,
+				phase: definition.phase,
+				awaitingApproval: false,
+				lastApprovalDecision: null,
+				validationError: null,
+			};
+			if (parsed.tasksSize) startPatch.granularity = parsed.tasksSize;
+			if (parsed.quickMode) startPatch.quickMode = true;
+			if (parsed.autonomousMode) startPatch.autonomousMode = true;
+			if (definition.phase === "tasks") {
+				startPatch.taskClarification = {
+					...(isRecordValue(updatedState?.taskClarification) ? updatedState.taskClarification : {}),
+					mode: taskClarifyMode(updatedState, parsed),
+				};
+			}
+			if (reviewContext) {
+				startPatch.artifactReview = {
+					phase: definition.phase,
+					iteration: reviewContext.iteration,
+					maxIterations: ARTIFACT_REVIEW_MAX_ITERATIONS,
+				};
+			}
+			updatedState = mergeRalphState(spec, startPatch, options);
+		} catch (error) {
+			throw new Error(`Failed to update Ralph state before ${definition.phase}: ${formatError(error)}`);
 		}
-		throw error;
-	} finally {
-		setRalphStatus(ctx);
-	}
 
-	return readRalphState(spec, options) ?? updatedState;
+		const prompt = buildPhasePrompt(definition, spec, updatedState, parsed, options, reviewContext);
+		setRalphStatus(ctx, `Ralph ${definition.phase}: running ${definition.agentName}`);
+		try {
+			const iterationSuffix = reviewContext ? ` (${reviewContext.iteration}/${ARTIFACT_REVIEW_MAX_ITERATIONS})` : "";
+			await notify(ctx, `Running ${definition.agentName} for ${spec.name}${iterationSuffix}...`);
+			const completion = await runRalphSubagent(pi, definition, prompt, (agentId) => {
+				return startRalphSubagentStatusTicker(ctx, definition.phase, definition.agentName, agentId);
+			});
+			if (definition.phase === "tasks") {
+				const clarificationRequest = parseTaskClarificationRequest(subagentCompletionOutput(completion));
+				if (clarificationRequest) {
+					const mode = taskClarifyMode(updatedState, parsed);
+					if (mode === "off") {
+						throw new Error(
+							`ralph-task-planner requested clarification while --clarify off was active. Re-run /ralph-tasks ${spec.name} without --clarify off or improve requirements.md/design.md context.`,
+						);
+					}
+					clarificationRound += 1;
+					updatedState = persistPendingTaskClarification(spec, updatedState, parsed, clarificationRequest, clarificationRound, options);
+					if (clarificationRound > TASK_CLARIFICATION_MAX_ROUNDS) {
+						throw new Error(formatTaskClarificationExhausted(spec));
+					}
+					const answers = await collectTaskClarificationAnswers(pi, ctx, spec, clarificationRequest);
+					if (!answers) {
+						persistCancelledTaskClarification(spec, updatedState, parsed, clarificationRequest, clarificationRound, options);
+						throw new Error(formatTaskClarificationCancelled(spec));
+					}
+					updatedState = persistTaskClarificationAnswers(spec, updatedState, parsed, clarificationRequest, answers, clarificationRound, options);
+					continue;
+				}
+			}
+		} catch (error) {
+			try {
+				mergeRalphState(spec, { phase: definition.phase, awaitingApproval: false, validationError: formatError(error) }, options);
+			} catch {
+				// Preserve original subagent error; state write failure is secondary here.
+			}
+			throw error;
+		} finally {
+			setRalphStatus(ctx);
+		}
+
+		return readRalphState(spec, options) ?? updatedState;
+	}
 }
 
 function phaseArgumentsForQuickFlow(parsed: StartArguments): PhaseArguments {
@@ -6010,6 +6840,7 @@ function phaseArgumentsForQuickFlow(parsed: StartArguments): PhaseArguments {
 		quickMode: parsed.quickMode || parsed.autonomousMode,
 		autonomousMode: parsed.autonomousMode,
 		tasksSize: parsed.tasksSize,
+		clarifyMode: "auto",
 		warnings: parsed.warnings,
 	};
 }
@@ -7062,6 +7893,159 @@ function subagentCompletionOutput(completion: SubagentCompletion): string {
 	return formatImplementationSubagentCompletionOutput(completion);
 }
 
+async function collectTaskClarificationAnswers(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	spec: SpecEntry,
+	request: TaskClarificationRequest,
+): Promise<TaskClarificationAnswer[] | null> {
+	if (!ctx.hasUI) {
+		await escalateRalphBlockerToMainSession(pi, ctx, {
+			kind: "task_clarification",
+			specName: spec.name,
+			specPath: spec.path,
+			reason: `Ralph task planning needs clarification before it can write tasks.md for ${spec.name}.`,
+			questions: [...request.questions],
+			resumeCommand: `/ralph-tasks ${spec.name} --clarify on`,
+		});
+		throw new Error([formatTaskClarificationHandoffPause(spec), formatTaskClarificationHeadlessError(spec, request.questions)].join("\n\n"));
+	}
+
+	setRalphStatus(ctx, `Ralph tasks: waiting for clarification (${spec.name})`);
+	await notify(
+		ctx,
+		[
+			`Ralph task planning needs clarification for ${spec.name}.`,
+			"",
+			"Answer the following questions to improve tasks.md:",
+			formatTaskClarificationQuestions(request.questions),
+		].join("\n"),
+	);
+
+	const answers = request.questions.map((question) => ({ question, answer: "" }));
+	setTaskClarificationWidget(ctx, spec, request.questions, answers);
+	try {
+		const useCustomPanel = (ctx as { mode?: string }).mode === "tui" && typeof (getRalphOptionalUi(ctx) as { custom?: unknown } | undefined)?.custom === "function";
+		if (useCustomPanel) {
+			while (true) {
+				setTaskClarificationWidget(ctx, spec, request.questions, answers);
+				const result = await showTaskClarificationPanel(ctx, spec, request.questions, answers);
+				if (!result || result.action === "cancel") return null;
+				const finalized = result.answers.map((entry) => ({
+					question: entry.question,
+					answer: entry.answer.trim() || "Skipped by user.",
+				}));
+				const confirmed = await confirmTaskClarificationSubmission(ctx, spec, finalized);
+				if (confirmed) return finalized;
+				for (let index = 0; index < finalized.length; index += 1) answers[index] = finalized[index];
+			}
+		}
+
+		for (const [index, question] of request.questions.entries()) {
+			const answer = await promptForTaskClarificationAnswer(ctx, question, index, request.questions.length, answers[index]?.answer ?? "");
+			if (answer === null || answer === undefined) return null;
+			answers[index] = {
+				question,
+				answer: answer.trim() || "Skipped by user.",
+			};
+			setTaskClarificationWidget(ctx, spec, request.questions, answers);
+		}
+		const confirmed = await confirmTaskClarificationSubmission(ctx, spec, answers);
+		return confirmed ? answers : null;
+	} finally {
+		clearTaskClarificationWidget(ctx);
+		setRalphStatus(ctx);
+	}
+}
+
+function persistTaskClarificationAnswers(
+	spec: SpecEntry,
+	state: RalphState | null,
+	parsed: PhaseArguments,
+	request: TaskClarificationRequest,
+	answers: readonly TaskClarificationAnswer[],
+	round: number,
+	options: RalphPathOptions,
+): RalphState {
+	const updatedState = mergeRalphState(
+		spec,
+		{
+			taskClarification: {
+				mode: taskClarifyMode(state, parsed),
+				round,
+				questions: [...request.questions],
+				answers: answers.map((entry) => ({ question: entry.question, answer: entry.answer })),
+				lastRequest: truncateForPrompt(request.rawOutput, 4000),
+				answeredAt: new Date().toISOString(),
+				pending: false,
+				cancelledAt: null,
+			},
+		},
+		options,
+	);
+	appendProgress(
+		spec,
+		[
+			"",
+			`### Task clarification round ${round} (${new Date().toISOString()})`,
+			`- Mode: ${taskClarifyMode(updatedState, parsed)}`,
+			"- Questions and answers:",
+			...formatTaskClarificationAnswers(answers),
+			"",
+		].join("\n"),
+		options,
+	);
+	return updatedState;
+}
+
+function persistPendingTaskClarification(
+	spec: SpecEntry,
+	state: RalphState | null,
+	parsed: PhaseArguments,
+	request: TaskClarificationRequest,
+	round: number,
+	options: RalphPathOptions,
+): RalphState {
+	return mergeRalphState(
+		spec,
+		{
+			taskClarification: {
+				mode: taskClarifyMode(state, parsed),
+				round,
+				questions: [...request.questions],
+				lastRequest: truncateForPrompt(request.rawOutput, 4000),
+				requestedAt: new Date().toISOString(),
+				pending: true,
+			},
+		},
+		options,
+	);
+}
+
+function persistCancelledTaskClarification(
+	spec: SpecEntry,
+	state: RalphState | null,
+	parsed: PhaseArguments,
+	request: TaskClarificationRequest,
+	round: number,
+	options: RalphPathOptions,
+): RalphState {
+	return mergeRalphState(
+		spec,
+		{
+			taskClarification: {
+				mode: taskClarifyMode(state, parsed),
+				round,
+				questions: [...request.questions],
+				lastRequest: truncateForPrompt(request.rawOutput, 4000),
+				pending: false,
+				cancelledAt: new Date().toISOString(),
+			},
+		},
+		options,
+	);
+}
+
 function truncateFailureReason(reason: string, maxLength = 280): string {
 	const normalized = normalizeWhitespace(reason);
 	return normalized.length <= maxLength ? normalized : `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
@@ -7542,6 +8526,7 @@ function persistImplementationBlockedState(
 }
 
 async function blockImplementation(
+	pi: ExtensionAPI,
 	ctx: ExtensionCommandContext,
 	spec: SpecEntry,
 	task: ParsedNativeTask | null,
@@ -7556,6 +8541,15 @@ async function blockImplementation(
 		// The blocker notification below is the primary user-facing error.
 	}
 	await notify(ctx, formatBlockerMessage(spec, task, reason), "warning");
+	await escalateRalphBlockerToMainSession(pi, ctx, {
+		kind: /USER_INPUT_REQUIRED/i.test(reason) ? "implementation_user_input" : "implementation_blocker",
+		specName: spec.name,
+		specPath: spec.path,
+		taskLabel: task ? `${task.index + 1}. ${task.subject}` : undefined,
+		reason,
+		questions: normalizeQuestionLines(reason),
+		resumeCommand: `/ralph-implement ${spec.name}`,
+	});
 }
 
 function epicIdentityFromState(spec: SpecEntry, state: RalphState | null): { epicName: string; childName: string } | null {
@@ -7750,6 +8744,7 @@ async function runImplementCommand(
 	}
 
 	const spec = resolved.target.spec;
+	clearRalphAttention({ specName: spec.name, specPaths: [spec.path, spec.absolutePath] });
 	if (!invocation.preserveCurrentSpecMarker) writeCurrentSpec(spec, options);
 
 	let state: RalphState | null = resolved.target.state;
@@ -7816,7 +8811,7 @@ async function runImplementCommand(
 				const latestReview = latestImplementationReviewStatus(state?.evidence);
 				if (tasks.length > 0 && latestReview !== "REVIEW_PASS") {
 					await blockImplementation(
-						ctx,
+						pi, ctx,
 						spec,
 						null,
 						`Layer 3 review evidence is incomplete before final success: latest status was ${latestReview ?? "REVIEW_FAIL"}.`,
@@ -7832,7 +8827,7 @@ async function runImplementCommand(
 				const completionBlockers = describeImplementationOutstandingCompletionWork(tasks, state);
 				if (completionBlockers.length > 0) {
 					await blockImplementation(
-						ctx,
+						pi, ctx,
 						spec,
 						null,
 						`Implementation cannot finalize yet: ${completionBlockers.join("; ")}.`,
@@ -7922,7 +8917,7 @@ async function runImplementCommand(
 			}
 
 			if (next.kind === "blocked") {
-				await blockImplementation(ctx, spec, next.task, `Task dependencies are incomplete: ${next.blockers.map((index) => index + 1).join(", ")}`, options);
+				await blockImplementation(pi, ctx, spec, next.task, `Task dependencies are incomplete: ${next.blockers.map((index) => index + 1).join(", ")}`, options);
 				return;
 			}
 
@@ -7937,14 +8932,14 @@ async function runImplementCommand(
 				const batchPosition = Math.max(0, executionBatch.indexOf(task.index));
 				const globalIteration = numberField(state, "globalIteration") ?? 1;
 				if (globalIteration > parsed.maxGlobalIterations) {
-					await blockImplementation(ctx, spec, task, `Max global iterations exceeded (${parsed.maxGlobalIterations}).`, options);
+					await blockImplementation(pi, ctx, spec, task, `Max global iterations exceeded (${parsed.maxGlobalIterations}).`, options);
 					return;
 				}
 
 				const sameTask = numberField(state, "taskIndex") === task.index;
 				const taskIteration = sameTask ? numberField(state, "taskIteration") ?? 1 : 1;
 				if (taskIteration > parsed.maxTaskIterations) {
-					await blockImplementation(ctx, spec, task, `Max task iterations exceeded (${parsed.maxTaskIterations}).`, options);
+					await blockImplementation(pi, ctx, spec, task, `Max task iterations exceeded (${parsed.maxTaskIterations}).`, options);
 					return;
 				}
 
@@ -7958,7 +8953,7 @@ async function runImplementCommand(
 						ralphExecutionSignalRequired: definition.completionSignal,
 					});
 				} catch (error) {
-					await blockImplementation(ctx, spec, task, `Failed to mark native pi-task in_progress: ${formatError(error)}`, options);
+					await blockImplementation(pi, ctx, spec, task, `Failed to mark native pi-task in_progress: ${formatError(error)}`, options);
 					return;
 				}
 
@@ -7978,7 +8973,7 @@ async function runImplementCommand(
 				const sharedSurfacePreflight = await runSharedSurfacePreflightIfNeeded(ctx, spec, task, tasks, state, options);
 				if (!sharedSurfacePreflight.ok) {
 					const sharedSurfaceReason = (sharedSurfacePreflight as any).reason as string;
-					await blockImplementation(ctx, spec, task, sharedSurfaceReason, options, {
+					await blockImplementation(pi, ctx, spec, task, sharedSurfaceReason, options, {
 						taskIndex: task.index,
 						totalTasks: tasks.length,
 						taskIteration,
@@ -8021,7 +9016,7 @@ async function runImplementCommand(
 								globalIteration: globalIteration + 1,
 								lastSubagentOutput: truncateForPrompt(completionOutput || validation.output, 6000),
 							};
-							await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
+							await blockImplementation(pi, ctx, spec, task, reason, options, blockerPatch);
 							return;
 						}
 						state = modificationResult.state ?? state;
@@ -8133,7 +9128,7 @@ async function runImplementCommand(
 						const maxFixTaskDepth = recoveryStop.maxFixTaskDepth;
 						if (recoveryStop.attempts >= maxFixTasksPerOriginal || recoveryStop.lineageDepth >= maxFixTaskDepth) {
 							const stopReason = `${recoveryStop.reason} originalTaskId=${recoveryStop.originalTaskId}; fixTaskIds=${recoveryStop.fixTaskIds.join(",") || "none"}; lineage=${recoveryStop.failedTaskId}; batch=parallel-sequential;`;
-							await blockImplementation(ctx, spec, task, stopReason, options, {
+							await blockImplementation(pi, ctx, spec, task, stopReason, options, {
 								taskIndex: task.index,
 								totalTasks: tasks.length,
 								taskIteration,
@@ -8158,7 +9153,7 @@ async function runImplementCommand(
 						const insertedFixTask = refreshedTasks.find((candidate) => candidate.taskNumber === recoveryPlan.fixTaskId);
 						const insertedFixTaskIndex = insertedFixTask?.index;
 						if (insertedFixTaskIndex === undefined || !insertedFixTask) {
-							await blockImplementation(ctx, spec, task, `Recovery mode could not locate inserted fix task ${recoveryPlan.fixTaskId}.`, options, {
+							await blockImplementation(pi, ctx, spec, task, `Recovery mode could not locate inserted fix task ${recoveryPlan.fixTaskId}.`, options, {
 								taskIndex: task.index,
 								totalTasks: refreshedTasks.length,
 								taskIteration,
@@ -8202,7 +9197,7 @@ async function runImplementCommand(
 							globalIteration: globalIteration + 1,
 							lastSubagentOutput: truncateForPrompt(validation.output, 6000),
 						};
-						await blockImplementation(ctx, spec, task, reason, options, blockerPatch);
+						await blockImplementation(pi, ctx, spec, task, reason, options, blockerPatch);
 						return;
 					}
 					appendImplementationRetry(spec, task, reason, options);
@@ -8232,7 +9227,7 @@ async function runImplementCommand(
 						ralphExecutionEvidence: validation.evidence,
 					});
 				} catch (error) {
-					await blockImplementation(ctx, spec, task, `Task completed but native pi-task completion update failed: ${formatError(error)}`, options);
+					await blockImplementation(pi, ctx, spec, task, `Task completed but native pi-task completion update failed: ${formatError(error)}`, options);
 					return;
 				}
 
@@ -8285,7 +9280,7 @@ async function runImplementCommand(
 					});
 					if (!review.passed) {
 						await blockImplementation(
-							ctx,
+							pi, ctx,
 							spec,
 							task,
 							`Layer 3 review failed at ${reviewCheckpoint.checkpoint}: ${review.error ?? "Reviewer reported REVIEW_FAIL."}`,
@@ -8352,7 +9347,7 @@ async function runImplementCommand(
 
 		}
 	} catch (error) {
-		await blockImplementation(ctx, spec, null, formatError(error), options);
+		await blockImplementation(pi, ctx, spec, null, formatError(error), options);
 	} finally {
 		setRalphStatus(ctx);
 	}
@@ -10501,6 +11496,7 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	}
 
 	const epic = resolveEpicDirectory(parsed.epicName, options);
+	clearRalphAttention({ specName: epic.name, specPaths: [epic.path, epic.absolutePath] });
 	const existingStateRead = readCompatibleEpicState(epic, options);
 	const stateFileExists = existsSync(epic.statePath);
 	if (stateFileExists && !existingStateRead.state && !parsed.fresh) {
@@ -10579,6 +11575,14 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 			const output = subagentCompletionOutput(completion);
 			if (/USER_INPUT_REQUIRED/i.test(output)) {
 				await notify(ctx, [`Triage for '${epic.name}' needs user input before finalizing:`, "", output].join("\n"), "warning");
+				await escalateRalphBlockerToMainSession(pi, ctx, {
+					kind: "triage_user_input",
+					specName: epic.name,
+					specPath: epic.absolutePath,
+					reason: output.trim(),
+					questions: normalizeQuestionLines(output),
+					resumeCommand: `/ralph-triage ${epic.name}`,
+				});
 				return;
 			}
 		} catch (error) {
@@ -10624,6 +11628,97 @@ async function runTriageCommand(pi: ExtensionAPI, args: string, ctx: ExtensionCo
 	]);
 	const warningOutput = validationErrors.length > 0 || githubSync?.status === "failed" || githubSync?.status === "skipped";
 	await notify(ctx, formatTriageSummary(epic, state, materialized, warnings, shouldDelegate === false, githubSync), warningOutput ? "warning" : "info");
+}
+
+function validateForegroundVerificationCompletion(output: string): { ok: boolean; message: string } {
+	const lines = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+	const signal = lines.filter((line) => line === "VERIFICATION_PASS" || line === "VERIFICATION_FAIL").at(-1);
+	if (signal === "VERIFICATION_PASS") return { ok: true, message: output };
+	if (signal === "VERIFICATION_FAIL") return { ok: false, message: output };
+	return {
+		ok: false,
+		message: [
+			"Foreground verification did not include VERIFICATION_PASS or VERIFICATION_FAIL.",
+			"",
+			output || "<empty output>",
+		].join("\n"),
+	};
+}
+
+async function runForegroundVerify(
+	pi: ExtensionAPI,
+	spec: SpecEntry,
+	ctx: ExtensionCommandContext,
+	options: RalphPathOptions,
+): Promise<{ ok: boolean; output: string }> {
+	const agentBootstrap = bootstrapRalphAgents(ctx.cwd);
+	const toolError = activeToolDependencyError(pi, ["Agent"], "ralph-foreground-verify", "@tintinweb/pi-subagents");
+	if (toolError) return { ok: false, output: toolError };
+	const agentError = ralphAgentDefinitionError(ctx.cwd, ["ralph-qa-engineer"], agentBootstrap);
+	if (agentError) return { ok: false, output: agentError };
+
+	clearRalphAttention({ specName: spec.name, specPaths: [spec.path, spec.absolutePath] });
+	let state: RalphState | Record<string, unknown> | null = null;
+	try {
+		state = readRalphState(spec, options);
+	} catch {
+		try {
+			state = JSON.parse(readFileIfExists(getRalphStatePath(spec, options))) as Record<string, unknown>;
+		} catch {
+			state = null;
+		}
+	}
+	const prompt = [
+		"You are Ralph's QA engineer running the final foreground workflow verification for one spec.",
+		"",
+		"Input:",
+		`- basePath: ${spec.absolutePath}`,
+		`- specName: ${spec.name}`,
+		"- Task title: Final foreground workflow verification",
+		"- Task body:",
+		"  - Read requirements.md, design.md, tasks.md, .progress.md, and .ralph-state.json.",
+		"  - Confirm implementation reached a non-blocked completed state.",
+		"  - Re-run the strongest automated verification commands you can infer from the spec artifacts or progress evidence.",
+		"  - If evidence is insufficient or checks fail, return VERIFICATION_FAIL.",
+		"  - Append concise verification evidence to .progress.md.",
+		"  - Final line must be exactly VERIFICATION_PASS or VERIFICATION_FAIL.",
+		"",
+		"Current Ralph state:",
+		"~~~json",
+		JSON.stringify(state ?? {}, null, 2),
+		"~~~",
+		"",
+		promptFileSection("Requirements", artifactPath(spec, "requirements"), readFileIfExists(artifactPath(spec, "requirements"))),
+		"",
+		promptFileSection("Design", artifactPath(spec, "design"), readFileIfExists(artifactPath(spec, "design"))),
+		"",
+		promptFileSection("Tasks", artifactPath(spec, "tasks"), readFileIfExists(artifactPath(spec, "tasks"))),
+		"",
+		promptFileSection("Progress", getProgressPath(spec, options), readFileIfExists(getProgressPath(spec, options))),
+	].join("\n");
+
+	setRalphStatus(ctx, `Ralph foreground verify: ${spec.name}`);
+	try {
+		await notify(ctx, `Running final foreground verification for ${spec.name} with ralph-qa-engineer...`);
+		const completion = await runRalphSubagent(
+			pi,
+			{
+				agentName: "ralph-qa-engineer",
+				description: `Verify ${spec.name}`,
+				maxTurns: 60,
+			},
+			prompt,
+			(agentId) => startRalphSubagentStatusTicker(ctx, "foreground verify", "ralph-qa-engineer", agentId),
+		);
+		const output = subagentCompletionOutput(completion);
+		const validation = validateForegroundVerificationCompletion(output);
+		await notify(ctx, output || validation.message, validation.ok ? "info" : "warning");
+		return { ok: validation.ok, output: validation.message };
+	} catch (error) {
+		return { ok: false, output: `Foreground verification failed: ${formatError(error)}` };
+	} finally {
+		setRalphStatus(ctx);
+	}
 }
 
 export default function ralphSpecumExtension(pi: ExtensionAPI) {
@@ -10717,6 +11812,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		setRalphUiFooter(ctx, undefined);
 		setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, undefined);
 		clearRalphSubagentWidgetRegistration();
+		ralphSubagentWidgetState.attentions.clear();
 		setRalphUiWidget(ctx, RALPH_SUBAGENT_WIDGET_KEY, undefined);
 		setRalphUiWidget(ctx, RALPH_NATIVE_TASK_WIDGET_KEY, undefined);
 	});
@@ -10773,6 +11869,49 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 		clearCurrentSpecIfMatches,
 		maybeDeleteSpecDirectory,
 		formatStateBeforeCancel,
+	});
+
+	registerForegroundRalphCommands(pi, {
+		runForegroundStart: async (innerPi, args, ctx) => runForegroundStartCommand(innerPi, args, ctx, {
+			notify,
+			tokenizeCommandArgs,
+			pathOptions,
+			resolveExistingSpec,
+			resolveCurrentSpec,
+			readCurrentSpecValue,
+			writeCurrentSpec,
+			runStartCommand,
+			runPhaseCommand,
+			runImplementCommand,
+			runForegroundVerify,
+			phaseDefinitions: PHASE_DEFINITIONS,
+			startInvocation: RALPH_START_INVOCATION,
+			setRalphStatus,
+		}),
+		runForegroundContinue: async (innerPi, args, ctx) => runForegroundContinueCommand(innerPi, args, ctx, {
+			notify,
+			tokenizeCommandArgs,
+			pathOptions,
+			resolveExistingSpec,
+			resolveCurrentSpec,
+			readCurrentSpecValue,
+			writeCurrentSpec,
+			runStartCommand,
+			runPhaseCommand,
+			runImplementCommand,
+			runForegroundVerify,
+			phaseDefinitions: PHASE_DEFINITIONS,
+			startInvocation: RALPH_START_INVOCATION,
+			setRalphStatus,
+		}),
+		runForegroundStatus: async (args, ctx) => runForegroundStatusCommand(args, ctx, {
+			notify,
+			tokenizeCommandArgs,
+			pathOptions,
+			resolveExistingSpec,
+			resolveCurrentSpec,
+			readCurrentSpecValue,
+		}),
 	});
 
 	pi.registerCommand("ralph-triage", {
@@ -11041,7 +12180,7 @@ export default function ralphSpecumExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("ralph-tasks", {
-		description: "Generate canonical tasks.md for the active Ralph spec",
+		description: "Generate canonical tasks.md for the active Ralph spec; supports --clarify auto|on|off",
 		getArgumentCompletions: (prefix) => phaseArgumentCompletions(prefix, true),
 		handler: async (args, ctx) => startRalphCoordinatorJob(ctx, "tasks", () => runPhaseCommand(pi, PHASE_DEFINITIONS.tasks, args, ctx)),
 	});
